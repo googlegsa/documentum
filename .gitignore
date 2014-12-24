@@ -15,3 +15,6 @@ Plexi.iml
 
 # NetBeans files
 nbproject/
+
+# Mac OS file
+.DS_Store
