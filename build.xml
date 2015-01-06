@@ -22,6 +22,8 @@
     value="com.google.enterprise.adaptor.documentum.DocumentumAdaptor"/>
   <property name="adaptor.args" value=""/>
   <property name="cobertura.dir" value="${basedir}/../cobertura/"/>
+  <!-- File to load Documentum classpath property, dctm.classpath -->
+  <property file="adaptor-config.properties"/>
   <!-- Adaptor suffix for distribution files. Useful for placing version numbers
        on our jars. -->
   <condition property="adaptor.suffix" value="-${adaptor.version}">
@@ -36,6 +38,7 @@
     </fileset>
 -->
     <pathelement location="${adaptor.jar}"/>
+    <pathelement path="${dctm.classpath}"/>
   </path>
 
   <path id="adaptor.run.classpath">

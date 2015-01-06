@@ -22,19 +22,36 @@ import com.google.enterprise.adaptor.DocIdPusher;
 import com.google.enterprise.adaptor.Request;
 import com.google.enterprise.adaptor.Response;
 
-/** For getting Documentum repository content into a Google Search Appliance. */
+import java.util.logging.Logger;
+import java.util.logging.Level;
+
+/** Adaptor to feed Documentum repository content into a 
+ *  Google Search Appliance.
+ */
 public class DocumentumAdaptor extends AbstractAdaptor {
+  private static Logger logger =
+      Logger.getLogger(DocumentumAdaptor.class.getName());
 
   public static void main(String[] args) {
     AbstractAdaptor.main(new DocumentumAdaptor(), args);
   }
- 
+
   @Override
   public void initConfig(Config config) {
+    config.addKey("dctm.username", null);
+    config.addKey("dctm.userpassword", null);
+    config.addKey("dctm.docbasename", null);
   }
 
   @Override
   public void init(AdaptorContext context) throws Exception {
+    Config config = context.getConfig();
+    try {
+      new DctmSession(config);
+    } catch (RepositoryException e) {
+      logger.log(Level.SEVERE, "Error creating Documentum session: {0}",
+          e.getMessage());
+    }
   }
 
   /** Get all doc ids from documentum repository. */
