@@ -22,7 +22,7 @@
     value="com.google.enterprise.adaptor.documentum.DocumentumAdaptor"/>
   <property name="adaptor.args" value=""/>
   <property name="cobertura.dir" value="${basedir}/../cobertura/"/>
-  <!-- File to load Documentum classpath property, documentum.classpath -->
+  <!-- File to load Documentum classpath property, documentum.classpath  -->
   <property file="adaptor-config.properties"/>
   <!-- Adaptor suffix for distribution files. Useful for placing version numbers
        on our jars. -->

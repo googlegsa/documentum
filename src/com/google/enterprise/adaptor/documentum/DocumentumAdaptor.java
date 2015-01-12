@@ -14,6 +14,8 @@
 
 package com.google.enterprise.adaptor.documentum;
 
+import com.google.common.base.Strings;
+
 import com.google.enterprise.adaptor.AbstractAdaptor;
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
@@ -21,7 +23,6 @@ import com.google.enterprise.adaptor.DocIdPusher;
 import com.google.enterprise.adaptor.InvalidConfigurationException;
 import com.google.enterprise.adaptor.Request;
 import com.google.enterprise.adaptor.Response;
-import com.google.common.base.Strings;
 
 import com.documentum.com.DfClientX;
 import com.documentum.com.IDfClientX;
@@ -55,7 +56,7 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   }
 
   @Override
-  public void init(AdaptorContext context) throws Exception {
+  public void init(AdaptorContext context) throws DfException {
     Config config = context.getConfig();
     validateConfig(config);
     initDfc(config);
@@ -69,24 +70,6 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   /** Gives the bytes of a document referenced with id. */
   @Override
   public void getDocContent(Request req, Response resp) {
-  }
-
-  /**
-   * {@inheritDoc}
-   *
-   * Close DFC session.
-   */
-  @Override
-  public void destroy() {
-    if (idfSessionManager != null) {
-      try {
-        logger.log(Level.INFO, "Releasing dfc session for {0}",
-            idfSession.getDocbaseName());
-        idfSessionManager.release(idfSession);
-      } catch (DfException e) {
-        logger.log(Level.SEVERE, "Error closing dfc session");
-      }
-    }
   }
 
   private void validateConfig(Config config) {
@@ -107,19 +90,26 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   private void initDfc(Config config) throws DfException {
     IDfClientX clientX = new DfClientX();
     this.idfSessionManager = clientX.getLocalClient().newSessionManager();
-
     IDfLoginInfo dctmLoginInfo = clientX.getLoginInfo();
-    String userName = config.getValue("documentum.username");
+
+    String username = config.getValue("documentum.username");
     String password = config.getValue("documentum.password");
     String docbaseName = config.getValue("documentum.docbaseName");
-    dctmLoginInfo.setUser(userName);
+    logger.log(Level.CONFIG, "documentum.username: {0} " + username);
+    logger.log(Level.CONFIG, "documentum.docbaseName: {0} " + docbaseName);
+
+    dctmLoginInfo.setUser(username);
     dctmLoginInfo.setPassword(password);
     idfSessionManager.setIdentity(docbaseName, dctmLoginInfo);
     this.idfSession = idfSessionManager.newSession(docbaseName);
-    logger.log(Level.FINE, "Session Manager set the identity for " + userName);
+    logger.log(Level.FINE, "Session Manager set the identity for " + username);
     logger.log(Level.INFO, "DFC " + clientX.getDFCVersion()
         + " connected to Content Server " + idfSession.getServerVersion());
-    logger.log(Level.INFO, "Tested a new session for the docbase "
-        + docbaseName);
+    logger.log(Level.INFO, "Created a new session for the docbase {0}",
+        docbaseName);
+
+    logger.log(Level.INFO, "Releasing dfc session for {0}", docbaseName);
+    idfSessionManager.release(idfSession);
+    this.idfSession = null;
   }
 }
