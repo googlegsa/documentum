@@ -31,8 +31,8 @@ import com.documentum.fc.client.IDfSessionManager;
 import com.documentum.fc.common.DfException;
 import com.documentum.fc.common.IDfLoginInfo;
 
-import java.util.logging.Logger;
 import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /** Adaptor to feed Documentum repository content into a 
  *  Google Search Appliance.
@@ -40,9 +40,6 @@ import java.util.logging.Level;
 public class DocumentumAdaptor extends AbstractAdaptor {
   private static Logger logger =
       Logger.getLogger(DocumentumAdaptor.class.getName());
-
-  private IDfSessionManager idfSessionManager;
-  private IDfSession idfSession;
 
   public static void main(String[] args) {
     AbstractAdaptor.main(new DocumentumAdaptor(), args);
@@ -72,7 +69,7 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   public void getDocContent(Request req, Response resp) {
   }
 
-  private void validateConfig(Config config) {
+  private static void validateConfig(Config config) {
     if (Strings.isNullOrEmpty(config.getValue("documentum.username"))) {
       throw new InvalidConfigurationException(
           "documentum.username is required");
@@ -88,28 +85,29 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   }
 
   private void initDfc(Config config) throws DfException {
-    IDfClientX clientX = new DfClientX();
-    this.idfSessionManager = clientX.getLocalClient().newSessionManager();
-    IDfLoginInfo dctmLoginInfo = clientX.getLoginInfo();
+    IDfClientX dmClientX = new DfClientX();
+    IDfSessionManager dmSessionManager =
+        dmClientX.getLocalClient().newSessionManager();
+    IDfLoginInfo dmLoginInfo = dmClientX.getLoginInfo();
 
     String username = config.getValue("documentum.username");
     String password = config.getValue("documentum.password");
     String docbaseName = config.getValue("documentum.docbaseName");
-    logger.log(Level.CONFIG, "documentum.username: {0} " + username);
-    logger.log(Level.CONFIG, "documentum.docbaseName: {0} " + docbaseName);
+    logger.log(Level.CONFIG, "documentum.username: {0}", username);
+    logger.log(Level.CONFIG, "documentum.docbaseName: {0}", docbaseName);
 
-    dctmLoginInfo.setUser(username);
-    dctmLoginInfo.setPassword(password);
-    idfSessionManager.setIdentity(docbaseName, dctmLoginInfo);
-    this.idfSession = idfSessionManager.newSession(docbaseName);
-    logger.log(Level.FINE, "Session Manager set the identity for " + username);
-    logger.log(Level.INFO, "DFC " + clientX.getDFCVersion()
-        + " connected to Content Server " + idfSession.getServerVersion());
+    dmLoginInfo.setUser(username);
+    dmLoginInfo.setPassword(password);
+    dmSessionManager.setIdentity(docbaseName, dmLoginInfo);
+    IDfSession dmSession = dmSessionManager.newSession(docbaseName);
+    logger.log(Level.FINE, "Session Manager set the identity for {0}",
+        username);
+    logger.log(Level.INFO, "DFC {0} connected to Content Server {1}",
+        new Object[] {dmClientX.getDFCVersion(), dmSession.getServerVersion()});
     logger.log(Level.INFO, "Created a new session for the docbase {0}",
         docbaseName);
 
     logger.log(Level.INFO, "Releasing dfc session for {0}", docbaseName);
-    idfSessionManager.release(idfSession);
-    this.idfSession = null;
+    dmSessionManager.release(dmSession);
   }
 }
