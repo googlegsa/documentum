@@ -14,8 +14,8 @@
 
 package com.google.enterprise.adaptor.documentum;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
-
 import com.google.enterprise.adaptor.AbstractAdaptor;
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
@@ -41,8 +41,19 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   private static Logger logger =
       Logger.getLogger(DocumentumAdaptor.class.getName());
 
+  private final IDfClientX dmClientX;
+
   public static void main(String[] args) {
     AbstractAdaptor.main(new DocumentumAdaptor(), args);
+  }
+
+  public DocumentumAdaptor() {
+    this(new DfClientX());
+  }
+
+  @VisibleForTesting
+  DocumentumAdaptor(IDfClientX dmClientX) {
+    this.dmClientX = dmClientX;
   }
 
   @Override
@@ -85,7 +96,6 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   }
 
   private void initDfc(Config config) throws DfException {
-    IDfClientX dmClientX = new DfClientX();
     IDfSessionManager dmSessionManager =
         dmClientX.getLocalClient().newSessionManager();
     IDfLoginInfo dmLoginInfo = dmClientX.getLoginInfo();
@@ -99,7 +109,7 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     dmLoginInfo.setUser(username);
     dmLoginInfo.setPassword(password);
     dmSessionManager.setIdentity(docbaseName, dmLoginInfo);
-    IDfSession dmSession = dmSessionManager.newSession(docbaseName);
+    IDfSession dmSession = dmSessionManager.getSession(docbaseName);
     logger.log(Level.FINE, "Session Manager set the identity for {0}",
         username);
     logger.log(Level.INFO, "DFC {0} connected to Content Server {1}",
