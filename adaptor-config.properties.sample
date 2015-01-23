@@ -7,3 +7,4 @@ documentum.classpath=<Classpath for Documentum DFC>
 documentum.username=<Documentum username>
 documentum.password=<Password for above user>
 documentum.docbaseName=<Repository name>
+documentum.src=<Comma separated list of folder paths>

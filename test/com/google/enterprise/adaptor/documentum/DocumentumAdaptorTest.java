@@ -16,6 +16,7 @@ package com.google.enterprise.adaptor.documentum;
 
 import static org.junit.Assert.*;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
@@ -62,6 +63,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.username", "testuser");
     config.addKey("documentum.password", "testpwd");
     config.addKey("documentum.docbaseName", "testdocbase");
+    config.addKey("documentum.src", "src");
 
     adaptor.init(context);
 
@@ -84,19 +86,36 @@ public class DocumentumAdaptorTest {
     assertEquals(expectedMethodCallSet, proxyCls.methodCalls);
   }
 
+  @Test
+  public void testInitStartPaths() throws DfException {
+    InitTestProxies proxyCls = new InitTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    Config config = context.getConfig();
+    config.addKey("documentum.username", "testuser");
+    config.addKey("documentum.password", "testpwd");
+    config.addKey("documentum.docbaseName", "testdocbase");
+    config.addKey("documentum.src", "src/path1, src/path2, src/path3");
+
+    adaptor.init(context);
+
+    assertEquals(Arrays.asList("src/path1", "src/path2", "src/path3"),
+        adaptor.getStartPaths());
+  }
+
   private class InitTestProxies {
     List <String> methodCallSequence = new ArrayList<String>();
     Set <String> methodCalls = new HashSet<String>();
 
     IDfClient client = getProxyClient();
     IDfLoginInfo loginInfo = getProxyLoginInfo();
+    IDfSessionManager sessionManager = getProxySessionManager();
 
     Map<String, IDfLoginInfo> docbaseLoginInfoMap =
         new HashMap<String, IDfLoginInfo>();
     Map<String, IDfSession> docbaseSessionMap =
         new HashMap<String, IDfSession>();
-
-    IDfSessionManager sessionManager = getProxySessionManager();
 
     String username;
     String password;
@@ -111,7 +130,6 @@ public class DocumentumAdaptorTest {
     private class ClientXHandler implements InvocationHandler {
       public Object invoke(Object proxy, Method method, Object[] args)
           throws DfException {
-
         if ("getDFCVersion".equals(method.getName())) {
           methodCalls.add(method.getName());
           return "1.0.0.000 (Mock DFC)";
@@ -217,5 +235,72 @@ public class DocumentumAdaptorTest {
         throw new AssertionError("invalid method: " + method.getName());
       }
     }
+  }
+
+  @Test
+  public void testParseStartPaths() {
+    String path1 = "Folder1/path1";
+    String path2 = "Folder2/path2";
+    String path3 = "Folder3/path3";
+    String startPaths = path1 + "," + path2 + "," + path3;
+
+    List<String> paths = DocumentumAdaptor.parseStartPaths(startPaths, ",");
+    assertEquals(ImmutableList.of(path1, path2, path3), paths);
+  }
+
+  @Test
+  public void testParseStartPathsSeperator() {
+    String path1 = "Folder1/path1";
+    String path2 = "Folder2/path2";
+    String path3 = "Folder3/path3";
+    String separator = ":";
+    String startPaths = path1 + separator + path2 + separator + path3;
+
+    List<String> paths =
+        DocumentumAdaptor.parseStartPaths(startPaths, separator);
+    assertEquals(ImmutableList.of(path1, path2, path3), paths);
+  }
+
+  @Test
+  public void testParseStartPathsMultiSeperator() {
+    String path1 = "Folder1/path1";
+    String path2 = "Folder2/path2";
+    String path3 = "Folder3/path3";
+    String startPaths = path1 + ";" + path2 + ":" + path3 + ",";
+
+    List<String> paths = DocumentumAdaptor.parseStartPaths(startPaths, "[:;,]");
+    assertEquals(ImmutableList.of(path1, path2, path3), paths);
+  }
+
+  @Test
+  public void testParseStartPathsSinglePath() {
+    String path1 = "Folder1/path1";
+    String startPaths = path1;
+
+    List<String> paths = DocumentumAdaptor.parseStartPaths(startPaths, ",");
+    assertEquals(ImmutableList.of(path1), paths);
+  }
+
+  @Test
+  public void testParseStartPathsEmptyPath() {
+    String path1 = "Folder1/path1";
+    String path2 = "Folder2/path2";
+    String path3 = "";
+    String startPaths = path1 + "," + path2 + "," + path3;
+
+    List<String> paths = DocumentumAdaptor.parseStartPaths(startPaths, ",");
+    assertEquals(ImmutableList.of(path1, path2), paths);
+  }
+
+  @Test
+  public void testParseStartPathsWhiteSpacePath() {
+    String path1 = "Folder 1/path 1";
+    String path2 = "Folder 2/path 2 ";
+    String path3 = "Folder 3/ path 3 ";
+    String startPaths = path1 + "," + path2 + "," + path3;
+
+    List<String> paths = DocumentumAdaptor.parseStartPaths(startPaths, ",");
+    assertEquals(ImmutableList.of(path1.trim(), path2.trim(), path3.trim()),
+        paths);
   }
 }

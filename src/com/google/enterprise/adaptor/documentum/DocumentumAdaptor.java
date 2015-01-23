@@ -15,10 +15,13 @@
 package com.google.enterprise.adaptor.documentum;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Splitter;
 import com.google.common.base.Strings;
+import com.google.common.collect.ImmutableList;
 import com.google.enterprise.adaptor.AbstractAdaptor;
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
+import com.google.enterprise.adaptor.DocId;
 import com.google.enterprise.adaptor.DocIdPusher;
 import com.google.enterprise.adaptor.InvalidConfigurationException;
 import com.google.enterprise.adaptor.Request;
@@ -31,8 +34,15 @@ import com.documentum.fc.client.IDfSessionManager;
 import com.documentum.fc.common.DfException;
 import com.documentum.fc.common.IDfLoginInfo;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.Charset;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.regex.Pattern;
 
 /** Adaptor to feed Documentum repository content into a 
  *  Google Search Appliance.
@@ -41,7 +51,14 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   private static Logger logger =
       Logger.getLogger(DocumentumAdaptor.class.getName());
 
+  /** Charset used in generated HTML responses. */
+  private static final Charset CHARSET = Charset.forName("UTF-8");
+  //TODO (sveldurthi): make SRC_SEPARATOR configurable using 
+  //     adaptor-config.properties
+  private static final String SRC_SEPARATOR = ",";
+
   private final IDfClientX dmClientX;
+  private List<String> startPaths;
 
   public static void main(String[] args) {
     AbstractAdaptor.main(new DocumentumAdaptor(), args);
@@ -61,23 +78,57 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     config.addKey("documentum.username", null);
     config.addKey("documentum.password", null);
     config.addKey("documentum.docbaseName", null);
+    config.addKey("documentum.src", null);
   }
 
   @Override
   public void init(AdaptorContext context) throws DfException {
     Config config = context.getConfig();
     validateConfig(config);
+    String src = config.getValue("documentum.src");
+    logger.log(Level.CONFIG, "documentum.src: {0}", src);
+    startPaths = parseStartPaths(src, SRC_SEPARATOR);
+    logger.log(Level.CONFIG, "start paths: {0}", startPaths);
+    //TODO (sveldurthi): validate start paths
     initDfc(config);
   }
 
-  /** Get all doc ids from documentum repository. */
+  /** Get all doc ids from Documentum repository. 
+   * @throws InterruptedException if pusher is interrupted in sending Doc Ids
+   */
   @Override
-  public void getDocIds(DocIdPusher pusher) {
+  public void getDocIds(DocIdPusher pusher) throws InterruptedException {
+    logger.entering("DocumentumAdaptor", "getDocIds");
+    ArrayList<DocId> docIds = new ArrayList<DocId>();
+    for (String startPath : startPaths) {
+      docIds.add(new DocId(startPath));
+    }
+    logger.log(Level.FINER, "DocumentumAdaptor DocIds: {0}", docIds);
+    pusher.pushDocIds(docIds);
+    logger.exiting("DocumentumAdaptor", "getDocIds");
   }
 
-  /** Gives the bytes of a document referenced with id. */
+  @VisibleForTesting
+  List<String> getStartPaths() {
+    return Collections.unmodifiableList(startPaths);
+  }
+
+  @VisibleForTesting
+  static List<String> parseStartPaths(String paths, String separatorRegex) {
+    return ImmutableList.copyOf(Splitter.on(Pattern.compile(separatorRegex))
+        .trimResults().omitEmptyStrings().split(paths));
+  }
+
+  /** Gives the bytes of a document referenced with id. 
+   * @throws IOException */
   @Override
-  public void getDocContent(Request req, Response resp) {
+  public void getDocContent(Request req, Response resp) throws IOException {
+    DocId id = req.getDocId();
+    logger.log(Level.FINER, "Get content for id: {0}", id);
+    String str = "Content for " + id.toString();
+    resp.setContentType("text/plain; charset=" + CHARSET.name());
+    OutputStream os = resp.getOutputStream();
+    os.write(str.getBytes(CHARSET));
   }
 
   private static void validateConfig(Config config) {
@@ -92,6 +143,10 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     if (Strings.isNullOrEmpty(config.getValue("documentum.docbaseName"))) {
       throw new InvalidConfigurationException(
           "documentum.docbaseName is required");
+    }
+    if (Strings.isNullOrEmpty(config.getValue("documentum.src"))) {
+      throw new InvalidConfigurationException(
+          "documentum.src is required");
     }
   }
 
