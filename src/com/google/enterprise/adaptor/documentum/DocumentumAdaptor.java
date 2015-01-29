@@ -53,9 +53,6 @@ public class DocumentumAdaptor extends AbstractAdaptor {
 
   /** Charset used in generated HTML responses. */
   private static final Charset CHARSET = Charset.forName("UTF-8");
-  //TODO (sveldurthi): make SRC_SEPARATOR configurable using 
-  //     adaptor-config.properties
-  private static final String SRC_SEPARATOR = ",";
 
   private final IDfClientX dmClientX;
   private List<String> startPaths;
@@ -79,6 +76,7 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     config.addKey("documentum.password", null);
     config.addKey("documentum.docbaseName", null);
     config.addKey("documentum.src", null);
+    config.addKey("documentum.separatorRegex", ",");
   }
 
   @Override
@@ -87,7 +85,9 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     validateConfig(config);
     String src = config.getValue("documentum.src");
     logger.log(Level.CONFIG, "documentum.src: {0}", src);
-    startPaths = parseStartPaths(src, SRC_SEPARATOR);
+    String separatorRegex = config.getValue("documentum.separatorRegex");
+    logger.log(Level.CONFIG, "documentum.separatorRegex: {0}", separatorRegex);
+    startPaths = parseStartPaths(src, separatorRegex);
     logger.log(Level.CONFIG, "start paths: {0}", startPaths);
     //TODO (sveldurthi): validate start paths
     initDfc(config);
@@ -115,8 +115,12 @@ public class DocumentumAdaptor extends AbstractAdaptor {
 
   @VisibleForTesting
   static List<String> parseStartPaths(String paths, String separatorRegex) {
-    return ImmutableList.copyOf(Splitter.on(Pattern.compile(separatorRegex))
-        .trimResults().omitEmptyStrings().split(paths));
+    if (separatorRegex.isEmpty()) {
+      return ImmutableList.of(paths);
+    } else {
+      return ImmutableList.copyOf(Splitter.on(Pattern.compile(separatorRegex))
+          .trimResults().omitEmptyStrings().split(paths));
+    }
   }
 
   /** Gives the bytes of a document referenced with id. 
