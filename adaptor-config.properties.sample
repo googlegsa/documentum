@@ -8,3 +8,4 @@ documentum.username=<Documentum username>
 documentum.password=<Password for above user>
 documentum.docbaseName=<Repository name>
 documentum.src=<Comma separated list of folder paths>
+documentum.separatorRegex=<Regular expression to be used to separate list of sources in documentum.src property>

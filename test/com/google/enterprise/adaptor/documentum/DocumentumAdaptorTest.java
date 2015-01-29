@@ -20,7 +20,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
-
 import com.documentum.com.IDfClientX;
 import com.documentum.fc.client.DfAuthenticationException;
 import com.documentum.fc.client.DfIdentityException;
@@ -64,6 +63,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.password", "testpwd");
     config.addKey("documentum.docbaseName", "testdocbase");
     config.addKey("documentum.src", "src");
+    config.addKey("documentum.separatorRegex", ",");
 
     adaptor.init(context);
 
@@ -97,6 +97,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.password", "testpwd");
     config.addKey("documentum.docbaseName", "testdocbase");
     config.addKey("documentum.src", "src/path1, src/path2, src/path3");
+    config.addKey("documentum.separatorRegex", ",");
 
     adaptor.init(context);
 
@@ -273,6 +274,17 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
+  public void testParseStartPathsBlankSeparator() {
+    String path1 = "Folder1/path1";
+    String path2 = "Folder2/path2";
+    String path3 = "Folder3/path3";
+    String startPaths = path1 + "," + path2 + "," + path3;
+
+    List<String> paths = DocumentumAdaptor.parseStartPaths(startPaths, "");
+    assertEquals(ImmutableList.of(startPaths), paths);
+  }
+
+  @Test
   public void testParseStartPathsSinglePath() {
     String path1 = "Folder1/path1";
     String startPaths = path1;
@@ -302,5 +314,70 @@ public class DocumentumAdaptorTest {
     List<String> paths = DocumentumAdaptor.parseStartPaths(startPaths, ",");
     assertEquals(ImmutableList.of(path1.trim(), path2.trim(), path3.trim()),
         paths);
+  }
+
+  private void initializeAdaptor(DocumentumAdaptor adaptor, String src,
+      String separatorRegex) throws DfException {
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    Config config = context.getConfig();
+
+    adaptor.initConfig(config);
+
+    config.overrideKey("documentum.username", "testuser");
+    config.overrideKey("documentum.password", "testpwd");
+    config.overrideKey("documentum.docbaseName", "testdocbase");
+    config.overrideKey("documentum.src", src);
+    if (separatorRegex != null) {
+      config.overrideKey("documentum.separatorRegex", separatorRegex);
+    }
+
+    adaptor.init(context);
+  }
+
+  @Test
+  public void testConfigSeparatorRegex() throws DfException {
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
+    String path1 = "Folder1/path1";
+    String path2 = "Folder2/path2";
+    String path3 = "Folder3/path3";
+    String path4 = "Folder4/path4";
+    String startPaths = path1 + ";" + path2 + ":" + path3 + "," + path4;
+
+    initializeAdaptor(adaptor, startPaths, "[;:,]");
+
+    assertEquals(ImmutableList.of(path1, path2, path3, path4),
+        adaptor.getStartPaths());
+  }
+
+  @Test
+  public void testConfigBlankSeparatorRegexValue() throws DfException {
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
+    String path1 = "Folder1/path1";
+    String path2 = "Folder2/path2";
+    String path3 = "Folder3/path3";
+    String path4 = "Folder4/path4";
+    String startPaths = path1 + "," + path2 + "," + path3 + "," + path4;
+
+    initializeAdaptor(adaptor, startPaths, "");
+
+    assertEquals(ImmutableList.of(startPaths), adaptor.getStartPaths());
+  }
+
+  @Test
+  public void testConfigNoSeparatorRegexEntry() throws DfException {
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
+    String path1 = "Folder1/path1";
+    String path2 = "Folder2/path2";
+    String path3 = "Folder3/path3";
+    String path4 = "Folder4/path4";
+    String startPaths = path1 + "," + path2 + "," + path3 + "," + path4;
+
+    initializeAdaptor(adaptor, startPaths, null);
+
+    assertEquals(ImmutableList.of(path1, path2, path3, path4),
+        adaptor.getStartPaths());
   }
 }
