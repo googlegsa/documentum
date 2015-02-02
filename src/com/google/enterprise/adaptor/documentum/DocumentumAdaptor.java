@@ -31,6 +31,7 @@ import com.documentum.com.DfClientX;
 import com.documentum.com.IDfClientX;
 import com.documentum.fc.client.IDfSession;
 import com.documentum.fc.client.IDfSessionManager;
+import com.documentum.fc.client.IDfSysObject;
 import com.documentum.fc.common.DfException;
 import com.documentum.fc.common.IDfLoginInfo;
 
@@ -56,6 +57,10 @@ public class DocumentumAdaptor extends AbstractAdaptor {
 
   private final IDfClientX dmClientX;
   private List<String> startPaths;
+  private List<String> validatedStartPaths = new ArrayList<String>();
+
+  private IDfSessionManager dmSessionManager;
+  private String docbase;
 
   public static void main(String[] args) {
     AbstractAdaptor.main(new DocumentumAdaptor(), args);
@@ -83,14 +88,20 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   public void init(AdaptorContext context) throws DfException {
     Config config = context.getConfig();
     validateConfig(config);
+    docbase = config.getValue("documentum.docbaseName");
     String src = config.getValue("documentum.src");
     logger.log(Level.CONFIG, "documentum.src: {0}", src);
     String separatorRegex = config.getValue("documentum.separatorRegex");
     logger.log(Level.CONFIG, "documentum.separatorRegex: {0}", separatorRegex);
     startPaths = parseStartPaths(src, separatorRegex);
     logger.log(Level.CONFIG, "start paths: {0}", startPaths);
-    //TODO (sveldurthi): validate start paths
     initDfc(config);
+    dmSessionManager = getDfcSessionManager(config);
+    validatePaths();
+    if (validatedStartPaths.isEmpty()) {
+      throw new IllegalStateException(
+          "Failed to validate documentum.src paths.");
+    }
   }
 
   /** Get all doc ids from Documentum repository. 
@@ -99,8 +110,13 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   @Override
   public void getDocIds(DocIdPusher pusher) throws InterruptedException {
     logger.entering("DocumentumAdaptor", "getDocIds");
+    try {
+      validatePaths();
+    } catch (DfException e) {
+      logger.log(Level.WARNING, "Error validating start paths");
+    }
     ArrayList<DocId> docIds = new ArrayList<DocId>();
-    for (String startPath : startPaths) {
+    for (String startPath : validatedStartPaths) {
       docIds.add(new DocId(startPath));
     }
     logger.log(Level.FINER, "DocumentumAdaptor DocIds: {0}", docIds);
@@ -127,6 +143,7 @@ public class DocumentumAdaptor extends AbstractAdaptor {
    * @throws IOException */
   @Override
   public void getDocContent(Request req, Response resp) throws IOException {
+    // TODO: (sveldurthi) support "/" as start path, to process all cabinets.
     DocId id = req.getDocId();
     logger.log(Level.FINER, "Get content for id: {0}", id);
     String str = "Content for " + id.toString();
@@ -154,20 +171,22 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     }
   }
 
+  /**
+   * Establishes connection DFC.
+   * 
+   * @param config Adaptor config object
+   * @throws DfException if error in getting local client or error in setting 
+   *         repository identity, or error in getting session, or error in 
+   *         getting server version.
+   */
   private void initDfc(Config config) throws DfException {
-    IDfSessionManager dmSessionManager =
-        dmClientX.getLocalClient().newSessionManager();
-    IDfLoginInfo dmLoginInfo = dmClientX.getLoginInfo();
+    IDfSessionManager dmSessionManager = getDfcSessionManager(config);
 
     String username = config.getValue("documentum.username");
-    String password = config.getValue("documentum.password");
     String docbaseName = config.getValue("documentum.docbaseName");
     logger.log(Level.CONFIG, "documentum.username: {0}", username);
     logger.log(Level.CONFIG, "documentum.docbaseName: {0}", docbaseName);
 
-    dmLoginInfo.setUser(username);
-    dmLoginInfo.setPassword(password);
-    dmSessionManager.setIdentity(docbaseName, dmLoginInfo);
     IDfSession dmSession = dmSessionManager.getSession(docbaseName);
     logger.log(Level.FINE, "Session Manager set the identity for {0}",
         username);
@@ -178,5 +197,68 @@ public class DocumentumAdaptor extends AbstractAdaptor {
 
     logger.log(Level.INFO, "Releasing dfc session for {0}", docbaseName);
     dmSessionManager.release(dmSession);
+  }
+
+  @VisibleForTesting
+  List<String> getValidatedStartPaths() {
+    return validatedStartPaths;
+  }
+
+  /**
+   * Validate start paths and add the valid ones to validatedStartPaths list.
+   * 
+   * @throws DfException if the session can't be established to the repository.
+   */
+  private void validatePaths() throws DfException {
+    IDfSession dmSession = dmSessionManager.getSession(docbase);
+
+    for (String documentumFolderPath : startPaths) {
+      logger.log(Level.INFO, "Validating path {0}", documentumFolderPath);
+      IDfSysObject obj = null;
+      try {
+        obj = (IDfSysObject) dmSession.getObjectByPath(documentumFolderPath);
+      } catch (DfException e) {
+        logger.log(Level.WARNING, "Error validating start path {0}",
+            e.getMessage());
+      }
+      if (obj == null) {
+        logger.log(Level.WARNING, "Invalid start path {0}",
+            documentumFolderPath);
+      } else {
+        if (!validatedStartPaths.contains(documentumFolderPath)) {
+          logger.log(Level.CONFIG, "Valid start path {0} id:{1}", new Object[] {
+              documentumFolderPath, obj.getObjectId().toString()});
+          validatedStartPaths.add(documentumFolderPath);
+        }
+      }
+    }
+
+    dmSessionManager.release(dmSession);
+  }
+
+  /**
+   * Gets DFC Session manager.
+   * 
+   * @param config Adaptor config object
+   * @return IDfSessionManager returns a new session manager for the configured 
+   *         username and docbaseName
+   * @throws DfException if error in getting local client or error in setting 
+   *         repository identity.
+   */
+  private IDfSessionManager getDfcSessionManager(Config config)
+      throws DfException {
+    IDfSessionManager dmSessionManager =
+        dmClientX.getLocalClient().newSessionManager();
+    IDfLoginInfo dmLoginInfo = dmClientX.getLoginInfo();
+
+    String username = config.getValue("documentum.username");
+    String password = config.getValue("documentum.password");
+    String docbaseName = config.getValue("documentum.docbaseName");
+
+    dmLoginInfo.setUser(username);
+    dmLoginInfo.setPassword(password);
+    dmSessionManager.setIdentity(docbaseName, dmLoginInfo);
+
+    return dmSessionManager;
   }
 }

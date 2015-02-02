@@ -20,6 +20,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
+
 import com.documentum.com.IDfClientX;
 import com.documentum.fc.client.DfAuthenticationException;
 import com.documentum.fc.client.DfIdentityException;
@@ -28,7 +29,9 @@ import com.documentum.fc.client.DfServiceException;
 import com.documentum.fc.client.IDfClient;
 import com.documentum.fc.client.IDfSession;
 import com.documentum.fc.client.IDfSessionManager;
+import com.documentum.fc.client.IDfSysObject;
 import com.documentum.fc.common.DfException;
+import com.documentum.fc.common.IDfId;
 import com.documentum.fc.common.IDfLoginInfo;
 
 import org.junit.Test;
@@ -62,7 +65,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.username", "testuser");
     config.addKey("documentum.password", "testpwd");
     config.addKey("documentum.docbaseName", "testdocbase");
-    config.addKey("documentum.src", "src");
+    config.addKey("documentum.src", "/Folder1/path1");
     config.addKey("documentum.separatorRegex", ",");
 
     adaptor.init(context);
@@ -76,13 +79,16 @@ public class DocumentumAdaptorTest {
     List<String> expectedMethodCallSequence = Arrays.asList(
         "getLocalClient", "newSessionManager",
         "getLoginInfo", "setIdentity",
+        "getSession", "release",
+        "getLocalClient", "newSessionManager",
+        "getLoginInfo", "setIdentity",
         "getSession", "release"
     );
     assertEquals(expectedMethodCallSequence, proxyCls.methodCallSequence);
 
     Set<String> expectedMethodCallSet =
         ImmutableSet.of("setUser", "setPassword", "getDFCVersion",
-            "getServerVersion");
+            "getServerVersion", "getObjectByPath");
     assertEquals(expectedMethodCallSet, proxyCls.methodCalls);
   }
 
@@ -96,13 +102,14 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.username", "testuser");
     config.addKey("documentum.password", "testpwd");
     config.addKey("documentum.docbaseName", "testdocbase");
-    config.addKey("documentum.src", "src/path1, src/path2, src/path3");
+    config.addKey("documentum.src", "/Folder1/path1, /Folder2/path2,"
+        + "/Folder3/path3");
     config.addKey("documentum.separatorRegex", ",");
 
     adaptor.init(context);
 
-    assertEquals(Arrays.asList("src/path1", "src/path2", "src/path3"),
-        adaptor.getStartPaths());
+    assertEquals(Arrays.asList("/Folder1/path1", "/Folder2/path2",
+        "/Folder3/path3"), adaptor.getStartPaths());
   }
 
   private class InitTestProxies {
@@ -117,6 +124,16 @@ public class DocumentumAdaptorTest {
         new HashMap<String, IDfLoginInfo>();
     Map<String, IDfSession> docbaseSessionMap =
         new HashMap<String, IDfSession>();
+
+    Map<String, String> folderPathIdsMap = new HashMap<String, String>() {
+      {
+        put("/Folder1/path1", "0b01081f80078d2a");
+        put("/Folder2/path2", "0b01081f80078d29");
+        put("/Folder3/path3", "0b01081f80078d28");
+        put("/Folder1/path1,/Folder2/path2,/Folder3/path3,/Folder4/path4",
+            "0b01081f80078d2b");
+      }
+    };
 
     String username;
     String password;
@@ -232,6 +249,58 @@ public class DocumentumAdaptorTest {
 
         if ("getServerVersion".equals(method.getName())) {
           return "1.0.0.000 (Mock CS)";
+        } else if ("getObjectByPath".equals(method.getName())) {
+          if (folderPathIdsMap.containsKey((String) args[0])) {
+            return getProxySysObject((String) args[0]);
+          } else {
+            return null;
+          }
+        }
+        throw new AssertionError("invalid method: " + method.getName());
+      }
+    }
+
+    public IDfSysObject getProxySysObject(String string) {
+      return (IDfSysObject) Proxy.newProxyInstance(
+          IDfSession.class.getClassLoader(),
+          new Class<?>[] {IDfSysObject.class},
+          new SysObjectHandler(string));
+    }
+
+    private class SysObjectHandler implements InvocationHandler {
+      private String objectPath;
+
+      public SysObjectHandler(String objectPath) {
+        this.objectPath = objectPath;
+      }
+
+      public Object invoke(Object proxy, Method method, Object[] args)
+          throws DfException {
+        if ("getObjectId".equals(method.getName())) {
+          String id = folderPathIdsMap.get(objectPath);
+          return getProxyDfId(id);
+        }
+        throw new AssertionError("invalid method: " + method.getName());
+      }
+    }
+
+    public IDfId getProxyDfId(String string) {
+      return (IDfId) Proxy.newProxyInstance(
+          IDfSession.class.getClassLoader(), new Class<?>[] {IDfId.class},
+          new DfIdHandler(string));
+    }
+
+    private class DfIdHandler implements InvocationHandler {
+      private String objectId;
+
+      public DfIdHandler(String objectId) {
+        this.objectId = objectId;
+      }
+
+      public Object invoke(Object proxy, Method method, Object[] args)
+          throws DfException {
+        if ("toString".equals(method.getName())) {
+          return objectId;
         }
         throw new AssertionError("invalid method: " + method.getName());
       }
@@ -338,10 +407,10 @@ public class DocumentumAdaptorTest {
   public void testConfigSeparatorRegex() throws DfException {
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
-    String path1 = "Folder1/path1";
-    String path2 = "Folder2/path2";
-    String path3 = "Folder3/path3";
-    String path4 = "Folder4/path4";
+    String path1 = "/Folder1/path1";
+    String path2 = "/Folder2/path2";
+    String path3 = "/Folder3/path3";
+    String path4 = "/Folder4/path4";
     String startPaths = path1 + ";" + path2 + ":" + path3 + "," + path4;
 
     initializeAdaptor(adaptor, startPaths, "[;:,]");
@@ -354,10 +423,10 @@ public class DocumentumAdaptorTest {
   public void testConfigBlankSeparatorRegexValue() throws DfException {
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
-    String path1 = "Folder1/path1";
-    String path2 = "Folder2/path2";
-    String path3 = "Folder3/path3";
-    String path4 = "Folder4/path4";
+    String path1 = "/Folder1/path1";
+    String path2 = "/Folder2/path2";
+    String path3 = "/Folder3/path3";
+    String path4 = "/Folder4/path4";
     String startPaths = path1 + "," + path2 + "," + path3 + "," + path4;
 
     initializeAdaptor(adaptor, startPaths, "");
@@ -369,15 +438,93 @@ public class DocumentumAdaptorTest {
   public void testConfigNoSeparatorRegexEntry() throws DfException {
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
-    String path1 = "Folder1/path1";
-    String path2 = "Folder2/path2";
-    String path3 = "Folder3/path3";
-    String path4 = "Folder4/path4";
+    String path1 = "/Folder1/path1";
+    String path2 = "/Folder2/path2";
+    String path3 = "/Folder3/path3";
+    String path4 = "/Folder4/path4";
     String startPaths = path1 + "," + path2 + "," + path3 + "," + path4;
 
     initializeAdaptor(adaptor, startPaths, null);
 
     assertEquals(ImmutableList.of(path1, path2, path3, path4),
         adaptor.getStartPaths());
+  }
+
+  private void initValidStartPaths(DocumentumAdaptor adaptor,
+      String... paths) throws DfException {
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    Config config = context.getConfig();
+    config.addKey("documentum.username", "testuser");
+    config.addKey("documentum.password", "testpwd");
+    config.addKey("documentum.docbaseName", "testdocbase");
+    config.addKey("documentum.separatorRegex", ",");
+
+    String startPaths = paths[0];
+    for (int i = 1; i < paths.length; i++) {
+      startPaths = startPaths + "," + paths[i];
+    }
+    config.addKey("documentum.src", startPaths);
+
+    adaptor.init(context);
+  }
+
+  @Test
+  public void testValidateStartPathsAllValid() throws DfException {
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
+
+    String path1 = "/Folder1/path1";
+    String path2 = "/Folder2/path2";
+    String path3 = "/Folder3/path3";
+
+    initValidStartPaths(adaptor, path1, path2, path3);
+
+    assertEquals(ImmutableList.of(path1, path2, path3),
+        adaptor.getValidatedStartPaths());
+  }
+
+  @Test
+  public void testValidateStartPathsSomeValid() throws DfException {
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
+
+    String path1 = "/Folder1/path1";
+    String path2 = "/Folder2/path2";
+    String path3 = "/Folder4/path3";
+    String path4 = "/Folder4/path4";
+
+    initValidStartPaths(adaptor, path1, path2, path3, path4);
+    assertEquals(ImmutableList.of(path1, path2),
+        adaptor.getValidatedStartPaths());
+    assertFalse(adaptor.getValidatedStartPaths().contains(path4));
+  }
+
+  @Test
+  public void testValidateStartPathsSomeInvalid() throws DfException {
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
+
+    String path1 = "/Folder4/path4";
+    String path2 = "/Folder5/path5";
+    String path3 = "/Folder1/path1";
+    String path4 = "/Folder2/path2";
+
+    initValidStartPaths(adaptor, path1, path2, path3, path4);
+    assertEquals(ImmutableList.of(path3, path4),
+        adaptor.getValidatedStartPaths());
+    assertFalse(adaptor.getValidatedStartPaths().contains(path1));
+    assertFalse(adaptor.getValidatedStartPaths().contains(path2));
+  }
+
+  @Test(expected = IllegalStateException.class)
+  public void testValidateStartPathsNoneVald() throws DfException {
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
+
+    String path1 = "/Folder1/path4";
+    String path2 = "/Folder2/path5";
+    String path3 = "/Folder3/path6";
+
+    initValidStartPaths(adaptor, path1, path2, path3);
   }
 }
