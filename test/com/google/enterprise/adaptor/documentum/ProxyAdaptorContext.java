@@ -17,25 +17,21 @@ package com.google.enterprise.adaptor.documentum;
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
 
-import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 
-public class ProxyAdaptorContext {
+class ProxyAdaptorContext {
   public static AdaptorContext getInstance() {
     return (AdaptorContext) Proxy.newProxyInstance(
         AdaptorContext.class.getClassLoader(),
-        new Class<?>[] {AdaptorContext.class}, new Handler());
+        new Class<?>[] {AdaptorContext.class},
+        Proxies.getInvocationHandler(new AdaptorContextMock()));
   }
 
-  private static class Handler implements InvocationHandler {
+  private static class AdaptorContextMock {
     private final Config config = new Config();
 
-    public Object invoke(Object proxy, Method method, Object[] args) {
-      if ("getConfig".equals(method.getName())) {
-        return config;
-      }
-      throw new AssertionError("invalid method: " + method.getName());
+    public Config getConfig() {
+      return config;
     }
   }
 }

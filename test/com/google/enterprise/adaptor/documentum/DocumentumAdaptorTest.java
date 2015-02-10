@@ -36,8 +36,6 @@ import com.documentum.fc.common.IDfLoginInfo;
 
 import org.junit.Test;
 
-import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -142,62 +140,55 @@ public class DocumentumAdaptorTest {
     public IDfClientX getProxyClientX() {
       return (IDfClientX) Proxy.newProxyInstance(
           IDfClientX.class.getClassLoader(), new Class<?>[] {IDfClientX.class},
-          new ClientXHandler());
+          Proxies.getInvocationHandler(new ClientXMock()));
     }
 
-    private class ClientXHandler implements InvocationHandler {
-      public Object invoke(Object proxy, Method method, Object[] args)
-          throws DfException {
-        if ("getDFCVersion".equals(method.getName())) {
-          methodCalls.add(method.getName());
-          return "1.0.0.000 (Mock DFC)";
-        } else if ("getLocalClient".equals(method.getName())) {
-          methodCallSequence.add(method.getName());
-          return client;
-        } else if ("getLoginInfo".equals(method.getName())) {
-          methodCallSequence.add(method.getName());
-          return loginInfo;
-        }
-        throw new AssertionError("invalid method: " + method.getName());
+    private class ClientXMock {
+      public String getDFCVersion() {
+        methodCalls.add(Proxies.getMethodName());
+        return "1.0.0.000 (Mock DFC)";
+      }
+
+      public IDfClient getLocalClient() {
+        methodCallSequence.add(Proxies.getMethodName());
+        return client;
+      }
+
+      public IDfLoginInfo getLoginInfo() {
+        methodCallSequence.add(Proxies.getMethodName());
+        return loginInfo;
       }
     }
 
     public IDfClient getProxyClient() {
       return (IDfClient) Proxy.newProxyInstance(
           IDfClient.class.getClassLoader(), new Class<?>[] {IDfClient.class},
-          new ClientHandler());
+          Proxies.getInvocationHandler(new ClientMock()));
     }
 
-    private class ClientHandler implements InvocationHandler {
-      public Object invoke(Object proxy, Method method, Object[] args)
-          throws DfException {
-        methodCallSequence.add(method.getName());
-
-        if ("newSessionManager".equals(method.getName())) {
-          return sessionManager;
-        }
-        throw new AssertionError("invalid method: " + method.getName());
+    private class ClientMock {
+      public IDfSessionManager newSessionManager() {
+        methodCallSequence.add(Proxies.getMethodName());
+        return sessionManager;
       }
     }
 
     public IDfLoginInfo getProxyLoginInfo() {
       return (IDfLoginInfo) Proxy.newProxyInstance(
           IDfLoginInfo.class.getClassLoader(),
-          new Class<?>[] {IDfLoginInfo.class}, new LoginInfoHandler());
+          new Class<?>[] {IDfLoginInfo.class},
+          Proxies.getInvocationHandler(new LoginInfoMock()));
     }
 
-    private class LoginInfoHandler implements InvocationHandler {
-      public Object invoke(Object proxy, Method method, Object[] args) {
-        methodCalls.add(method.getName());
+    private class LoginInfoMock {
+      public void setPassword(String password) {
+        methodCalls.add(Proxies.getMethodName());
+        InitTestProxies.this.password = password;
+      }
 
-        if ("setPassword".equals(method.getName())) {
-          password = (String) args[0];
-          return null;
-        } else if ("setUser".equals(method.getName())) {
-          username = (String) args[0];
-          return null;
-        }
-        throw new AssertionError("invalid method: " + method.getName());
+      public void setUser(String username) {
+        methodCalls.add(Proxies.getMethodName());
+        InitTestProxies.this.username = username;
       }
     }
 
@@ -205,104 +196,89 @@ public class DocumentumAdaptorTest {
       return (IDfSessionManager) Proxy.newProxyInstance(
           IDfSessionManager.class.getClassLoader(),
           new Class<?>[] {IDfSessionManager.class},
-          new SessionManagerHandler());
+          Proxies.getInvocationHandler(new SessionManagerMock()));
     }
 
-    private class SessionManagerHandler implements
-        InvocationHandler {
-      public Object invoke(Object proxy, Method method, Object[] args)
-          throws DfIdentityException, DfAuthenticationException,
-          DfPrincipalException, DfServiceException {
-        methodCallSequence.add(method.getName());
-
-        if ("getSession".equals(method.getName())) {
-          String docbaseName = (String) args[0];
-          IDfSession session = docbaseSessionMap.get(docbaseName);
-          if (session == null) {
-            session = getProxySession();
-            docbaseSessionMap.put(docbaseName, session);
-          }
-          return session;
-        } else if ("release".equals(method.getName())) {
-          // TODO (sveldurthi): remove from the map to release the session
-          return null;
-        } else if ("setIdentity".equals(method.getName())) {
-          docbaseName = (String) args[0];
-          IDfLoginInfo loginInfo = (IDfLoginInfo) args[1];
-          docbaseLoginInfoMap.put(docbaseName, loginInfo);
-          return null;
+    private class SessionManagerMock {
+      public IDfSession getSession(String docbaseName) {
+        methodCallSequence.add(Proxies.getMethodName());
+        IDfSession session = docbaseSessionMap.get(docbaseName);
+        if (session == null) {
+          session = getProxySession();
+          docbaseSessionMap.put(docbaseName, session);
         }
-        throw new AssertionError("invalid method: " + method.getName());
+        return session;
+      }
+
+      public void release(IDfSession session) {
+        methodCallSequence.add(Proxies.getMethodName());
+        // TODO(sveldurthi): remove from the map to release the session
+      }
+
+      public void setIdentity(String docbaseName, IDfLoginInfo loginInfo) {
+        methodCallSequence.add(Proxies.getMethodName());
+        InitTestProxies.this.docbaseName = docbaseName;
+        docbaseLoginInfoMap.put(docbaseName, loginInfo);
       }
     }
 
     public IDfSession getProxySession() {
       return (IDfSession) Proxy.newProxyInstance(
           IDfSession.class.getClassLoader(), new Class<?>[] {IDfSession.class},
-          new SessionHandler());
+          Proxies.getInvocationHandler(new SessionMock()));
     }
 
-    private class SessionHandler implements InvocationHandler {
-      public Object invoke(Object proxy, Method method, Object[] args)
-          throws DfException {
-        methodCalls.add(method.getName());
+    private class SessionMock {
+      public String getServerVersion() {
+        methodCalls.add(Proxies.getMethodName());
+        return "1.0.0.000 (Mock CS)";
+      }
 
-        if ("getServerVersion".equals(method.getName())) {
-          return "1.0.0.000 (Mock CS)";
-        } else if ("getObjectByPath".equals(method.getName())) {
-          if (folderPathIdsMap.containsKey((String) args[0])) {
-            return getProxySysObject((String) args[0]);
-          } else {
-            return null;
-          }
+      public IDfSysObject getObjectByPath(String path) {
+        methodCalls.add(Proxies.getMethodName());
+        if (folderPathIdsMap.containsKey(path)) {
+          return getProxySysObject(path);
+        } else {
+          return null;
         }
-        throw new AssertionError("invalid method: " + method.getName());
       }
     }
 
-    public IDfSysObject getProxySysObject(String string) {
+    public IDfSysObject getProxySysObject(String objectPath) {
       return (IDfSysObject) Proxy.newProxyInstance(
           IDfSession.class.getClassLoader(),
           new Class<?>[] {IDfSysObject.class},
-          new SysObjectHandler(string));
+          Proxies.getInvocationHandler(new SysObjectMock(objectPath)));
     }
 
-    private class SysObjectHandler implements InvocationHandler {
+    private class SysObjectMock {
       private String objectPath;
 
-      public SysObjectHandler(String objectPath) {
+      public SysObjectMock(String objectPath) {
         this.objectPath = objectPath;
       }
 
-      public Object invoke(Object proxy, Method method, Object[] args)
-          throws DfException {
-        if ("getObjectId".equals(method.getName())) {
-          String id = folderPathIdsMap.get(objectPath);
-          return getProxyDfId(id);
-        }
-        throw new AssertionError("invalid method: " + method.getName());
+      public IDfId getObjectId() {
+        String id = folderPathIdsMap.get(objectPath);
+        return getProxyId(id);
       }
     }
 
-    public IDfId getProxyDfId(String string) {
+    public IDfId getProxyId(String id) {
       return (IDfId) Proxy.newProxyInstance(
           IDfSession.class.getClassLoader(), new Class<?>[] {IDfId.class},
-          new DfIdHandler(string));
+          Proxies.getInvocationHandler(new IdMock(id)));
     }
 
-    private class DfIdHandler implements InvocationHandler {
+    private class IdMock {
       private String objectId;
 
-      public DfIdHandler(String objectId) {
+      public IdMock(String objectId) {
         this.objectId = objectId;
       }
 
-      public Object invoke(Object proxy, Method method, Object[] args)
-          throws DfException {
-        if ("toString".equals(method.getName())) {
-          return objectId;
-        }
-        throw new AssertionError("invalid method: " + method.getName());
+      public String toString() {
+        return objectId;
       }
     }
   }
