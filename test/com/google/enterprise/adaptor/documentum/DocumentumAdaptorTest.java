@@ -36,7 +36,6 @@ import com.documentum.fc.common.IDfLoginInfo;
 
 import org.junit.Test;
 
-import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -138,9 +137,7 @@ public class DocumentumAdaptorTest {
     String docbaseName;
 
     public IDfClientX getProxyClientX() {
-      return (IDfClientX) Proxy.newProxyInstance(
-          IDfClientX.class.getClassLoader(), new Class<?>[] {IDfClientX.class},
-          Proxies.getInvocationHandler(new ClientXMock()));
+      return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
     }
 
     private class ClientXMock {
@@ -161,9 +158,7 @@ public class DocumentumAdaptorTest {
     }
 
     public IDfClient getProxyClient() {
-      return (IDfClient) Proxy.newProxyInstance(
-          IDfClient.class.getClassLoader(), new Class<?>[] {IDfClient.class},
-          Proxies.getInvocationHandler(new ClientMock()));
+      return Proxies.newProxyInstance(IDfClient.class, new ClientMock());
     }
 
     private class ClientMock {
@@ -174,10 +169,7 @@ public class DocumentumAdaptorTest {
     }
 
     public IDfLoginInfo getProxyLoginInfo() {
-      return (IDfLoginInfo) Proxy.newProxyInstance(
-          IDfLoginInfo.class.getClassLoader(),
-          new Class<?>[] {IDfLoginInfo.class},
-          Proxies.getInvocationHandler(new LoginInfoMock()));
+      return Proxies.newProxyInstance(IDfLoginInfo.class, new LoginInfoMock());
     }
 
     private class LoginInfoMock {
@@ -193,10 +185,8 @@ public class DocumentumAdaptorTest {
     }
 
     public IDfSessionManager getProxySessionManager() {
-      return (IDfSessionManager) Proxy.newProxyInstance(
-          IDfSessionManager.class.getClassLoader(),
-          new Class<?>[] {IDfSessionManager.class},
-          Proxies.getInvocationHandler(new SessionManagerMock()));
+      return Proxies.newProxyInstance(IDfSessionManager.class,
+          new SessionManagerMock());
     }
 
     private class SessionManagerMock {
@@ -223,9 +213,7 @@ public class DocumentumAdaptorTest {
     }
 
     public IDfSession getProxySession() {
-      return (IDfSession) Proxy.newProxyInstance(
-          IDfSession.class.getClassLoader(), new Class<?>[] {IDfSession.class},
-          Proxies.getInvocationHandler(new SessionMock()));
+      return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
     }
 
     private class SessionMock {
@@ -245,10 +233,8 @@ public class DocumentumAdaptorTest {
     }
 
     public IDfSysObject getProxySysObject(String objectPath) {
-      return (IDfSysObject) Proxy.newProxyInstance(
-          IDfSession.class.getClassLoader(),
-          new Class<?>[] {IDfSysObject.class},
-          Proxies.getInvocationHandler(new SysObjectMock(objectPath)));
+      return Proxies.newProxyInstance(IDfSysObject.class,
+          new SysObjectMock(objectPath));
     }
 
     private class SysObjectMock {
@@ -265,9 +251,7 @@ public class DocumentumAdaptorTest {
     }
 
     public IDfId getProxyId(String id) {
-      return (IDfId) Proxy.newProxyInstance(
-          IDfSession.class.getClassLoader(), new Class<?>[] {IDfId.class},
-          Proxies.getInvocationHandler(new IdMock(id)));
+      return Proxies.newProxyInstance(IDfId.class, new IdMock(id));
     }
 
     private class IdMock {

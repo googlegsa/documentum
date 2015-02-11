@@ -21,10 +21,8 @@ import java.lang.reflect.Proxy;
 
 class ProxyAdaptorContext {
   public static AdaptorContext getInstance() {
-    return (AdaptorContext) Proxy.newProxyInstance(
-        AdaptorContext.class.getClassLoader(),
-        new Class<?>[] {AdaptorContext.class},
-        Proxies.getInvocationHandler(new AdaptorContextMock()));
+    return Proxies.newProxyInstance(AdaptorContext.class,
+        new AdaptorContextMock());
   }
 
   private static class AdaptorContextMock {

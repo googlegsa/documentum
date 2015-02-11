@@ -17,23 +17,28 @@ package com.google.enterprise.adaptor.documentum;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 
 /**
  * Handles method calls on a proxy interface by using reflection to
  * map the calls to methods on a target object. The target classes
  * should simply implement the proxy interface methods they need
  * (without using {@code @Override}). The called methods in the target
- * class can obtain their own name by calling {@link getMethodName}.
+ * class can obtain their own name by calling {@link #getMethodName}.
  */
 final class Proxies {
   /**
-   * Gets an invocation handler that delegates calls to the given target.
+   * Gets a new proxy instance that delegates calls to the given
+   * target using reflection.
    *
+   * @param clazz the {@code Interface} for the proxy class to implement
    * @param target an instance of a class implementing the required
-   *     methods in the proxy interface
+   *     subset of methods in the proxy interface
    */
-  public static InvocationHandler getInvocationHandler(Object target) {
-    return new ReflectionInvocationHandler(target);
+  public static <T> T newProxyInstance(Class<T> clazz, Object target) {
+    return clazz.cast(Proxy.newProxyInstance(clazz.getClassLoader(),
+        new Class<?>[] { clazz },
+        new ReflectionInvocationHandler(target)));
   }
 
   /** The name of the current method. */
