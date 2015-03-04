@@ -23,19 +23,24 @@ import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
 import com.google.enterprise.adaptor.DocIdPusher;
+import com.google.enterprise.adaptor.IOHelper;
 import com.google.enterprise.adaptor.InvalidConfigurationException;
 import com.google.enterprise.adaptor.Request;
 import com.google.enterprise.adaptor.Response;
 
 import com.documentum.com.DfClientX;
 import com.documentum.com.IDfClientX;
+import com.documentum.fc.client.IDfPersistentObject;
 import com.documentum.fc.client.IDfSession;
 import com.documentum.fc.client.IDfSessionManager;
 import com.documentum.fc.client.IDfSysObject;
+import com.documentum.fc.client.IDfType;
 import com.documentum.fc.common.DfException;
+import com.documentum.fc.common.IDfId;
 import com.documentum.fc.common.IDfLoginInfo;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
@@ -144,12 +149,50 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   @Override
   public void getDocContent(Request req, Response resp) throws IOException {
     // TODO: (sveldurthi) support "/" as start path, to process all cabinets.
+    // TODO: (sveldurthi) validate the requested doc id is in start paths,
+    //       if not send a 404.
+    getDocContentHelper(req, resp, dmSessionManager);
+  }
+
+  @VisibleForTesting
+  void getDocContentHelper(Request req, Response resp,
+      IDfSessionManager dmSessionManager) throws IOException {
     DocId id = req.getDocId();
     logger.log(Level.FINER, "Get content for id: {0}", id);
-    String str = "Content for " + id.toString();
-    resp.setContentType("text/plain; charset=" + CHARSET.name());
-    OutputStream os = resp.getOutputStream();
-    os.write(str.getBytes(CHARSET));
+
+    IDfSession dmSession;
+    try {
+      dmSession = dmSessionManager.getSession(docbase);
+      IDfPersistentObject dmPersObj =
+          dmSession.getObjectByPath(id.getUniqueId());
+      IDfId dmObjId = dmPersObj.getObjectId();
+      IDfType type = dmPersObj.getType();
+      logger.log(Level.FINER, "Object Id: {0}; Type: {1}",
+          new Object[] {dmObjId, type});
+
+      if (!type.isTypeOf("dm_document") && !type.isTypeOf("dm_folder")) {
+        logger.log(Level.WARNING, "Unsupported type: {0}", type);
+        resp.respondNotFound();
+      } else if (type.isTypeOf("dm_document")) {
+        IDfSysObject dmSysbObj = (IDfSysObject) dmPersObj;
+        String contentType = dmSysbObj.getContentType();
+        logger.log(Level.FINER, "Content Type: {0}",
+            new Object[] {contentType});
+
+        resp.setContentType(contentType);
+        InputStream inStream = dmSysbObj.getContent();
+        OutputStream outStream = resp.getOutputStream();
+        try {
+          IOHelper.copyStream(inStream, outStream);
+        } finally {
+          inStream.close();
+        }
+      } else {
+        // TODO: (sveldurthi) Implement folder listing
+      }
+    } catch (DfException e) {
+      throw new IOException("Error getting content:", e);
+    }
   }
 
   private static void validateConfig(Config config) {

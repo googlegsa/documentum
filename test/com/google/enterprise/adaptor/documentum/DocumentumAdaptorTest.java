@@ -20,22 +20,26 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
+import com.google.enterprise.adaptor.DocId;
+import com.google.enterprise.adaptor.Request;
+import com.google.enterprise.adaptor.Response;
 
 import com.documentum.com.IDfClientX;
-import com.documentum.fc.client.DfAuthenticationException;
-import com.documentum.fc.client.DfIdentityException;
-import com.documentum.fc.client.DfPrincipalException;
-import com.documentum.fc.client.DfServiceException;
 import com.documentum.fc.client.IDfClient;
 import com.documentum.fc.client.IDfSession;
 import com.documentum.fc.client.IDfSessionManager;
 import com.documentum.fc.client.IDfSysObject;
+import com.documentum.fc.client.IDfType;
 import com.documentum.fc.common.DfException;
 import com.documentum.fc.common.IDfId;
 import com.documentum.fc.common.IDfLoginInfo;
 
 import org.junit.Test;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -336,7 +340,7 @@ public class DocumentumAdaptorTest {
   @Test
   public void testParseStartPathsWhiteSpacePath() {
     String path1 = "Folder 1/path 1";
-    String path2 = "Folder 2/path 2 ";
+    String path2 = " Folder 2/path 2 ";
     String path3 = "Folder 3/ path 3 ";
     String startPaths = path1 + "," + path2 + "," + path3;
 
@@ -486,5 +490,168 @@ public class DocumentumAdaptorTest {
     String path3 = "/Folder3/path6";
 
     initValidStartPaths(adaptor, path1, path2, path3);
+  }
+
+  /* Mock proxy classes for testing file content */
+  private class DocContentTestProxies {
+    Map<String, String> objectPathIdsMap = new HashMap<String, String>() {
+      {
+        put("/Folder1/path1/object1", "0901081f80079f5c");
+      }
+    };
+
+    String objContentType;
+    String objContent;
+
+    String respContentType;
+    ByteArrayOutputStream respContentBaos;
+
+    public void setObjectContentType(String objContentType) {
+      this.objContentType = objContentType;
+    }
+
+    public void setObjectContent(String objContent) {
+      this.objContent = objContent;
+    }
+
+    public IDfClientX getProxyClientX() {
+      return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
+    }
+
+    private class ClientXMock {
+    }
+
+    public IDfSessionManager getProxySessionManager() {
+      return Proxies.newProxyInstance(IDfSessionManager.class,
+          new SessionManagerMock());
+    }
+
+    private class SessionManagerMock {
+      public IDfSession getSession(String docbaseName) {
+        return getProxySession();
+      }
+    }
+
+    public IDfSession getProxySession() {
+      return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
+    }
+
+    private class SessionMock {
+      public IDfSysObject getObjectByPath(String path) {
+        if (objectPathIdsMap.containsKey(path)) {
+          return getProxySysObject(path);
+        } else {
+          return null;
+        }
+      }
+    }
+
+    public IDfSysObject getProxySysObject(String objectPath) {
+      return Proxies.newProxyInstance(IDfSysObject.class,
+          new SysObjectMock(objectPath));
+    }
+
+    private class SysObjectMock {
+      private String objectPath;
+
+      public SysObjectMock(String objectPath) {
+        this.objectPath = objectPath;
+      }
+
+      public IDfId getObjectId() {
+        String objId = objectPathIdsMap.get(objectPath);
+        return getProxyId(objId);
+      }
+
+      public ByteArrayInputStream getContent() {
+        if (objectPathIdsMap.containsKey(objectPath)) {
+          if (objContent != null) {
+            return new ByteArrayInputStream(objContent.getBytes());
+          } else {
+            return null;
+          }
+        } else {
+          return null;
+        }
+      }
+
+      public IDfType getType() {
+        return getProxyType();
+      }
+
+      public String getContentType() {
+        return objContentType;
+      }
+    }
+
+    public IDfType getProxyType() {
+      return Proxies.newProxyInstance(IDfType.class, new TypeMock());
+    }
+
+    private class TypeMock {
+      public boolean isTypeOf(String type) {
+        return type.equals("dm_document");
+      }
+    }
+
+    public IDfId getProxyId(String id) {
+      return Proxies.newProxyInstance(IDfId.class, new IdMock(id));
+    }
+
+    private class IdMock {
+      public IdMock(String objectId) {
+      }
+    }
+
+    public Request getProxyRequest(DocId docId) {
+      return Proxies.newProxyInstance(Request.class, new RequestMock(docId));
+    }
+
+    private class RequestMock {
+      DocId docId;
+
+      public RequestMock(DocId docId) {
+        this.docId = docId;
+      }
+
+      public DocId getDocId() {
+        return docId;
+      }
+    }
+
+    public Response getProxyResponse() {
+      return Proxies.newProxyInstance(Response.class, new ResponseMock());
+    }
+
+    private class ResponseMock {
+      public void setContentType(String contentType) {
+        DocContentTestProxies.this.respContentType = contentType;
+      }
+
+      public OutputStream getOutputStream() {
+        respContentBaos = new ByteArrayOutputStream();
+        return respContentBaos;
+      }
+    }
+  }
+
+  @Test
+  public void testDocContent() throws DfException, IOException {
+    DocContentTestProxies proxyCls = new DocContentTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+
+    String objectContentType = "crtext/html";
+    String objectContent = "<html><body>Hello</body></html>";
+    proxyCls.setObjectContentType(objectContentType);
+    proxyCls.setObjectContent(objectContent);
+    Request req = proxyCls.getProxyRequest(new DocId("/Folder1/path1/object1"));
+    Response resp = proxyCls.getProxyResponse();
+    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
+
+    adaptor.getDocContentHelper(req, resp, sessionManager);
+
+    assertEquals(objectContentType, proxyCls.respContentType);
+    assertEquals(objectContent, proxyCls.respContentBaos.toString("UTF-8"));
   }
 }
