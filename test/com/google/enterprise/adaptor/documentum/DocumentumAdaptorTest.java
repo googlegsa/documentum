@@ -15,6 +15,7 @@
 package com.google.enterprise.adaptor.documentum;
 
 import static org.junit.Assert.*;
+import static java.nio.charset.StandardCharsets.UTF_8;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -41,6 +42,7 @@ import org.junit.Test;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -566,10 +568,10 @@ public class DocumentumAdaptorTest {
         return getProxyId(objId);
       }
 
-      public ByteArrayInputStream getContent() {
+      public InputStream getContent() {
         if (objectPathIdsMap.containsKey(objectPath)) {
           if (objContent != null) {
-            return new ByteArrayInputStream(objContent.getBytes());
+            return new ByteArrayInputStream(objContent.getBytes(UTF_8));
           } else {
             return null;
           }
@@ -659,7 +661,8 @@ public class DocumentumAdaptorTest {
     adaptor.getDocContentHelper(req, resp, sessionManager);
 
     assertEquals(objectContentType, proxyCls.respContentType);
-    assertEquals(objectContent, proxyCls.respContentBaos.toString("UTF-8"));
+    assertEquals(objectContent,
+        proxyCls.respContentBaos.toString(UTF_8.name()));
   }
 
   /* Mock proxy classes for testing folder listing */
@@ -869,6 +872,6 @@ public class DocumentumAdaptorTest {
 
     assertEquals("text/html; charset=UTF-8", proxyCls.respContentType);
     assertEquals(expected.toString(),
-        proxyCls.respContentBaos.toString("UTF-8"));
+        proxyCls.respContentBaos.toString(UTF_8.name()));
   }
 }
