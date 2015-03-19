@@ -30,6 +30,8 @@ import com.google.enterprise.adaptor.Response;
 
 import com.documentum.com.DfClientX;
 import com.documentum.com.IDfClientX;
+import com.documentum.fc.client.IDfCollection;
+import com.documentum.fc.client.IDfFolder;
 import com.documentum.fc.client.IDfPersistentObject;
 import com.documentum.fc.client.IDfSession;
 import com.documentum.fc.client.IDfSessionManager;
@@ -39,10 +41,14 @@ import com.documentum.fc.common.DfException;
 import com.documentum.fc.common.IDfId;
 import com.documentum.fc.common.IDfLoginInfo;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
 import java.nio.charset.Charset;
+import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -163,12 +169,13 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     IDfSession dmSession;
     try {
       dmSession = dmSessionManager.getSession(docbase);
+
       IDfPersistentObject dmPersObj =
           dmSession.getObjectByPath(id.getUniqueId());
       IDfId dmObjId = dmPersObj.getObjectId();
       IDfType type = dmPersObj.getType();
       logger.log(Level.FINER, "Object Id: {0}; Type: {1}",
-          new Object[] {dmObjId, type});
+          new Object[] {dmObjId, type.getName()});
 
       if (!type.isTypeOf("dm_document") && !type.isTypeOf("dm_folder")) {
         logger.log(Level.WARNING, "Unsupported type: {0}", type);
@@ -188,7 +195,39 @@ public class DocumentumAdaptor extends AbstractAdaptor {
           inStream.close();
         }
       } else {
-        // TODO: (sveldurthi) Implement folder listing
+        IDfFolder dmFolder = (IDfFolder) dmPersObj;
+        logger.log(Level.FINER, "Listing contents of folder: {0} ",
+            dmFolder.getObjectName());
+
+        HtmlResponseWriter htmlWriter = createHtmlResponseWriter(resp);
+        htmlWriter.start(id, dmFolder.getObjectName());
+
+        IDfCollection dmCollection =
+            dmFolder.getContents("r_object_id, object_name");
+        try {
+          while (dmCollection.next()) {
+            String objId = dmCollection.getString("r_object_id");
+            String objName = dmCollection.getString("object_name");
+            logger.log(Level.FINER, "Object Id: {0}; Name: {1}",
+                new Object[] {objId, objName});
+
+            // Get the last part of the doc id and construct relative links for 
+            // child doc id.
+            String uniqueId = id.getUniqueId();
+            String childDocId =
+                uniqueId.substring(uniqueId.lastIndexOf("/") + 1) + "/"
+                    + objName;
+
+            htmlWriter.addLink(new DocId(childDocId), objName);
+          }
+        } finally {
+          try {
+            dmCollection.close();
+          } catch (DfException e) {
+            logger.log(Level.WARNING, "Error closing collection", e);
+          }
+        }
+        htmlWriter.finish();
       }
     } catch (DfException e) {
       throw new IOException("Error getting content:", e);
@@ -303,5 +342,97 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     dmSessionManager.setIdentity(docbaseName, dmLoginInfo);
 
     return dmSessionManager;
+  }
+
+  private HtmlResponseWriter createHtmlResponseWriter(Response response)
+      throws IOException {
+    response.setContentType("text/html; charset=" + CHARSET.name());
+    Writer writer = new OutputStreamWriter(response.getOutputStream(), CHARSET);
+    return new HtmlResponseWriter(writer);
+  }
+
+  private class HtmlResponseWriter implements Closeable {
+    private final Writer writer;
+
+    public HtmlResponseWriter(Writer writer) {
+      if (writer == null) {
+        throw new NullPointerException();
+      }
+      this.writer = writer;
+    }
+
+    /**
+     * Start writing HTML document.
+     *
+     * @param docId the DocId for the document being written out
+     * @param label possibly-{@code null} title or name of {@code docId}
+     */
+    public void start(DocId docId, String label) throws IOException {
+      logger.entering("HtmlResponseWriter", "start");
+      String header =
+          MessageFormat.format("{0} {1}", "Folder", computeLabel(label, docId));
+      writer.write("<!DOCTYPE html>\n<html><head><title>");
+      writer.write(escapeContent(header));
+      writer.write("</title></head><body><h1>");
+      writer.write(escapeContent(header));
+      writer.write("</h1>");
+      logger.exiting("HtmlResponseWriter", "start");
+    }
+
+    private String computeLabel(String label, DocId doc) {
+      if (Strings.isNullOrEmpty(label)) {
+        // Use the last part of the URL if an item doesn't have a title.
+        // The last part of the URL will generally be a filename in this case.
+        String[] parts = doc.getUniqueId().split("/", 0);
+        label = parts[parts.length - 1];
+      }
+      return label;
+    }
+
+    /**
+     * @param docId docId to add as a link in the document
+     * @param label possibly-{@code null} title or description of {@code docId}
+     */
+    public void addLink(DocId doc, String label) throws IOException {
+      if (doc == null) {
+        throw new NullPointerException();
+      }
+      writer.write("<li><a href=\"");
+      // TODO (sveldurthi) : URL encode the id (doc.getUniqueId())
+      writer.write(escapeAttributeValue(doc.getUniqueId()));
+      writer.write("\">");
+      writer.write(escapeContent(computeLabel(label, doc)));
+      writer.write("</a></li>");
+    }
+
+    /**
+     * Complete HTML body and flush.
+     */
+    public void finish() throws IOException {
+      logger.entering("HtmlResponseWriter", "finish");
+      writer.write("</body></html>");
+      writer.flush();
+      logger.exiting("HtmlResponseWriter", "finish");
+    }
+
+    /**
+     * Close underlying writer. You will generally want to call {@link #finish}
+     * first.
+     */
+    //@Override
+    public void close() throws IOException {
+      logger.entering("HtmlResponseWriter", "close");
+      writer.close();
+      logger.exiting("HtmlResponseWriter", "close");
+    }
+
+    private String escapeContent(String raw) {
+      return raw.replace("&", "&amp;").replace("<", "&lt;")
+          .replace(">", "&gt;");
+    }
+
+    private String escapeAttributeValue(String raw) {
+      return escapeContent(raw).replace("\"", "&quot;").replace("'", "&apos;");
+    }
   }
 }
