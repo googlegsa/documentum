@@ -658,7 +658,7 @@ public class DocumentumAdaptorTest {
     Response resp = proxyCls.getProxyResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
-    adaptor.getDocContentHelper(req, resp, sessionManager);
+    adaptor.getDocContentHelper(req, resp, sessionManager, null);
 
     assertEquals(objectContentType, proxyCls.respContentType);
     assertEquals(objectContent,
@@ -860,15 +860,17 @@ public class DocumentumAdaptorTest {
     addFolderChild(proxyCls, "0901081f80079263", "file1");
     expected.append("<li><a href=\"path2/file1\">file1</a></li>");
 
-    addFolderChild(proxyCls, "0901081f8007926d", "file2");
-    expected.append("<li><a href=\"path2/file2\">file2</a></li>");
+    addFolderChild(proxyCls, "0901081f8007926d", "file2 evil<chars?");
+    expected.append("<li><a href=\"path2/file2%20evil%3Cchars%3F\">"
+        + "file2 evil&lt;chars?</a></li>");
 
     addFolderChild(proxyCls, "0901081f80079278", "file3");
     expected.append("<li><a href=\"path2/file3\">file3</a></li>");
 
     expected.append("</body></html>");
 
-    adaptor.getDocContentHelper(req, resp, sessionManager);
+    adaptor.getDocContentHelper(req, resp, sessionManager, 
+        ProxyAdaptorContext.getInstance().getDocIdEncoder());
 
     assertEquals("text/html; charset=UTF-8", proxyCls.respContentType);
     assertEquals(expected.toString(),

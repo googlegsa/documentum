@@ -16,8 +16,12 @@ package com.google.enterprise.adaptor.documentum;
 
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
+import com.google.enterprise.adaptor.DocId;
+import com.google.enterprise.adaptor.DocIdEncoder;
 
 import java.lang.reflect.Proxy;
+import java.net.URI;
+import java.net.URISyntaxException;
 
 class ProxyAdaptorContext {
   public static AdaptorContext getInstance() {
@@ -27,9 +31,44 @@ class ProxyAdaptorContext {
 
   private static class AdaptorContextMock {
     private final Config config = new Config();
+    private final DocIdEncoder docIdEncoder = new MockDocIdCodec();
 
     public Config getConfig() {
       return config;
+    }
+
+    public DocIdEncoder getDocIdEncoder() {
+      return docIdEncoder;
+    }
+  }
+
+  /**
+   * Mock of {@link DocIdCodec}, derived from adaptor library implementation.
+   */
+  private static class MockDocIdCodec implements DocIdEncoder {
+    private static final URI baseDocUri = URI.create("http://localhost/duck/");
+
+    @Override
+    public URI encodeDocId(DocId docId) {
+      URI resource;
+      String uniqueId = docId.getUniqueId();
+      // Add three dots to any sequence of only dots. This is to allow "/../"
+      // and "/./" within DocIds.
+      uniqueId = uniqueId.replaceAll("(^|/)(\\.+)(?=$|/)", "$1$2...");
+      // Also encode "//" except when after a ":".
+      uniqueId = uniqueId.replaceAll("(?<!:)/(?=/)", "/...");
+      // Precede index.html and index.htm with "_" to avoid GSA eating them.
+      uniqueId = uniqueId.replaceFirst("(^|/)(_*index.html?)$", "$1_$2");
+      // If starts with "/" avoid double slash after baseDocUri.
+      if (uniqueId.startsWith("/")) { 
+        uniqueId = "..." + uniqueId;
+      }
+      try {
+        resource = new URI(null, null, baseDocUri.getPath() + uniqueId, null);
+      } catch (URISyntaxException ex) {
+        throw new IllegalStateException(ex);
+      }
+      return baseDocUri.resolve(resource);
     }
   }
 }
