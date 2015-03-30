@@ -52,6 +52,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
@@ -68,7 +69,8 @@ public class DocumentumAdaptor extends AbstractAdaptor {
 
   private final IDfClientX dmClientX;
   private List<String> startPaths;
-  private List<String> validatedStartPaths = new ArrayList<String>();
+  private CopyOnWriteArrayList<String> validatedStartPaths =
+      new CopyOnWriteArrayList<String>();
 
   private DocIdEncoder docIdEncoder;
   private IDfSessionManager dmSessionManager;
@@ -176,22 +178,28 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     // TODO: (sveldurthi) support "/" as start path, to process all cabinets.
     // TODO: (sveldurthi) validate the requested doc id is in start paths,
     //       if not send a 404.
-    getDocContentHelper(req, resp, dmSessionManager, docIdEncoder);
+    getDocContentHelper(req, resp, dmSessionManager, docIdEncoder,
+                        validatedStartPaths);
   }
 
   @VisibleForTesting
   void getDocContentHelper(Request req, Response resp,
-      IDfSessionManager dmSessionManager, DocIdEncoder docIdEncoder)
-      throws IOException {
+      IDfSessionManager dmSessionManager, DocIdEncoder docIdEncoder,
+      List<String> validatedStartPaths) throws IOException {
     DocId id = req.getDocId();
     logger.log(Level.FINER, "Get content for id: {0}", id);
+
+    String path = docIdToPath(id);
+    if (!isUnderStartPath(path, validatedStartPaths)) {
+      resp.respondNotFound();
+      return;
+    }
 
     IDfSession dmSession;
     try {
       dmSession = dmSessionManager.getSession(docbase);
 
-      IDfPersistentObject dmPersObj =
-          dmSession.getObjectByPath(docIdToPath(id));
+      IDfPersistentObject dmPersObj = dmSession.getObjectByPath(path);
       if (dmPersObj == null) {
         logger.log(Level.FINER, "Not found: {0}", id);
         resp.respondNotFound();
@@ -312,7 +320,7 @@ public class DocumentumAdaptor extends AbstractAdaptor {
    */
   private void validatePaths() throws DfException {
     IDfSession dmSession = dmSessionManager.getSession(docbase);
-
+    List<String> validStartPaths = new ArrayList<String>(startPaths.size());
     for (String startPath : startPaths) {
       String documentumFolderPath = normalizePath(startPath);
       logger.log(Level.INFO, "Validating path {0}", documentumFolderPath);
@@ -327,15 +335,28 @@ public class DocumentumAdaptor extends AbstractAdaptor {
         logger.log(Level.WARNING, "Invalid start path {0}",
             documentumFolderPath);
       } else {
-        if (!validatedStartPaths.contains(documentumFolderPath)) {
-          logger.log(Level.CONFIG, "Valid start path {0} id:{1}", new Object[] {
-              documentumFolderPath, obj.getObjectId().toString()});
-          validatedStartPaths.add(documentumFolderPath);
-        }
+        logger.log(Level.CONFIG, "Valid start path {0} id:{1}", new Object[] {
+            documentumFolderPath, obj.getObjectId().toString()});
+        validStartPaths.add(documentumFolderPath);
       }
     }
-
+    validatedStartPaths.addAllAbsent(validStartPaths);
     dmSessionManager.release(dmSession);
+  }
+
+  /**
+   * Returns {@code true} if the supplied {@code path} is under one of the
+   * validated {@code startPaths}, {@code false} otherwise.
+   *
+   * @param path a String representing a possible path to a document
+   */
+  private boolean isUnderStartPath(String path, List<String> startPaths) {
+    for (String startPath : startPaths) {
+      if (startPath.equals(path) || path.startsWith(startPath + "/")) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

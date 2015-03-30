@@ -675,7 +675,9 @@ public class DocumentumAdaptorTest {
     Response resp = proxyCls.getProxyResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
-    adaptor.getDocContentHelper(req, resp, sessionManager, null);
+    adaptor.getDocContentHelper(req, resp, sessionManager,
+        ProxyAdaptorContext.getInstance().getDocIdEncoder(),
+        ImmutableList.of("/Folder1"));
 
     assertEquals(objectContentType, proxyCls.respContentType);
     assertEquals(objectContent,
@@ -892,7 +894,8 @@ public class DocumentumAdaptorTest {
     expected.append("</body></html>");
 
     adaptor.getDocContentHelper(req, resp, sessionManager, 
-        ProxyAdaptorContext.getInstance().getDocIdEncoder());
+        ProxyAdaptorContext.getInstance().getDocIdEncoder(),
+        ImmutableList.of("/Folder2"));
 
     assertFalse(proxyCls.respNotFound);
     assertEquals("text/html; charset=UTF-8", proxyCls.respContentType);
@@ -913,7 +916,32 @@ public class DocumentumAdaptorTest {
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
     adaptor.getDocContentHelper(req, resp, sessionManager,
-        ProxyAdaptorContext.getInstance().getDocIdEncoder());
+        ProxyAdaptorContext.getInstance().getDocIdEncoder(),
+        ImmutableList.of("/Folder2"));
+
+    assertTrue(proxyCls.respNotFound);
+  }
+
+  @Test
+  public void testGetDocContentNotUnderStartPath()
+      throws DfException, IOException {
+    FolderDocContentTestProxies proxyCls = new FolderDocContentTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+
+    String path1 = "/Folder1/path1";
+    String path2 = "/Folder2/path2";
+
+    addFolder(proxyCls, "0b01081f80078d29", path1);
+    addFolder(proxyCls, "0b01081f80078d30", path2);
+
+    Request req = proxyCls.getProxyRequest(new DocId(path2));
+    Response resp = proxyCls.getProxyResponse();
+    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
+
+    adaptor.getDocContentHelper(req, resp, sessionManager,
+        ProxyAdaptorContext.getInstance().getDocIdEncoder(),
+        ImmutableList.of("/Folder1")); // Folder2 not included.
 
     assertTrue(proxyCls.respNotFound);
   }
