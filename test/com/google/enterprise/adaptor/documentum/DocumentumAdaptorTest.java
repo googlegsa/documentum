@@ -485,8 +485,24 @@ public class DocumentumAdaptorTest {
     assertFalse(adaptor.getValidatedStartPaths().contains(path2));
   }
 
+  @Test
+  public void testValidateStartPathsNormalizePaths() throws DfException {
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
+
+    String path1 = "/Folder1/path1/";
+    String path2 = "Folder2/path2";
+    String path3 = "Folder3/path3/";
+    String path4 = "Folder5/path5";
+
+    initValidStartPaths(adaptor, path1, path2, path3, path4);
+
+    assertEquals(ImmutableList.of("/Folder1/path1", "/Folder2/path2",
+       "/Folder3/path3"), adaptor.getValidatedStartPaths());
+  }
+
   @Test(expected = IllegalStateException.class)
-  public void testValidateStartPathsNoneVald() throws DfException {
+  public void testValidateStartPathsNoneValid() throws DfException {
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
 
@@ -654,7 +670,8 @@ public class DocumentumAdaptorTest {
     String objectContent = "<html><body>Hello</body></html>";
     proxyCls.setObjectContentType(objectContentType);
     proxyCls.setObjectContent(objectContent);
-    Request req = proxyCls.getProxyRequest(new DocId("/Folder1/path1/object1"));
+    String path = "/Folder1/path1/object1";
+    Request req = proxyCls.getProxyRequest(adaptor.docIdFromPath(path));
     Response resp = proxyCls.getProxyResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
@@ -850,7 +867,7 @@ public class DocumentumAdaptorTest {
 
     String folder = "/Folder2/subfolder/path2";
 
-    Request req = proxyCls.getProxyRequest(new DocId(folder));
+    Request req = proxyCls.getProxyRequest(adaptor.docIdFromPath(folder));
     Response resp = proxyCls.getProxyResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 

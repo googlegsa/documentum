@@ -78,6 +78,23 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     AbstractAdaptor.main(new DocumentumAdaptor(), args);
   }
 
+  // Strip leading and trailing slashes so our DocIds show up
+  // as children of the baseDocUrl.
+  @VisibleForTesting
+  static DocId docIdFromPath(String path) {
+    return new DocId(path.substring(path.startsWith("/") ? 1 : 0,
+        path.endsWith("/") ? path.length() - 1 : path.length()));
+  }
+
+  // Restore the leading slash, so we have a valid Documentum path.
+  private static String docIdToPath(DocId docId) {
+    return "/" + docId.getUniqueId();
+  }
+
+  private static String normalizePath(String path) {
+    return docIdToPath(docIdFromPath(path));
+  }
+
   public DocumentumAdaptor() {
     this(new DfClientX());
   }
@@ -130,7 +147,7 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     }
     ArrayList<DocId> docIds = new ArrayList<DocId>();
     for (String startPath : validatedStartPaths) {
-      docIds.add(new DocId(startPath));
+      docIds.add(docIdFromPath(startPath));
     }
     logger.log(Level.FINER, "DocumentumAdaptor DocIds: {0}", docIds);
     pusher.pushDocIds(docIds);
@@ -174,7 +191,7 @@ public class DocumentumAdaptor extends AbstractAdaptor {
       dmSession = dmSessionManager.getSession(docbase);
 
       IDfPersistentObject dmPersObj =
-          dmSession.getObjectByPath(id.getUniqueId());
+          dmSession.getObjectByPath(docIdToPath(id));
       if (dmPersObj == null) {
         logger.log(Level.FINER, "Not found: {0}", id);
         resp.respondNotFound();
@@ -296,7 +313,8 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   private void validatePaths() throws DfException {
     IDfSession dmSession = dmSessionManager.getSession(docbase);
 
-    for (String documentumFolderPath : startPaths) {
+    for (String startPath : startPaths) {
+      String documentumFolderPath = normalizePath(startPath);
       logger.log(Level.INFO, "Validating path {0}", documentumFolderPath);
       IDfSysObject obj = null;
       try {
