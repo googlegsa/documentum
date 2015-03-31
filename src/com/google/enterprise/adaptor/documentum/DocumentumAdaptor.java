@@ -175,6 +175,12 @@ public class DocumentumAdaptor extends AbstractAdaptor {
 
       IDfPersistentObject dmPersObj =
           dmSession.getObjectByPath(id.getUniqueId());
+      if (dmPersObj == null) {
+        logger.log(Level.FINER, "Not found: {0}", id);
+        resp.respondNotFound();
+        return;
+      }
+
       IDfId dmObjId = dmPersObj.getObjectId();
       IDfType type = dmPersObj.getType();
       logger.log(Level.FINER, "Object Id: {0}; Type: {1}",

@@ -671,6 +671,7 @@ public class DocumentumAdaptorTest {
     List<String> folderListingIds = new ArrayList<String>();
     List<String> folderListingNames = new ArrayList<String>();
 
+    boolean respNotFound = false;
     String respContentType;
     ByteArrayOutputStream respContentBaos;
 
@@ -815,6 +816,10 @@ public class DocumentumAdaptorTest {
     }
 
     private class ResponseMock {
+      public void respondNotFound() {
+        respNotFound = true;
+      }
+
       public void setContentType(String contentType) {
         FolderDocContentTestProxies.this.respContentType = contentType;
       }
@@ -872,8 +877,27 @@ public class DocumentumAdaptorTest {
     adaptor.getDocContentHelper(req, resp, sessionManager, 
         ProxyAdaptorContext.getInstance().getDocIdEncoder());
 
+    assertFalse(proxyCls.respNotFound);
     assertEquals("text/html; charset=UTF-8", proxyCls.respContentType);
     assertEquals(expected.toString(),
         proxyCls.respContentBaos.toString(UTF_8.name()));
+  }
+
+  @Test
+  public void testGetDocContentNotFound() throws DfException, IOException {
+    FolderDocContentTestProxies proxyCls = new FolderDocContentTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+
+    String folder = "/Folder2/doesNotExist";
+
+    Request req = proxyCls.getProxyRequest(new DocId(folder));
+    Response resp = proxyCls.getProxyResponse();
+    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
+
+    adaptor.getDocContentHelper(req, resp, sessionManager,
+        ProxyAdaptorContext.getInstance().getDocIdEncoder());
+
+    assertTrue(proxyCls.respNotFound);
   }
 }
