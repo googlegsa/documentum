@@ -38,6 +38,8 @@ import com.documentum.fc.client.IDfSession;
 import com.documentum.fc.client.IDfSessionManager;
 import com.documentum.fc.client.IDfSysObject;
 import com.documentum.fc.client.IDfType;
+import com.documentum.fc.client.IDfVirtualDocument;
+import com.documentum.fc.client.IDfVirtualDocumentNode;
 import com.documentum.fc.common.DfException;
 import com.documentum.fc.common.IDfId;
 import com.documentum.fc.common.IDfLoginInfo;
@@ -267,7 +269,7 @@ public class DocumentumAdaptor extends AbstractAdaptor {
           new Object[] {dmObjId, type.getName()});
 
       if (type.isTypeOf("dm_document")) {
-        getDocumentContent(resp, (IDfSysObject) dmPersObj);
+        getDocumentContent(resp, (IDfSysObject) dmPersObj, id, docIdEncoder);
       } else if (type.isTypeOf("dm_folder")) {
         getFolderContent(resp, (IDfFolder) dmPersObj, id, docIdEncoder);
       } else {
@@ -295,13 +297,36 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   }
 
   /** Copies the Documentum document content into the response. */
-  private void getDocumentContent(Response resp, IDfSysObject dmSysbObj)
-      throws DfException, IOException {
+  private void getDocumentContent(Response resp, IDfSysObject dmSysbObj,
+      DocId id, DocIdEncoder docIdEncoder) throws DfException, IOException {
+    // If it is a virtual document, include links to the child documents.
+    if (dmSysbObj.isVirtualDocument()) {
+      getVdocChildLinks(resp, dmSysbObj, id, docIdEncoder);
+    }
+
+    // Return the content.
     String contentType = dmSysbObj.getContentType();
     logger.log(Level.FINER, "Content Type: {0}", contentType);
     resp.setContentType(contentType);
     try (InputStream inStream = dmSysbObj.getContent()) {
       IOHelper.copyStream(inStream, resp.getOutputStream());
+    }
+  }
+
+  /** Supplies VDoc children as external link metadata in the response. */
+  private void getVdocChildLinks(Response resp, IDfSysObject dmSysbObj,
+      DocId id, DocIdEncoder docIdEncoder) throws DfException, IOException {
+    IDfVirtualDocument vDoc = dmSysbObj.asVirtualDocument("CURRENT", false);
+    IDfVirtualDocumentNode root = vDoc.getRootNode();
+    int count = root.getChildCount();
+    for (int i = 0; i < count; i++) {
+      IDfSysObject child = root.getChild(i).getSelectedObject();
+      String objId = child.getString("r_object_id");
+      String objName = child.getString("object_name");
+      logger.log(Level.FINER, "VDoc Child Object Id: {0}; Name: {1}",
+          new Object[] {objId, objName});
+      DocId childDocId = docIdFromPath(docIdToPath(id) + "/" + objName);
+      resp.addAnchor(docIdEncoder.encodeDocId(childDocId), objName);
     }
   }
 
