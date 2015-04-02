@@ -211,53 +211,56 @@ public class DocumentumAdaptor extends AbstractAdaptor {
       logger.log(Level.FINER, "Object Id: {0}; Type: {1}",
           new Object[] {dmObjId, type.getName()});
 
-      if (!type.isTypeOf("dm_document") && !type.isTypeOf("dm_folder")) {
+      if (type.isTypeOf("dm_document")) {
+        getDocumentContent(resp, (IDfSysObject) dmPersObj);
+      } else if (type.isTypeOf("dm_folder")) {
+        getFolderContent(resp, (IDfFolder) dmPersObj, id, docIdEncoder);
+      } else {
         logger.log(Level.WARNING, "Unsupported type: {0}", type);
         resp.respondNotFound();
-      } else if (type.isTypeOf("dm_document")) {
-        IDfSysObject dmSysbObj = (IDfSysObject) dmPersObj;
-        String contentType = dmSysbObj.getContentType();
-        logger.log(Level.FINER, "Content Type: {0}",
-            new Object[] {contentType});
-
-        resp.setContentType(contentType);
-        InputStream inStream = dmSysbObj.getContent();
-        OutputStream outStream = resp.getOutputStream();
-        try {
-          IOHelper.copyStream(inStream, outStream);
-        } finally {
-          inStream.close();
-        }
-      } else {
-        IDfFolder dmFolder = (IDfFolder) dmPersObj;
-        logger.log(Level.FINER, "Listing contents of folder: {0} ",
-            dmFolder.getObjectName());
-
-        IDfCollection dmCollection =
-            dmFolder.getContents("r_object_id, object_name");
-
-        try (HtmlResponseWriter htmlWriter =
-             createHtmlResponseWriter(resp, docIdEncoder)) {
-          htmlWriter.start(id, dmFolder.getObjectName());
-          while (dmCollection.next()) {
-            String objId = dmCollection.getString("r_object_id");
-            String objName = dmCollection.getString("object_name");
-            logger.log(Level.FINER, "Object Id: {0}; Name: {1}",
-                new Object[] {objId, objName});
-            DocId childDocId = new DocId(id.getUniqueId() + "/" + objName);
-            htmlWriter.addLink(childDocId, objName);
-          }
-          htmlWriter.finish();
-        } finally {
-          try {
-            dmCollection.close();
-          } catch (DfException e) {
-            logger.log(Level.WARNING, "Error closing collection", e);
-          }
-        }
       }
     } catch (DfException e) {
       throw new IOException("Error getting content:", e);
+    }
+  }
+
+  /** Copies the Documentum document content into the response. */
+  private void getDocumentContent(Response resp, IDfSysObject dmSysbObj)
+      throws DfException, IOException {
+    String contentType = dmSysbObj.getContentType();
+    logger.log(Level.FINER, "Content Type: {0}", contentType);
+    resp.setContentType(contentType);
+    try (InputStream inStream = dmSysbObj.getContent()) {
+      IOHelper.copyStream(inStream, resp.getOutputStream());
+    }
+  }
+
+  /** Returns the Folder's contents as links in a generated HTML document. */
+  private void getFolderContent(Response resp, IDfFolder dmFolder, DocId id,
+      DocIdEncoder docIdEncoder) throws DfException, IOException {
+    logger.log(Level.FINER, "Listing contents of folder: {0} ",
+        dmFolder.getObjectName());
+    IDfCollection dmCollection =
+        dmFolder.getContents("r_object_id, object_name");
+
+    try (HtmlResponseWriter htmlWriter =
+         createHtmlResponseWriter(resp, docIdEncoder)) {
+      htmlWriter.start(id, dmFolder.getObjectName());
+      while (dmCollection.next()) {
+        String objId = dmCollection.getString("r_object_id");
+        String objName = dmCollection.getString("object_name");
+        logger.log(Level.FINER, "Object Id: {0}; Name: {1}",
+            new Object[] {objId, objName});
+        DocId childDocId = docIdFromPath(docIdToPath(id) + "/" + objName);
+        htmlWriter.addLink(childDocId, objName);
+      }
+      htmlWriter.finish();
+    } finally {
+      try {
+        dmCollection.close();
+      } catch (DfException e) {
+        logger.log(Level.WARNING, "Error closing collection", e);
+      }
     }
   }
 
