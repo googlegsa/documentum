@@ -129,36 +129,30 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     logger.log(Level.CONFIG, "start paths: {0}", startPaths);
     initDfc(config);
     dmSessionManager = getDfcSessionManager(config);
-    validatePaths();
+    validateStartPaths();
     if (validatedStartPaths.isEmpty()) {
       throw new IllegalStateException(
           "Failed to validate documentum.src paths.");
     }
   }
 
-  /** Get all doc ids from Documentum repository. 
-   * @throws InterruptedException if pusher is interrupted in sending Doc Ids
-   */
-  @Override
-  public void getDocIds(DocIdPusher pusher) throws InterruptedException {
-    logger.entering("DocumentumAdaptor", "getDocIds");
-    try {
-      validatePaths();
-    } catch (DfException e) {
-      logger.log(Level.WARNING, "Error validating start paths");
+  private static void validateConfig(Config config) {
+    if (Strings.isNullOrEmpty(config.getValue("documentum.username"))) {
+      throw new InvalidConfigurationException(
+          "documentum.username is required");
     }
-    ArrayList<DocId> docIds = new ArrayList<DocId>();
-    for (String startPath : validatedStartPaths) {
-      docIds.add(docIdFromPath(startPath));
+    if (Strings.isNullOrEmpty(config.getValue("documentum.password"))) {
+      throw new InvalidConfigurationException(
+          "documentum.password is required");
     }
-    logger.log(Level.FINER, "DocumentumAdaptor DocIds: {0}", docIds);
-    pusher.pushDocIds(docIds);
-    logger.exiting("DocumentumAdaptor", "getDocIds");
-  }
-
-  @VisibleForTesting
-  List<String> getStartPaths() {
-    return Collections.unmodifiableList(startPaths);
+    if (Strings.isNullOrEmpty(config.getValue("documentum.docbaseName"))) {
+      throw new InvalidConfigurationException(
+          "documentum.docbaseName is required");
+    }
+    if (Strings.isNullOrEmpty(config.getValue("documentum.src"))) {
+      throw new InvalidConfigurationException(
+          "documentum.src is required");
+    }
   }
 
   @VisibleForTesting
@@ -169,6 +163,67 @@ public class DocumentumAdaptor extends AbstractAdaptor {
       return ImmutableList.copyOf(Splitter.on(Pattern.compile(separatorRegex))
           .trimResults().omitEmptyStrings().split(paths));
     }
+  }
+
+  /**
+   * Validate start paths and add the valid ones to validatedStartPaths list.
+   * 
+   * @throws DfException if the session can't be established to the repository.
+   */
+  private void validateStartPaths() throws DfException {
+    IDfSession dmSession = dmSessionManager.getSession(docbase);
+    List<String> validStartPaths = new ArrayList<String>(startPaths.size());
+    for (String startPath : startPaths) {
+      String documentumFolderPath = normalizePath(startPath);
+      logger.log(Level.INFO, "Validating path {0}", documentumFolderPath);
+      IDfSysObject obj = null;
+      try {
+        obj = (IDfSysObject) dmSession.getObjectByPath(documentumFolderPath);
+      } catch (DfException e) {
+        logger.log(Level.WARNING, "Error validating start path {0}",
+            e.getMessage());
+      }
+      if (obj == null) {
+        logger.log(Level.WARNING, "Invalid start path {0}",
+            documentumFolderPath);
+      } else {
+        logger.log(Level.CONFIG, "Valid start path {0} id:{1}", new Object[] {
+            documentumFolderPath, obj.getObjectId().toString()});
+        validStartPaths.add(documentumFolderPath);
+      }
+    }
+    validatedStartPaths.addAllAbsent(validStartPaths);
+    dmSessionManager.release(dmSession);
+  }
+
+  @VisibleForTesting
+  List<String> getStartPaths() {
+    return Collections.unmodifiableList(startPaths);
+  }
+
+  @VisibleForTesting
+  List<String> getValidatedStartPaths() {
+    return Collections.unmodifiableList(validatedStartPaths);
+  }
+
+  /** Get all doc ids from Documentum repository. 
+   * @throws InterruptedException if pusher is interrupted in sending Doc Ids
+   */
+  @Override
+  public void getDocIds(DocIdPusher pusher) throws InterruptedException {
+    logger.entering("DocumentumAdaptor", "getDocIds");
+    try {
+      validateStartPaths();
+    } catch (DfException e) {
+      logger.log(Level.WARNING, "Error validating start paths");
+    }
+    ArrayList<DocId> docIds = new ArrayList<DocId>();
+    for (String startPath : validatedStartPaths) {
+      docIds.add(docIdFromPath(startPath));
+    }
+    logger.log(Level.FINER, "DocumentumAdaptor DocIds: {0}", docIds);
+    pusher.pushDocIds(docIds);
+    logger.exiting("DocumentumAdaptor", "getDocIds");
   }
 
   /** Gives the bytes of a document referenced with id. 
@@ -224,6 +279,21 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     }
   }
 
+  /**
+   * Returns {@code true} if the supplied {@code path} is under one of the
+   * validated {@code startPaths}, {@code false} otherwise.
+   *
+   * @param path a String representing a possible path to a document
+   */
+  private boolean isUnderStartPath(String path, List<String> startPaths) {
+    for (String startPath : startPaths) {
+      if (startPath.equals(path) || path.startsWith(startPath + "/")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** Copies the Documentum document content into the response. */
   private void getDocumentContent(Response resp, IDfSysObject dmSysbObj)
       throws DfException, IOException {
@@ -264,23 +334,12 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     }
   }
 
-  private static void validateConfig(Config config) {
-    if (Strings.isNullOrEmpty(config.getValue("documentum.username"))) {
-      throw new InvalidConfigurationException(
-          "documentum.username is required");
-    }
-    if (Strings.isNullOrEmpty(config.getValue("documentum.password"))) {
-      throw new InvalidConfigurationException(
-          "documentum.password is required");
-    }
-    if (Strings.isNullOrEmpty(config.getValue("documentum.docbaseName"))) {
-      throw new InvalidConfigurationException(
-          "documentum.docbaseName is required");
-    }
-    if (Strings.isNullOrEmpty(config.getValue("documentum.src"))) {
-      throw new InvalidConfigurationException(
-          "documentum.src is required");
-    }
+  private HtmlResponseWriter createHtmlResponseWriter(Response response,
+      DocIdEncoder docIdEncoder) throws IOException {
+    response.setContentType("text/html; charset=" + CHARSET.name());
+    Writer writer = new OutputStreamWriter(response.getOutputStream(), CHARSET);
+    // TODO(ejona): Get locale from request.
+    return new HtmlResponseWriter(writer, docIdEncoder, Locale.ENGLISH);
   }
 
   /**
@@ -311,57 +370,6 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     dmSessionManager.release(dmSession);
   }
 
-  @VisibleForTesting
-  List<String> getValidatedStartPaths() {
-    return validatedStartPaths;
-  }
-
-  /**
-   * Validate start paths and add the valid ones to validatedStartPaths list.
-   * 
-   * @throws DfException if the session can't be established to the repository.
-   */
-  private void validatePaths() throws DfException {
-    IDfSession dmSession = dmSessionManager.getSession(docbase);
-    List<String> validStartPaths = new ArrayList<String>(startPaths.size());
-    for (String startPath : startPaths) {
-      String documentumFolderPath = normalizePath(startPath);
-      logger.log(Level.INFO, "Validating path {0}", documentumFolderPath);
-      IDfSysObject obj = null;
-      try {
-        obj = (IDfSysObject) dmSession.getObjectByPath(documentumFolderPath);
-      } catch (DfException e) {
-        logger.log(Level.WARNING, "Error validating start path {0}",
-            e.getMessage());
-      }
-      if (obj == null) {
-        logger.log(Level.WARNING, "Invalid start path {0}",
-            documentumFolderPath);
-      } else {
-        logger.log(Level.CONFIG, "Valid start path {0} id:{1}", new Object[] {
-            documentumFolderPath, obj.getObjectId().toString()});
-        validStartPaths.add(documentumFolderPath);
-      }
-    }
-    validatedStartPaths.addAllAbsent(validStartPaths);
-    dmSessionManager.release(dmSession);
-  }
-
-  /**
-   * Returns {@code true} if the supplied {@code path} is under one of the
-   * validated {@code startPaths}, {@code false} otherwise.
-   *
-   * @param path a String representing a possible path to a document
-   */
-  private boolean isUnderStartPath(String path, List<String> startPaths) {
-    for (String startPath : startPaths) {
-      if (startPath.equals(path) || path.startsWith(startPath + "/")) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   /**
    * Gets DFC Session manager.
    * 
@@ -386,13 +394,5 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     dmSessionManager.setIdentity(docbaseName, dmLoginInfo);
 
     return dmSessionManager;
-  }
-
-  private HtmlResponseWriter createHtmlResponseWriter(Response response,
-      DocIdEncoder docIdEncoder) throws IOException {
-    response.setContentType("text/html; charset=" + CHARSET.name());
-    Writer writer = new OutputStreamWriter(response.getOutputStream(), CHARSET);
-    // TODO(ejona): Get locale from request.
-    return new HtmlResponseWriter(writer, docIdEncoder, Locale.ENGLISH);
   }
 }
