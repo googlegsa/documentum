@@ -18,6 +18,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Splitter;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.enterprise.adaptor.AbstractAdaptor;
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
@@ -41,19 +42,21 @@ import com.documentum.fc.client.IDfType;
 import com.documentum.fc.client.IDfVirtualDocument;
 import com.documentum.fc.client.IDfVirtualDocumentNode;
 import com.documentum.fc.common.DfException;
+import com.documentum.fc.common.IDfAttr;
 import com.documentum.fc.common.IDfId;
 import com.documentum.fc.common.IDfLoginInfo;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -73,6 +76,9 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   private List<String> startPaths;
   private CopyOnWriteArrayList<String> validatedStartPaths =
       new CopyOnWriteArrayList<String>();
+
+  // The object attributes that should not be supplied as metadata.
+  private Set<String> excludedAttributes;
 
   private DocIdEncoder docIdEncoder;
   private IDfSessionManager dmSessionManager;
@@ -115,6 +121,26 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     config.addKey("documentum.docbaseName", null);
     config.addKey("documentum.src", null);
     config.addKey("documentum.separatorRegex", ",");
+    config.addKey("documentum.excludedAttributes", "a_application_type, "
+        + "a_archive, a_category, a_compound_architecture, a_controlling_app, "
+        + "a_effective_date, a_effective_flag, a_effective_label, "
+        + "a_expiration_date, a_extended_properties, a_full_text, a_is_hidden, "
+        + "a_is_signed, a_is_template, a_last_review_date, a_link_resolved, "
+        + "a_publish_formats, a_retention_date, a_special_app, a_status, "
+        + "a_storage_type, acl_domain, acl_name, group_name, group_permit, "
+        + "i_ancestor_id, i_antecedent_id, i_branch_cnt, i_cabinet_id, "
+        + "i_chronicle_id, i_contents_id, i_direct_dsc, i_folder_id, "
+        + "i_has_folder, i_is_deleted, i_is_reference, i_is_replica, "
+        + "i_latest_flag, i_partition, i_reference_cnt, i_retain_until, "
+        + "i_retainer_id, i_vstamp, language_code, log_entry, owner_permit, "
+        + "r_access_date, r_alias_set_id, r_aspect_name, r_assembled_from_id, "
+        + "r_component_label, r_composite_id, r_composite_label, "
+        + "r_current_state, r_folder_path, r_frozen_flag, r_frzn_assembly_cnt, "
+        + "r_full_content_size, r_has_events, r_has_frzn_assembly, "
+        + "r_immutable_flag, r_is_public, r_is_virtual_doc, r_link_cnt, "
+        + "r_link_high_cnt, r_lock_date, r_lock_machine, r_lock_owner, "
+        + "r_modifier, r_order_no, r_page_cnt, r_policy_id, r_resume_state, "
+        + "r_version_label, resolution_label, world_permit");
   }
 
   @Override
@@ -129,6 +155,11 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     logger.log(Level.CONFIG, "documentum.separatorRegex: {0}", separatorRegex);
     startPaths = parseStartPaths(src, separatorRegex);
     logger.log(Level.CONFIG, "start paths: {0}", startPaths);
+    String excludedAttrs = config.getValue("documentum.excludedAttributes");
+    excludedAttributes = ImmutableSet.copyOf(Splitter.on(",")
+        .trimResults().omitEmptyStrings().split(excludedAttrs));
+    logger.log(Level.CONFIG, "documentum.excludedAttributes: {0}",
+        excludedAttrs);
     initDfc(config);
     dmSessionManager = getDfcSessionManager(config);
     validateStartPaths();
@@ -236,13 +267,14 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     // TODO: (sveldurthi) validate the requested doc id is in start paths,
     //       if not send a 404.
     getDocContentHelper(req, resp, dmSessionManager, docIdEncoder,
-                        validatedStartPaths);
+        validatedStartPaths, excludedAttributes);
   }
 
   @VisibleForTesting
   void getDocContentHelper(Request req, Response resp,
       IDfSessionManager dmSessionManager, DocIdEncoder docIdEncoder,
-      List<String> validatedStartPaths) throws IOException {
+      List<String> validatedStartPaths, Set<String> excludedAttributes)
+      throws IOException {
     DocId id = req.getDocId();
     logger.log(Level.FINER, "Get content for id: {0}", id);
 
@@ -269,9 +301,11 @@ public class DocumentumAdaptor extends AbstractAdaptor {
           new Object[] {dmObjId, type.getName()});
 
       if (type.isTypeOf("dm_document")) {
-        getDocumentContent(resp, (IDfSysObject) dmPersObj, id, docIdEncoder);
+        getDocumentContent(resp, (IDfSysObject) dmPersObj, id, docIdEncoder,
+            excludedAttributes);
       } else if (type.isTypeOf("dm_folder")) {
-        getFolderContent(resp, (IDfFolder) dmPersObj, id, docIdEncoder);
+        getFolderContent(resp, (IDfFolder) dmPersObj, id, docIdEncoder,
+            excludedAttributes);
       } else {
         logger.log(Level.WARNING, "Unsupported type: {0}", type);
         resp.respondNotFound();
@@ -298,7 +332,11 @@ public class DocumentumAdaptor extends AbstractAdaptor {
 
   /** Copies the Documentum document content into the response. */
   private void getDocumentContent(Response resp, IDfSysObject dmSysbObj,
-      DocId id, DocIdEncoder docIdEncoder) throws DfException, IOException {
+      DocId id, DocIdEncoder docIdEncoder, Set<String> excludedAttributes)
+      throws DfException, IOException {
+    // Include document attributes as metadata.
+    getMetadata(resp, dmSysbObj, id, excludedAttributes);
+
     // If it is a virtual document, include links to the child documents.
     if (dmSysbObj.isVirtualDocument()) {
       getVdocChildLinks(resp, dmSysbObj, id, docIdEncoder);
@@ -311,6 +349,40 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     try (InputStream inStream = dmSysbObj.getContent()) {
       IOHelper.copyStream(inStream, resp.getOutputStream());
     }
+  }
+
+  /** Supplies the document attributes as metadata in the response. */
+  private void getMetadata(Response resp, IDfSysObject dmSysbObj, DocId id,
+      Set<String> excludedAttributes) throws DfException, IOException {
+    Set<String> attributeNames = getAttributeNames(dmSysbObj);
+    for (String name : attributeNames) {
+      if (!excludedAttributes.contains(name)) {
+        int count = dmSysbObj.getValueCount(name);
+        for (int i = 0; i < count; i++) {
+          String value = dmSysbObj.getRepeatingString(name, i);
+          if (value != null) {
+            logger.log(Level.FINEST, "Attribute: {0} = {1}",
+                new Object[] { name, value });
+            resp.addMetadata(name, value);
+          }
+        }
+      }
+    }
+  }
+
+  /** Returns the names of all the attributes on this object. */
+  // TODO(bmj): Cache this set, keyed of the objectType, filtered of
+  // excluded attrs. The set of metadata is the same for all items
+  // of a specific type.
+  private Set<String> getAttributeNames(IDfSysObject sysObject)
+      throws DfException {
+    @SuppressWarnings("unchecked")
+    Enumeration<IDfAttr> e = sysObject.enumAttrs();
+    ImmutableSet.Builder<String> builder = ImmutableSet.builder();
+    while (e.hasMoreElements()) {
+      builder.add(e.nextElement().getName());
+    }
+    return builder.build();
   }
 
   /** Supplies VDoc children as external link metadata in the response. */
@@ -332,7 +404,11 @@ public class DocumentumAdaptor extends AbstractAdaptor {
 
   /** Returns the Folder's contents as links in a generated HTML document. */
   private void getFolderContent(Response resp, IDfFolder dmFolder, DocId id,
-      DocIdEncoder docIdEncoder) throws DfException, IOException {
+      DocIdEncoder docIdEncoder, Set<String> excludedAttributes) 
+      throws DfException, IOException {
+    // Include folder attributes as metadata.
+    getMetadata(resp, dmFolder, id, excludedAttributes);
+
     logger.log(Level.FINER, "Listing contents of folder: {0} ",
         dmFolder.getObjectName());
     IDfCollection dmCollection =

@@ -14,11 +14,14 @@
 
 package com.google.enterprise.adaptor.documentum;
 
-import static org.junit.Assert.*;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.junit.Assert.*;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Multimap;
+import com.google.common.collect.Multimaps;
+import com.google.common.collect.TreeMultimap;
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
@@ -36,6 +39,7 @@ import com.documentum.fc.client.IDfType;
 import com.documentum.fc.client.IDfVirtualDocument;
 import com.documentum.fc.client.IDfVirtualDocumentNode;
 import com.documentum.fc.common.DfException;
+import com.documentum.fc.common.IDfAttr;
 import com.documentum.fc.common.IDfId;
 import com.documentum.fc.common.IDfLoginInfo;
 
@@ -49,12 +53,16 @@ import java.io.OutputStream;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.Vector;
+
+/** Unit tests for DocumentAdaptor class. */
 
 public class DocumentumAdaptorTest {
 
@@ -76,6 +84,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.docbaseName", "testdocbase");
     config.addKey("documentum.src", "/Folder1/path1");
     config.addKey("documentum.separatorRegex", ",");
+    config.addKey("documentum.excludedAttributes", "foo, bar");
 
     adaptor.init(context);
 
@@ -114,6 +123,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.src", "/Folder1/path1, /Folder2/path2,"
         + "/Folder3/path3");
     config.addKey("documentum.separatorRegex", ",");
+    config.addKey("documentum.excludedAttributes", "foo, bar");
 
     adaptor.init(context);
 
@@ -430,6 +440,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.password", "testpwd");
     config.addKey("documentum.docbaseName", "testdocbase");
     config.addKey("documentum.separatorRegex", ",");
+    config.addKey("documentum.excludedAttributes", "foo, bar");
 
     String startPaths = paths[0];
     for (int i = 1; i < paths.length; i++) {
@@ -610,6 +621,10 @@ public class DocumentumAdaptorTest {
       public boolean isVirtualDocument() {
         return false;
       }
+
+      public Enumeration<IDfAttr> enumAttrs() {
+        return new Vector<IDfAttr>().elements();  // No attrs.
+      }
     }
 
     public IDfType getProxyType() {
@@ -684,11 +699,205 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"));
+        ImmutableList.of("/Folder1"), null);
 
     assertEquals(objectContentType, proxyCls.respContentType);
     assertEquals(objectContent,
         proxyCls.respContentBaos.toString(UTF_8.name()));
+  }
+
+  /* Mock proxy classes for testing file metadata */
+  private class MetadataTestProxies {
+    Multimap<String, String> attributes;
+    Multimap<String, String> respMetadata = TreeMultimap.create();
+
+    public void setAttributes(Multimap<String, String> attributes) {
+      this.attributes = attributes;
+    }
+
+    public IDfClientX getProxyClientX() {
+      return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
+    }
+
+    private class ClientXMock {
+    }
+
+    public IDfSessionManager getProxySessionManager() {
+      return Proxies.newProxyInstance(IDfSessionManager.class,
+          new SessionManagerMock());
+    }
+
+    private class SessionManagerMock {
+      public IDfSession getSession(String docbaseName) {
+        return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
+      }
+    }
+
+    private class SessionMock {
+      public IDfSysObject getObjectByPath(String path) {
+        return Proxies.newProxyInstance(IDfSysObject.class,
+            new SysObjectMock());
+      }
+    }
+
+    private class SysObjectMock {
+      public IDfId getObjectId() {
+        return Proxies.newProxyInstance(IDfId.class, new IdMock());
+      }
+
+      public InputStream getContent() {
+        return new ByteArrayInputStream("Hello World".getBytes(UTF_8));
+      }
+
+      public IDfType getType() {
+        return Proxies.newProxyInstance(IDfType.class, new TypeMock());
+      }
+
+      public String getContentType() {
+        return "text/plain";
+      }
+
+      public boolean isVirtualDocument() {
+        return false;
+      }
+
+      public Enumeration<IDfAttr> enumAttrs() {
+        Vector<IDfAttr> v = new Vector<IDfAttr>();
+        for (String name : attributes.keySet()) {
+          v.add(Proxies.newProxyInstance(IDfAttr.class, new AttrMock(name)));
+        }
+        return v.elements();
+      }
+
+      public int getValueCount(String name) {
+        return attributes.get(name).size();
+      }
+
+      public String getRepeatingString(String name, int index) {
+        return new ArrayList<String>(attributes.get(name)).get(index);
+      }
+    }
+
+    private class TypeMock {
+      public boolean isTypeOf(String type) {
+        return type.equals("dm_document");
+      }
+
+      public String getName() {
+        return "dm_document";
+      }
+    }
+
+    private class IdMock {
+    }
+
+    private class AttrMock {
+      private final String name;
+
+      public AttrMock(String name) {
+        this.name = name;
+      }
+
+      public String getName() {
+        return name;
+      }
+    }
+
+    public Request getProxyRequest(DocId docId) {
+      return Proxies.newProxyInstance(Request.class, new RequestMock(docId));
+    }
+
+    private class RequestMock {
+      DocId docId;
+
+      public RequestMock(DocId docId) {
+        this.docId = docId;
+      }
+
+      public DocId getDocId() {
+        return docId;
+      }
+    }
+
+    public Response getProxyResponse() {
+      return Proxies.newProxyInstance(Response.class, new ResponseMock());
+    }
+
+    private class ResponseMock {
+      public void setContentType(String contentType) {
+      }
+
+      public OutputStream getOutputStream() {
+        return new ByteArrayOutputStream();
+      }
+
+      public void addMetadata(String name, String value) {
+        respMetadata.put(name, value);
+      }
+    }
+  }
+
+  @Test
+  public void testSingleValueMetadata() throws DfException, IOException {
+    TreeMultimap<String, String> attributes = TreeMultimap.create();
+    attributes.put("attr1", "value1");
+    attributes.put("attr2", "value2");
+    attributes.put("attr3", "value3");
+    testMetadata(attributes, attributes);
+  }
+
+  @Test
+  public void testMultiValueMetadata() throws DfException, IOException {
+    TreeMultimap<String, String> attributes = TreeMultimap.create();
+    attributes.put("attr1", "value1");
+    attributes.put("attr1", "value2");
+    attributes.put("attr1", "value3");
+    assertEquals(1, attributes.keySet().size());
+    assertEquals(3, attributes.get("attr1").size());
+    testMetadata(attributes, attributes);
+  }
+
+  @Test
+  public void testEmptyValueMetadata() throws DfException, IOException {
+    TreeMultimap<String, String> attributes = TreeMultimap.create();
+    attributes.put("attr1", "value1");
+    attributes.put("attr2", "value2");
+    attributes.put("attr2", "");
+    attributes.put("attr3", "");
+    testMetadata(attributes, attributes);
+  }
+
+  @Test
+  public void testExcludeAttrMetadata() throws DfException, IOException {
+    TreeMultimap<String, String> attributes = TreeMultimap.create();
+    attributes.put("attr1", "value1");
+    attributes.put("attr2", "value2");
+    attributes.put("attr3", "value3");
+    attributes.put("foo", "foo1");
+    attributes.put("bar", "bar1");
+    TreeMultimap<String, String> expected = TreeMultimap.create(attributes);
+    expected.removeAll("foo");  // In the excludedAttributes set.
+    expected.removeAll("bar");  // In the excludedAttributes set.
+    testMetadata(attributes, expected);
+  }
+
+  private void testMetadata(TreeMultimap<String, String> attrs,
+      TreeMultimap<String, String> expected) throws DfException, IOException {
+    MetadataTestProxies proxyCls = new MetadataTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+
+    proxyCls.setAttributes(Multimaps.unmodifiableMultimap(attrs));
+    String path = "/Folder1/path1/object1";
+    Request req = proxyCls.getProxyRequest(adaptor.docIdFromPath(path));
+    Response resp = proxyCls.getProxyResponse();
+    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
+
+    adaptor.getDocContentHelper(req, resp, sessionManager,
+        ProxyAdaptorContext.getInstance().getDocIdEncoder(),
+        ImmutableList.of("/Folder1"), ImmutableSet.of("foo", "bar"));
+
+    assertEquals(expected, proxyCls.respMetadata);
   }
 
   /* Mock proxy classes for testing virtual document content */
@@ -784,6 +993,10 @@ public class DocumentumAdaptorTest {
         return objContentType;
       }
 
+      public Enumeration<IDfAttr> enumAttrs() {
+        return new Vector<IDfAttr>().elements();  // No attrs.
+      }
+
       public boolean isVirtualDocument() {
         return true;
       }
@@ -839,9 +1052,9 @@ public class DocumentumAdaptorTest {
       }
 
       public String getString(String colName) {
-        if ("r_object_id".equals(colName))
+        if ("r_object_id".equals(colName)) {
           return id;
-        else if ("object_name".equals(colName)) {
+        } else if ("object_name".equals(colName)) {
           return name;
         } else {
           return null;
@@ -925,7 +1138,7 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"));
+        ImmutableList.of("/Folder1"), null);
 
     assertEquals(objectContentType, proxyCls.respContentType);
     assertEquals(objectContent,
@@ -957,7 +1170,7 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"));
+        ImmutableList.of("/Folder1"), null);
 
     assertEquals(objectContentType, proxyCls.respContentType);
     assertEquals(objectContent,
@@ -1043,6 +1256,10 @@ public class DocumentumAdaptorTest {
       public IDfType getType() {
         return getProxyType();
       }
+
+      public Enumeration<IDfAttr> enumAttrs() {
+        return new Vector<IDfAttr>().elements();  // No attrs.
+      }
     }
 
     public IDfCollection getProxyCollection(String colNames) {
@@ -1062,9 +1279,9 @@ public class DocumentumAdaptorTest {
       }
 
       public String getString(String colName) {
-        if ("r_object_id".equals(colName))
+        if ("r_object_id".equals(colName)) {
           return iterIds.next();
-        else if ("object_name".equals(colName)) {
+        } else if ("object_name".equals(colName)) {
           return iterNames.next();
         } else {
           return null;
@@ -1183,7 +1400,7 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, sessionManager, 
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder2"));
+        ImmutableList.of("/Folder2"), null);
 
     assertFalse(proxyCls.respNotFound);
     assertEquals("text/html; charset=UTF-8", proxyCls.respContentType);
@@ -1205,7 +1422,7 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder2"));
+        ImmutableList.of("/Folder2"), null);
 
     assertTrue(proxyCls.respNotFound);
   }
@@ -1229,7 +1446,7 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1")); // Folder2 not included.
+        ImmutableList.of("/Folder1"), null); // Folder2 not included.
 
     assertTrue(proxyCls.respNotFound);
   }
