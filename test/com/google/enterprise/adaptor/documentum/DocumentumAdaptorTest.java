@@ -216,7 +216,8 @@ public class DocumentumAdaptorTest {
         methodCallSequence.add(Proxies.getMethodName());
         IDfSession session = docbaseSessionMap.get(docbaseName);
         if (session == null) {
-          session = getProxySession();
+          session =
+              Proxies.newProxyInstance(IDfSession.class, new SessionMock());
           docbaseSessionMap.put(docbaseName, session);
         }
         return session;
@@ -234,10 +235,6 @@ public class DocumentumAdaptorTest {
       }
     }
 
-    public IDfSession getProxySession() {
-      return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
-    }
-
     private class SessionMock {
       public String getServerVersion() {
         methodCalls.add(Proxies.getMethodName());
@@ -247,16 +244,12 @@ public class DocumentumAdaptorTest {
       public IDfSysObject getObjectByPath(String path) {
         methodCalls.add(Proxies.getMethodName());
         if (folderPathIdsMap.containsKey(path)) {
-          return getProxySysObject(path);
+          return Proxies.newProxyInstance(IDfSysObject.class,
+              new SysObjectMock(path));
         } else {
           return null;
         }
       }
-    }
-
-    public IDfSysObject getProxySysObject(String objectPath) {
-      return Proxies.newProxyInstance(IDfSysObject.class,
-          new SysObjectMock(objectPath));
     }
 
     private class SysObjectMock {
@@ -268,12 +261,8 @@ public class DocumentumAdaptorTest {
 
       public IDfId getObjectId() {
         String id = folderPathIdsMap.get(objectPath);
-        return getProxyId(id);
+        return Proxies.newProxyInstance(IDfId.class, new IdMock(id));
       }
-    }
-
-    public IDfId getProxyId(String id) {
-      return Proxies.newProxyInstance(IDfId.class, new IdMock(id));
     }
 
     private class IdMock {
@@ -563,27 +552,19 @@ public class DocumentumAdaptorTest {
 
     private class SessionManagerMock {
       public IDfSession getSession(String docbaseName) {
-        return getProxySession();
+        return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
       }
-    }
-
-    public IDfSession getProxySession() {
-      return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
     }
 
     private class SessionMock {
       public IDfSysObject getObjectByPath(String path) {
         if (objectPathIdsMap.containsKey(path)) {
-          return getProxySysObject(path);
+          return Proxies.newProxyInstance(IDfSysObject.class,
+              new SysObjectMock(path));
         } else {
           return null;
         }
       }
-    }
-
-    public IDfSysObject getProxySysObject(String objectPath) {
-      return Proxies.newProxyInstance(IDfSysObject.class,
-          new SysObjectMock(objectPath));
     }
 
     private class SysObjectMock {
@@ -594,24 +575,19 @@ public class DocumentumAdaptorTest {
       }
 
       public IDfId getObjectId() {
-        String objId = objectPathIdsMap.get(objectPath);
-        return getProxyId(objId);
+        return Proxies.newProxyInstance(IDfId.class, new IdMock());
       }
 
       public InputStream getContent() {
-        if (objectPathIdsMap.containsKey(objectPath)) {
-          if (objContent != null) {
-            return new ByteArrayInputStream(objContent.getBytes(UTF_8));
-          } else {
-            return null;
-          }
+        if (objectPathIdsMap.containsKey(objectPath) && (objContent != null)) {
+          return new ByteArrayInputStream(objContent.getBytes(UTF_8));
         } else {
           return null;
         }
       }
 
       public IDfType getType() {
-        return getProxyType();
+        return Proxies.newProxyInstance(IDfType.class, new TypeMock());
       }
 
       public String getContentType() {
@@ -627,10 +603,6 @@ public class DocumentumAdaptorTest {
       }
     }
 
-    public IDfType getProxyType() {
-      return Proxies.newProxyInstance(IDfType.class, new TypeMock());
-    }
-
     private class TypeMock {
       public boolean isTypeOf(String type) {
         return type.equals("dm_document");
@@ -641,13 +613,7 @@ public class DocumentumAdaptorTest {
       }
     }
 
-    public IDfId getProxyId(String id) {
-      return Proxies.newProxyInstance(IDfId.class, new IdMock(id));
-    }
-
     private class IdMock {
-      public IdMock(String objectId) {
-      }
     }
 
     public Request getProxyRequest(DocId docId) {
@@ -938,27 +904,19 @@ public class DocumentumAdaptorTest {
 
     private class SessionManagerMock {
       public IDfSession getSession(String docbaseName) {
-        return getProxySession();
+        return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
       }
-    }
-
-    public IDfSession getProxySession() {
-      return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
     }
 
     private class SessionMock {
       public IDfSysObject getObjectByPath(String path) {
         if (objectPathIdsMap.containsKey(path)) {
-          return getProxySysObject(path);
+          return Proxies.newProxyInstance(IDfSysObject.class,
+              new SysObjectMock(path));
         } else {
           return null;
         }
       }
-    }
-
-    public IDfSysObject getProxySysObject(String objectPath) {
-      return Proxies.newProxyInstance(IDfSysObject.class,
-          new SysObjectMock(objectPath));
     }
 
     private class SysObjectMock {
@@ -969,24 +927,19 @@ public class DocumentumAdaptorTest {
       }
 
       public IDfId getObjectId() {
-        String objId = objectPathIdsMap.get(objectPath);
-        return getProxyId(objId);
+        return Proxies.newProxyInstance(IDfId.class, new IdMock());
       }
 
       public InputStream getContent() {
-        if (objectPathIdsMap.containsKey(objectPath)) {
-          if (objContent != null) {
-            return new ByteArrayInputStream(objContent.getBytes(UTF_8));
-          } else {
-            return null;
-          }
+        if (objectPathIdsMap.containsKey(objectPath) && (objContent != null)) {
+          return new ByteArrayInputStream(objContent.getBytes(UTF_8));
         } else {
           return null;
         }
       }
 
       public IDfType getType() {
-        return getProxyType();
+        return Proxies.newProxyInstance(IDfType.class, new TypeMock());
       }
 
       public String getContentType() {
@@ -1062,10 +1015,6 @@ public class DocumentumAdaptorTest {
       }
     }
 
-    public IDfType getProxyType() {
-      return Proxies.newProxyInstance(IDfType.class, new TypeMock());
-    }
-
     private class TypeMock {
       public boolean isTypeOf(String type) {
         return type.equals("dm_document");
@@ -1076,13 +1025,7 @@ public class DocumentumAdaptorTest {
       }
     }
 
-    public IDfId getProxyId(String id) {
-      return Proxies.newProxyInstance(IDfId.class, new IdMock(id));
-    }
-
     private class IdMock {
-      public IdMock(String objectId) {
-      }
     }
 
     public Request getProxyRequest(DocId docId) {
