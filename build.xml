@@ -18,6 +18,7 @@
   <property name="resource.dir" location="resources"/>
   <property name="lib.dir" location="lib"/>
   <property name="junit.jar" location="${lib.dir}/junit-4.8.2.jar"/>
+  <property name="h2.jar" location="${lib.dir}/h2-1.3.176.jar"/>
   <property name="adaptor.class"
     value="com.google.enterprise.adaptor.documentum.DocumentumAdaptor"/>
   <property name="adaptor.args" value=""/>
@@ -130,6 +131,7 @@ lib/plexi submodule or add the the command line argument
       <classpath refid="adaptor.build.classpath"/>
       <classpath location="${build-src.dir}"/>
       <classpath location="${junit.jar}"/>
+      <classpath location="${h2.jar}"/>
     </javac>
   </target>
 
@@ -249,6 +251,7 @@ lib/plexi submodule or add the the command line argument
       <classpath refid="adaptor.run.classpath"/>
       <classpath refid="cobertura.classpath"/>
       <classpath location="${junit.jar}"/>
+      <classpath location="${h2.jar}"/>
       <classpath location="${build-instrument.dir}"/>
       <classpath location="${build-src.dir}"/>
       <classpath location="${build-test.dir}"/>

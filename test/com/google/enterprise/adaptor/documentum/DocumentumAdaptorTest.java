@@ -43,6 +43,8 @@ import com.documentum.fc.common.IDfAttr;
 import com.documentum.fc.common.IDfId;
 import com.documentum.fc.common.IDfLoginInfo;
 
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 
 import java.io.ByteArrayInputStream;
@@ -65,6 +67,25 @@ import java.util.Vector;
 /** Unit tests for DocumentAdaptor class. */
 
 public class DocumentumAdaptorTest {
+
+  private static final String CREATE_TABLE_GROUP = "create table dm_group "
+      + "(group_name varchar, i_all_users_names varchar)";
+
+  private static final String CREATE_TABLE_USER = "create table dm_user "
+      + "(user_name varchar primary key, user_login_name varchar, "
+      + "user_source varchar, user_ldap_dn varchar, r_is_group boolean)";
+
+  private JdbcFixture jdbcFixture = new JdbcFixture();
+
+  @Before
+  public void setUp() throws Exception {
+    jdbcFixture.executeUpdate(CREATE_TABLE_GROUP, CREATE_TABLE_USER);
+  }
+
+  @After
+  public void tearDown() throws Exception {
+    jdbcFixture.tearDown();
+  }
 
   /**
    * Initialize adaptor using proxy clientX and proxy AdptorContext.
