@@ -17,25 +17,34 @@ package com.google.enterprise.adaptor.documentum;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.*;
 
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Multimaps;
 import com.google.common.collect.TreeMultimap;
+import com.google.enterprise.adaptor.Acl;
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
+import com.google.enterprise.adaptor.GroupPrincipal;
 import com.google.enterprise.adaptor.Request;
 import com.google.enterprise.adaptor.Response;
+import com.google.enterprise.adaptor.UserPrincipal;
 
 import com.documentum.com.IDfClientX;
+import com.documentum.fc.client.IDfACL;
 import com.documentum.fc.client.IDfClient;
 import com.documentum.fc.client.IDfCollection;
 import com.documentum.fc.client.IDfFolder;
+import com.documentum.fc.client.IDfGroup;
+import com.documentum.fc.client.IDfPermitType;
+import com.documentum.fc.client.IDfQuery;
 import com.documentum.fc.client.IDfSession;
 import com.documentum.fc.client.IDfSessionManager;
 import com.documentum.fc.client.IDfSysObject;
 import com.documentum.fc.client.IDfType;
+import com.documentum.fc.client.IDfUser;
 import com.documentum.fc.client.IDfVirtualDocument;
 import com.documentum.fc.client.IDfVirtualDocumentNode;
 import com.documentum.fc.common.DfException;
@@ -1413,5 +1422,480 @@ public class DocumentumAdaptorTest {
         ImmutableList.of("/Folder1"), null); // Folder2 not included.
 
     assertTrue(proxyCls.respNotFound);
+  }
+
+  /* Mock proxy classes for testing ACLs */
+  private class AclTestProxies {
+    IDfSessionManager sessionManager = Proxies.newProxyInstance(
+        IDfSessionManager.class, new SessionManagerMock());
+
+    List<AccessorInfo> accessorList1 = new ArrayList<AccessorInfo>() {
+      {
+        add(new AccessorInfo("User4", IDfPermitType.ACCESS_PERMIT,
+            IDfACL.DF_PERMIT_WRITE, false));
+        add(new AccessorInfo("User5", IDfPermitType.ACCESS_PERMIT,
+            IDfACL.DF_PERMIT_READ, false));
+        add(new AccessorInfo("User1", IDfPermitType.ACCESS_RESTRICTION,
+            IDfACL.DF_PERMIT_DELETE, false));
+        add(new AccessorInfo("User2", IDfPermitType.ACCESS_RESTRICTION,
+            IDfACL.DF_PERMIT_BROWSE, false));
+        add(new AccessorInfo("User3", IDfPermitType.ACCESS_RESTRICTION,
+            IDfACL.DF_PERMIT_WRITE, false));
+      }
+    };
+
+    List<AccessorInfo> accessorList2 = new ArrayList<AccessorInfo>() {
+      {
+        add(new AccessorInfo("User1", IDfPermitType.ACCESS_PERMIT,
+            IDfACL.DF_PERMIT_WRITE, false));
+        add(new AccessorInfo("User2", IDfPermitType.ACCESS_PERMIT,
+            IDfACL.DF_PERMIT_READ, false));
+        add(new AccessorInfo("Group1", IDfPermitType.ACCESS_PERMIT,
+            IDfACL.DF_PERMIT_READ, true));
+        add(new AccessorInfo("Group2", IDfPermitType.ACCESS_PERMIT,
+            IDfACL.DF_PERMIT_WRITE, true));
+        add(new AccessorInfo("Group3", IDfPermitType.ACCESS_RESTRICTION,
+            IDfACL.DF_PERMIT_READ, true));
+      }
+    };
+
+    List<AccessorInfo> accessorList3 = new ArrayList<AccessorInfo>() {
+      {
+        add(new AccessorInfo("User1", IDfPermitType.ACCESS_RESTRICTION,
+            IDfACL.DF_PERMIT_READ, false));
+        add(new AccessorInfo("User3", IDfPermitType.ACCESS_RESTRICTION,
+            IDfACL.DF_PERMIT_WRITE, false));
+        add(new AccessorInfo("Group1", IDfPermitType.ACCESS_PERMIT,
+            IDfACL.DF_PERMIT_BROWSE, true));
+        add(new AccessorInfo("dm_world", IDfPermitType.ACCESS_PERMIT,
+            IDfACL.DF_PERMIT_READ, true));
+      }
+    };
+
+    Map<String, List<AccessorInfo>> aclInfo =
+        new HashMap<String, List<AccessorInfo>>() {
+          {
+            put("4501081f80000100", accessorList1);
+            put("4501081f80000101", accessorList2);
+            put("4501081f80000102", accessorList3);
+          }
+        };
+
+    public IDfClientX getProxyClientX() {
+      return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
+    }
+
+    private class ClientXMock {
+      public IDfQuery getQuery() {
+        return Proxies.newProxyInstance(IDfQuery.class, new QueryMock());
+      }
+    }
+
+    private class QueryMock {
+      private String query;
+
+      public void setDQL(String query) {
+        this.query = query;
+      }
+
+      public IDfCollection execute(IDfSession session, int arg1) {
+        return Proxies.newProxyInstance(IDfCollection.class,
+            new CollectionMock("r_object_id"));
+      }
+    }
+
+    private class CollectionMock {
+      Iterator<String> iterIds;
+      Iterator<String> iterNames;
+
+      public CollectionMock(String colNames) {
+        iterIds = aclInfo.keySet().iterator();
+      }
+
+      public String getString(String colName) {
+        if ("r_object_id".equals(colName)) {
+          return iterIds.next();
+        } else if ("object_name".equals(colName)) {
+          return iterNames.next();
+        } else {
+          return null;
+        }
+      }
+
+      public boolean next() {
+        return iterIds.hasNext();
+      }
+
+      public int getState() {
+        return IDfCollection.DF_READY_STATE;
+      }
+
+      public void close() {
+      }
+    }
+
+    private class SessionManagerMock {
+      public IDfSession getSession(String docbaseName) {
+        return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
+      }
+
+      public void release(IDfSession session) {
+      }
+    }
+
+    private class SessionMock {
+      public IDfACL getObject(IDfId id) {
+        return Proxies.newProxyInstance(IDfACL.class,
+            new ACLMock(id.toString()));
+      }
+
+      public Object getObjectByQualification(String query) {
+        if (Strings.isNullOrEmpty(query)) {
+          return null;
+        } else {
+          if (query.startsWith("dm_user where user_name = '")) {
+            String userName =
+                query.substring("dm_user where user_name = '".length(),
+                    query.length() - 1);
+            return Proxies.newProxyInstance(IDfUser.class,
+                new UserMock(userName));
+          } else if (query.startsWith("dm_group where group_name = '")) {
+            String groupName =
+                query.substring("dm_group where group_name = '".length(),
+                    query.length() - 1);
+            return Proxies.newProxyInstance(IDfGroup.class,
+                new GroupMock(groupName));
+          } else {
+            return null;
+          }
+        }
+      }
+    }
+
+    private class UserMock {
+      private String user;
+      private boolean isGroup;
+
+      public UserMock(String user) {
+        this.user = user;
+        // for an entry in dm_user table for groups
+        this.isGroup = user.startsWith("Group");
+      }
+
+      public String getUserLoginName() {
+        return user;
+      }
+
+      public String getUserSourceAsString() {
+        return "";
+      }
+
+      public String getUserDistinguishedLDAPName() {
+        return "";
+      }
+
+      public boolean isGroup() {
+        return isGroup;
+      }
+    }
+
+    private class GroupMock {
+      private String user;
+
+      public GroupMock(String group) {
+        this.user = group;
+      }
+
+      public String getUserLoginName() {
+        return user;
+      }
+
+      public String getGroupSource() {
+        return "";
+      }
+
+      public boolean isGroup() {
+        return true;
+      }
+    }
+
+    private class AccessorInfo {
+      String name;
+      int permitType;
+      int permit;
+      boolean isGroup;
+
+      AccessorInfo(String name, int permitType, int permit, boolean isGroup) {
+        this.name = name;
+        this.permitType = permitType;
+        this.permit = permit;
+        this.isGroup = isGroup;
+      }
+
+      String getName() {
+        return name;
+      }
+
+      int getPermitType() {
+        return permitType;
+      }
+
+      int getPermit() {
+        return permit;
+      }
+
+      boolean isGroup() {
+        return isGroup;
+      }
+    }
+
+    public class ACLMock {
+      private String id;
+
+      public ACLMock(String id) {
+        this.id = id;
+      }
+
+      public int getAccessorCount() {
+        List list = aclInfo.get(id);
+        return list.size();
+      }
+
+      public String getAccessorName(int n) {
+        List list = aclInfo.get(id);
+        return ((AccessorInfo) list.get(n)).getName();
+      }
+
+      public int getAccessorPermitType(int n) {
+        List list = aclInfo.get(id);
+        return ((AccessorInfo) list.get(n)).getPermitType();
+      }
+
+      public int getAccessorPermit(int n) {
+        List list = aclInfo.get(id);
+        return ((AccessorInfo) list.get(n)).getPermit();
+      }
+
+      public boolean isGroup(int n) {
+        List list = aclInfo.get(id);
+        return ((AccessorInfo) list.get(n)).isGroup();
+      }
+    }
+  }
+
+  private Config getAclTestAdaptorConfig(DocumentumAdaptor adaptor,
+      String domain) throws DfException {
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    Config config = context.getConfig();
+
+    config.addKey("documentum.username", "testuser");
+    config.addKey("documentum.password", "testpwd");
+    config.addKey("documentum.docbaseName", "testdocbase");
+    config.addKey("documentum.src", "/Folder1/path1");
+    config.addKey("documentum.separatorRegex", ",");
+    config.addKey("documentum.excludedAttributes", "foo, bar");
+    config.addKey("documentum.localNamespace", "localNS");
+    config.addKey("documentum.globalNamespace", "globalNS");
+    config.addKey("documentum.windowsDomain", domain);
+
+    return config;
+  }
+
+  // tests for ACLs
+  // TODO: (Srinivas) -  Add a unit test and perform manual test of
+  //                     user and group names with quotes in them.
+  @Test
+  public void testAcls() throws DfException, InterruptedException {
+    AclTestProxies proxyCls = new AclTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+
+    Config config = getAclTestAdaptorConfig(adaptor, "");
+    Map<DocId, Acl> namedResources =
+        adaptor.getAllAcls(
+            proxyCls.sessionManager,
+            config.getValue("documentum.localNamespace"),
+            config.getValue("documentum.globalNamespace"),
+            config.getValue("documentum.windowsDomain"));
+
+    assertEquals(3, namedResources.size());
+  }
+
+  @Test
+  public void testAllowAcls() throws DfException, InterruptedException {
+    AclTestProxies proxyCls = new AclTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+
+    Config config = getAclTestAdaptorConfig(adaptor, "");
+
+    Map<DocId, Acl> namedResources =
+        adaptor.getAllAcls(proxyCls.sessionManager,
+            config.getValue("documentum.localNamespace"),
+            config.getValue("documentum.globalNamespace"),
+            config.getValue("documentum.windowsDomain"));
+
+    Acl aclList = namedResources.get(new DocId("4501081f80000100"));
+
+    Set<UserPrincipal> allowUsers = aclList.getPermitUsers();
+    Set<GroupPrincipal> allowGroups = aclList.getPermitGroups();
+    Set<UserPrincipal> denyUsers = aclList.getDenyUsers();
+    Set<GroupPrincipal> denyGroups = aclList.getDenyGroups();
+
+    assertFalse(denyUsers.isEmpty());
+    assertTrue(denyGroups.isEmpty());
+
+    assertEquals(ImmutableSet.of(new UserPrincipal("User4", "globalNS"),
+        new UserPrincipal("User5", "globalNS")), allowUsers);
+    assertEquals(ImmutableSet.of(new UserPrincipal("User2", "globalNS")),
+        denyUsers);
+  }
+
+  @Test
+  public void testBrowseAcls() throws DfException, InterruptedException {
+    AclTestProxies proxyCls = new AclTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+
+    Config config = getAclTestAdaptorConfig(adaptor, "");
+    Map<DocId, Acl> namedResources =
+        adaptor.getAllAcls(proxyCls.sessionManager,
+            config.getValue("documentum.localNamespace"),
+            config.getValue("documentum.globalNamespace"),
+            config.getValue("documentum.windowsDomain"));
+
+    Acl aclList = namedResources.get(new DocId("4501081f80000100"));
+
+    Set<UserPrincipal> allowUsers = aclList.getPermitUsers();
+    Set<UserPrincipal> denyUsers = aclList.getDenyUsers();
+
+    UserPrincipal user2 = new UserPrincipal("User2");
+    assertFalse(allowUsers.contains(user2));
+
+    assertEquals(ImmutableSet.of(new UserPrincipal("User4", "globalNS"),
+        new UserPrincipal("User5", "globalNS")), allowUsers);
+    assertEquals(ImmutableSet.of(new UserPrincipal("User2", "globalNS")),
+        denyUsers);
+  }
+
+  @Test
+  public void testGroupAcls() throws DfException, InterruptedException {
+    AclTestProxies proxyCls = new AclTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+
+    Config config = getAclTestAdaptorConfig(adaptor, "");
+    Map<DocId, Acl> namedResources =
+        adaptor.getAllAcls(proxyCls.sessionManager,
+            config.getValue("documentum.localNamespace"),
+            config.getValue("documentum.globalNamespace"),
+            config.getValue("documentum.windowsDomain"));
+
+    Acl aclList = namedResources.get(new DocId("4501081f80000101"));
+
+    Set<GroupPrincipal> allowGroups = aclList.getPermitGroups();
+    Set<GroupPrincipal> denyGroups = aclList.getDenyGroups();
+
+    assertEquals(2, allowGroups.size());
+    assertEquals(1, denyGroups.size());
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
+        new GroupPrincipal("Group2", "localNS")), allowGroups);
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "localNS")),
+        denyGroups);
+  }
+
+  @Test
+  public void testGroupDmWorldAcl() throws DfException, InterruptedException {
+    AclTestProxies proxyCls = new AclTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+
+    Config config = getAclTestAdaptorConfig(adaptor, "");
+    Map<DocId, Acl> namedResources =
+        adaptor.getAllAcls(proxyCls.sessionManager,
+            config.getValue("documentum.localNamespace"),
+            config.getValue("documentum.globalNamespace"),
+            config.getValue("documentum.windowsDomain"));
+
+    Acl aclList = namedResources.get(new DocId("4501081f80000102"));
+
+    Set<GroupPrincipal> allowGroups = aclList.getPermitGroups();
+    Set<GroupPrincipal> denyGroups = aclList.getDenyGroups();
+
+    assertEquals(ImmutableSet.of(new GroupPrincipal("dm_world", "localNS")),
+        allowGroups);
+    assertEquals(ImmutableSet.of(), denyGroups);
+  }
+
+  @Test
+  public void testDomainForAclUser() throws Exception {
+    AclTestProxies proxyCls = new AclTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+
+    Config config = getAclTestAdaptorConfig(adaptor, "ajax");
+    Map<DocId, Acl> namedResources =
+        adaptor.getAllAcls(proxyCls.sessionManager,
+            config.getValue("documentum.localNamespace"),
+            config.getValue("documentum.globalNamespace"),
+            config.getValue("documentum.windowsDomain"));
+
+    Acl aclList = namedResources.get(new DocId("4501081f80000100"));
+
+    Set<UserPrincipal> allowUsers = aclList.getPermitUsers();
+    Set<UserPrincipal> denyUsers = aclList.getDenyUsers();
+
+    assertEquals(ImmutableSet.of(new UserPrincipal("ajax\\User4", "globalNS"),
+        new UserPrincipal("ajax\\User5", "globalNS")), allowUsers);
+    assertEquals(ImmutableSet.of(new UserPrincipal("ajax\\User2", "globalNS")),
+        denyUsers);
+  }
+
+  @Test
+  public void testDnsDomainForAclUser() throws Exception {
+    AclTestProxies proxyCls = new AclTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+
+    Config config = getAclTestAdaptorConfig(adaptor, "ajax.example.com");
+    Map<DocId, Acl> namedResources =
+        adaptor.getAllAcls(proxyCls.sessionManager,
+            config.getValue("documentum.localNamespace"),
+            config.getValue("documentum.globalNamespace"),
+            config.getValue("documentum.windowsDomain"));
+
+    Acl aclList = namedResources.get(new DocId("4501081f80000100"));
+
+    Set<UserPrincipal> allowUsers = aclList.getPermitUsers();
+    Set<UserPrincipal> denyUsers = aclList.getDenyUsers();
+
+    assertEquals(ImmutableSet.of(new UserPrincipal("ajax.example.com\\User4",
+        "globalNS"), new UserPrincipal("ajax.example.com\\User5", "globalNS")),
+        allowUsers);
+    assertEquals(ImmutableSet.of(new UserPrincipal("ajax.example.com\\User2",
+        "globalNS")), denyUsers);
+  }
+
+  @Test
+  public void testDomainForAclGroup() throws Exception {
+    AclTestProxies proxyCls = new AclTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+
+    Config config = getAclTestAdaptorConfig(adaptor, "ajax");
+    Map<DocId, Acl> namedResources =
+        adaptor.getAllAcls(proxyCls.sessionManager,
+            config.getValue("documentum.localNamespace"),
+            config.getValue("documentum.globalNamespace"),
+            config.getValue("documentum.windowsDomain"));
+    Acl aclList = namedResources.get(new DocId("4501081f80000101"));
+
+    Set<GroupPrincipal> allowGroups = aclList.getPermitGroups();
+    Set<GroupPrincipal> denyGroups = aclList.getDenyGroups();
+
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
+        new GroupPrincipal("Group2", "localNS")), allowGroups);
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "localNS")),
+        denyGroups);
   }
 }

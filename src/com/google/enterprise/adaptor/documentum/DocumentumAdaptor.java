@@ -20,6 +20,7 @@ import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.enterprise.adaptor.AbstractAdaptor;
+import com.google.enterprise.adaptor.Acl;
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
@@ -27,9 +28,9 @@ import com.google.enterprise.adaptor.DocIdEncoder;
 import com.google.enterprise.adaptor.DocIdPusher;
 import com.google.enterprise.adaptor.IOHelper;
 import com.google.enterprise.adaptor.InvalidConfigurationException;
+import com.google.enterprise.adaptor.Principal;
 import com.google.enterprise.adaptor.Request;
 import com.google.enterprise.adaptor.Response;
-
 import com.documentum.com.DfClientX;
 import com.documentum.com.IDfClientX;
 import com.documentum.fc.client.IDfCollection;
@@ -56,6 +57,7 @@ import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Level;
@@ -81,6 +83,7 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   private Set<String> excludedAttributes;
 
   private DocIdEncoder docIdEncoder;
+  private Config config;
   private IDfSessionManager dmSessionManager;
   private String docbase;
 
@@ -121,6 +124,10 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     config.addKey("documentum.docbaseName", null);
     config.addKey("documentum.src", null);
     config.addKey("documentum.separatorRegex", ",");
+    config.addKey("documentum.localNamespace", null);
+    //TODO: (Srinivas) Does local namespace need to be auto generated ?
+    config.addKey("documentum.globalNamespace", Principal.DEFAULT_NAMESPACE);
+    config.addKey("documentum.windowsDomain", "");
     config.addKey("documentum.excludedAttributes", "a_application_type, "
         + "a_archive, a_category, a_compound_architecture, a_controlling_app, "
         + "a_effective_date, a_effective_flag, a_effective_label, "
@@ -146,7 +153,7 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   @Override
   public void init(AdaptorContext context) throws DfException {
     docIdEncoder = context.getDocIdEncoder();
-    Config config = context.getConfig();
+    config = context.getConfig();
     validateConfig(config);
     docbase = config.getValue("documentum.docbaseName");
     String src = config.getValue("documentum.src");
@@ -185,6 +192,10 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     if (Strings.isNullOrEmpty(config.getValue("documentum.src"))) {
       throw new InvalidConfigurationException(
           "documentum.src is required");
+    }
+    if (Strings.isNullOrEmpty(config.getValue("documentum.localNamespace"))) {
+      throw new InvalidConfigurationException(
+          "documentum.localNamespace is required");
     }
   }
 
@@ -240,10 +251,12 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   }
 
   /** Get all doc ids from Documentum repository. 
-   * @throws InterruptedException if pusher is interrupted in sending Doc Ids
+   * @throws InterruptedException if pusher is interrupted in sending Doc Ids.
+   * @throws IOException if error in getting Acl information.
    */
   @Override
-  public void getDocIds(DocIdPusher pusher) throws InterruptedException {
+  public void getDocIds(DocIdPusher pusher) throws InterruptedException,
+      IOException {
     logger.entering("DocumentumAdaptor", "getDocIds");
     try {
       validateStartPaths();
@@ -256,7 +269,30 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     }
     logger.log(Level.FINER, "DocumentumAdaptor DocIds: {0}", docIds);
     pusher.pushDocIds(docIds);
+    try {
+      pusher.pushNamedResources(getAllAcls(dmSessionManager,
+          config.getValue("documentum.localNamespace"),
+          config.getValue("documentum.globalNamespace"),
+          config.getValue("documentum.windowsDomain")));
+    } catch (DfException e) {
+      throw new IOException("Error getting Acls", e);
+    }
     logger.exiting("DocumentumAdaptor", "getDocIds");
+  }
+
+  /** Return all Documentum ACL information in a map. */
+  @VisibleForTesting
+  Map<DocId, Acl> getAllAcls(IDfSessionManager sessionManager,
+      String localNamespace, String globalNamespace, String windowsDomain)
+      throws DfException {
+    IDfSession dmSession = sessionManager.getSession(docbase);
+    try {
+      DocumentumAcls dctmAcls = new DocumentumAcls(dmClientX, dmSession,
+          localNamespace, globalNamespace, windowsDomain);
+      return dctmAcls.getAcls();
+    } finally {
+      sessionManager.release(dmSession);
+    }
   }
 
   /** Gives the bytes of a document referenced with id. 
