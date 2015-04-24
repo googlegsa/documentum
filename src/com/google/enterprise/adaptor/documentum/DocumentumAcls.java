@@ -195,7 +195,8 @@ public class DocumentumAcls {
     }
 
     IDfUser userObj = (IDfUser) dmSession.getObjectByQualification(
-        "dm_user where user_name = '" + accessorName + "'");
+        "dm_user where user_name = '" + singleQuoteEscapeString(accessorName)
+        + "'");
     if (userObj == null) {
       return null;
     }

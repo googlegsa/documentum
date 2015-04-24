@@ -31,6 +31,7 @@ import com.google.enterprise.adaptor.InvalidConfigurationException;
 import com.google.enterprise.adaptor.Principal;
 import com.google.enterprise.adaptor.Request;
 import com.google.enterprise.adaptor.Response;
+
 import com.documentum.com.DfClientX;
 import com.documentum.com.IDfClientX;
 import com.documentum.fc.client.IDfCollection;
@@ -86,6 +87,7 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   private Config config;
   private IDfSessionManager dmSessionManager;
   private String docbase;
+  private String localNamespace;
 
   public static void main(String[] args) {
     AbstractAdaptor.main(new DocumentumAdaptor(), args);
@@ -124,9 +126,7 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     config.addKey("documentum.docbaseName", null);
     config.addKey("documentum.src", null);
     config.addKey("documentum.separatorRegex", ",");
-    config.addKey("documentum.localNamespace", null);
-    //TODO: (Srinivas) Does local namespace need to be auto generated ?
-    config.addKey("documentum.globalNamespace", Principal.DEFAULT_NAMESPACE);
+    config.addKey("adaptor.namespace", Principal.DEFAULT_NAMESPACE);
     config.addKey("documentum.windowsDomain", "");
     config.addKey("documentum.excludedAttributes", "a_application_type, "
         + "a_archive, a_category, a_compound_architecture, a_controlling_app, "
@@ -155,6 +155,9 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     docIdEncoder = context.getDocIdEncoder();
     config = context.getConfig();
     validateConfig(config);
+    localNamespace = config.getValue("adaptor.namespace").trim() + "_"
+        + config.getValue("documentum.docbaseName").trim();
+    logger.log(Level.CONFIG, "local namespace: {0}", localNamespace);
     docbase = config.getValue("documentum.docbaseName");
     String src = config.getValue("documentum.src");
     logger.log(Level.CONFIG, "documentum.src: {0}", src);
@@ -192,10 +195,6 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     if (Strings.isNullOrEmpty(config.getValue("documentum.src"))) {
       throw new InvalidConfigurationException(
           "documentum.src is required");
-    }
-    if (Strings.isNullOrEmpty(config.getValue("documentum.localNamespace"))) {
-      throw new InvalidConfigurationException(
-          "documentum.localNamespace is required");
     }
   }
 
@@ -271,8 +270,8 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     pusher.pushDocIds(docIds);
     try {
       pusher.pushNamedResources(getAllAcls(dmSessionManager,
-          config.getValue("documentum.localNamespace"),
-          config.getValue("documentum.globalNamespace"),
+          localNamespace,
+          config.getValue("adaptor.namespace"),
           config.getValue("documentum.windowsDomain")));
     } catch (DfException e) {
       throw new IOException("Error getting Acls", e);

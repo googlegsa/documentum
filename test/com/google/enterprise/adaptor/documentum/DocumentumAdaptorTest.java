@@ -114,6 +114,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.docbaseName", "testdocbase");
     config.addKey("documentum.src", "/Folder1/path1");
     config.addKey("documentum.separatorRegex", ",");
+    config.addKey("adaptor.namespace", "globalNS");
     config.addKey("documentum.excludedAttributes", "foo, bar");
 
     adaptor.init(context);
@@ -153,6 +154,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.src", "/Folder1/path1, /Folder2/path2,"
         + "/Folder3/path3");
     config.addKey("documentum.separatorRegex", ",");
+    config.addKey("adaptor.namespace", "globalNS");
     config.addKey("documentum.excludedAttributes", "foo, bar");
 
     adaptor.init(context);
@@ -459,6 +461,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.password", "testpwd");
     config.addKey("documentum.docbaseName", "testdocbase");
     config.addKey("documentum.separatorRegex", ",");
+    config.addKey("adaptor.namespace", "globalNS");
     config.addKey("documentum.excludedAttributes", "foo, bar");
 
     String startPaths = paths[0];
@@ -1694,8 +1697,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.src", "/Folder1/path1");
     config.addKey("documentum.separatorRegex", ",");
     config.addKey("documentum.excludedAttributes", "foo, bar");
-    config.addKey("documentum.localNamespace", "localNS");
-    config.addKey("documentum.globalNamespace", "globalNS");
+    config.addKey("adaptor.namespace", "globalNS");
     config.addKey("documentum.windowsDomain", domain);
 
     return config;
@@ -1712,10 +1714,8 @@ public class DocumentumAdaptorTest {
 
     Config config = getAclTestAdaptorConfig(adaptor, "");
     Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(
-            proxyCls.sessionManager,
-            config.getValue("documentum.localNamespace"),
-            config.getValue("documentum.globalNamespace"),
+        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
+            config.getValue("adaptor.namespace"),
             config.getValue("documentum.windowsDomain"));
 
     assertEquals(3, namedResources.size());
@@ -1730,9 +1730,8 @@ public class DocumentumAdaptorTest {
     Config config = getAclTestAdaptorConfig(adaptor, "");
 
     Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager,
-            config.getValue("documentum.localNamespace"),
-            config.getValue("documentum.globalNamespace"),
+        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
+            config.getValue("adaptor.namespace"),
             config.getValue("documentum.windowsDomain"));
 
     Acl aclList = namedResources.get(new DocId("4501081f80000100"));
@@ -1759,9 +1758,8 @@ public class DocumentumAdaptorTest {
 
     Config config = getAclTestAdaptorConfig(adaptor, "");
     Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager,
-            config.getValue("documentum.localNamespace"),
-            config.getValue("documentum.globalNamespace"),
+        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
+            config.getValue("adaptor.namespace"),
             config.getValue("documentum.windowsDomain"));
 
     Acl aclList = namedResources.get(new DocId("4501081f80000100"));
@@ -1786,9 +1784,8 @@ public class DocumentumAdaptorTest {
 
     Config config = getAclTestAdaptorConfig(adaptor, "");
     Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager,
-            config.getValue("documentum.localNamespace"),
-            config.getValue("documentum.globalNamespace"),
+        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
+            config.getValue("adaptor.namespace"),
             config.getValue("documentum.windowsDomain"));
 
     Acl aclList = namedResources.get(new DocId("4501081f80000101"));
@@ -1812,9 +1809,8 @@ public class DocumentumAdaptorTest {
 
     Config config = getAclTestAdaptorConfig(adaptor, "");
     Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager,
-            config.getValue("documentum.localNamespace"),
-            config.getValue("documentum.globalNamespace"),
+        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
+            config.getValue("adaptor.namespace"),
             config.getValue("documentum.windowsDomain"));
 
     Acl aclList = namedResources.get(new DocId("4501081f80000102"));
@@ -1835,9 +1831,8 @@ public class DocumentumAdaptorTest {
 
     Config config = getAclTestAdaptorConfig(adaptor, "ajax");
     Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager,
-            config.getValue("documentum.localNamespace"),
-            config.getValue("documentum.globalNamespace"),
+        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
+            config.getValue("adaptor.namespace"),
             config.getValue("documentum.windowsDomain"));
 
     Acl aclList = namedResources.get(new DocId("4501081f80000100"));
@@ -1859,9 +1854,8 @@ public class DocumentumAdaptorTest {
 
     Config config = getAclTestAdaptorConfig(adaptor, "ajax.example.com");
     Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager,
-            config.getValue("documentum.localNamespace"),
-            config.getValue("documentum.globalNamespace"),
+        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
+            config.getValue("adaptor.namespace"),
             config.getValue("documentum.windowsDomain"));
 
     Acl aclList = namedResources.get(new DocId("4501081f80000100"));
@@ -1884,9 +1878,8 @@ public class DocumentumAdaptorTest {
 
     Config config = getAclTestAdaptorConfig(adaptor, "ajax");
     Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager,
-            config.getValue("documentum.localNamespace"),
-            config.getValue("documentum.globalNamespace"),
+        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
+            config.getValue("adaptor.namespace"),
             config.getValue("documentum.windowsDomain"));
     Acl aclList = namedResources.get(new DocId("4501081f80000101"));
 
