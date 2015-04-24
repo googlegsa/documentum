@@ -295,16 +295,14 @@ public class DocumentumAcls {
     IDfGroup groupObj = (IDfGroup) dmSession.getObjectByQualification(
         "dm_group where group_name = '" + singleQuoteEscapeString(groupName)
         + "'");
-    if (groupObj != null) {
-      if (Strings.isNullOrEmpty(groupObj.getGroupSource())) {
-        logger.log(Level.FINER, "local namespace for group {0}", groupName);
-        return localNamespace;
-      } else {
-        logger.log(Level.FINER, "global namespace for group {0}", groupName);
-        return globalNamespace;
-      }
-    } else {
+    if (groupObj == null) {
       return null;
+    } else if (Strings.isNullOrEmpty(groupObj.getGroupSource())) {
+      logger.log(Level.FINER, "local namespace for group {0}", groupName);
+      return localNamespace;
+    } else {
+      logger.log(Level.FINER, "global namespace for group {0}", groupName);
+      return globalNamespace;
     }
   }
 
