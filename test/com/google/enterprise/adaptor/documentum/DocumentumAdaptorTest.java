@@ -33,11 +33,13 @@ import com.google.enterprise.adaptor.Response;
 import com.google.enterprise.adaptor.UserPrincipal;
 
 import com.documentum.com.IDfClientX;
+import com.documentum.fc.client.DfPermit;
 import com.documentum.fc.client.IDfACL;
 import com.documentum.fc.client.IDfClient;
 import com.documentum.fc.client.IDfCollection;
 import com.documentum.fc.client.IDfFolder;
 import com.documentum.fc.client.IDfGroup;
+import com.documentum.fc.client.IDfPermit;
 import com.documentum.fc.client.IDfPermitType;
 import com.documentum.fc.client.IDfQuery;
 import com.documentum.fc.client.IDfSession;
@@ -62,6 +64,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URI;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Enumeration;
@@ -84,11 +89,16 @@ public class DocumentumAdaptorTest {
       + "(user_name varchar primary key, user_login_name varchar, "
       + "user_source varchar, user_ldap_dn varchar, r_is_group boolean)";
 
+  private static final String CREATE_TABLE_ACL = "create table dm_acl "
+      + "(r_object_id varchar, r_accessor_name varchar, "
+      + "r_accessor_permit int, r_permit_type int, r_is_group boolean)";
+
   private JdbcFixture jdbcFixture = new JdbcFixture();
 
   @Before
   public void setUp() throws Exception {
-    jdbcFixture.executeUpdate(CREATE_TABLE_GROUP, CREATE_TABLE_USER);
+    jdbcFixture.executeUpdate(CREATE_TABLE_GROUP, CREATE_TABLE_USER,
+        CREATE_TABLE_ACL);
   }
 
   @After
@@ -1432,58 +1442,6 @@ public class DocumentumAdaptorTest {
     IDfSessionManager sessionManager = Proxies.newProxyInstance(
         IDfSessionManager.class, new SessionManagerMock());
 
-    List<AccessorInfo> accessorList1 = new ArrayList<AccessorInfo>() {
-      {
-        add(new AccessorInfo("User4", IDfPermitType.ACCESS_PERMIT,
-            IDfACL.DF_PERMIT_WRITE, false));
-        add(new AccessorInfo("User5", IDfPermitType.ACCESS_PERMIT,
-            IDfACL.DF_PERMIT_READ, false));
-        add(new AccessorInfo("User1", IDfPermitType.ACCESS_RESTRICTION,
-            IDfACL.DF_PERMIT_DELETE, false));
-        add(new AccessorInfo("User2", IDfPermitType.ACCESS_RESTRICTION,
-            IDfACL.DF_PERMIT_BROWSE, false));
-        add(new AccessorInfo("User3", IDfPermitType.ACCESS_RESTRICTION,
-            IDfACL.DF_PERMIT_WRITE, false));
-      }
-    };
-
-    List<AccessorInfo> accessorList2 = new ArrayList<AccessorInfo>() {
-      {
-        add(new AccessorInfo("User1", IDfPermitType.ACCESS_PERMIT,
-            IDfACL.DF_PERMIT_WRITE, false));
-        add(new AccessorInfo("User2", IDfPermitType.ACCESS_PERMIT,
-            IDfACL.DF_PERMIT_READ, false));
-        add(new AccessorInfo("Group1", IDfPermitType.ACCESS_PERMIT,
-            IDfACL.DF_PERMIT_READ, true));
-        add(new AccessorInfo("Group2", IDfPermitType.ACCESS_PERMIT,
-            IDfACL.DF_PERMIT_WRITE, true));
-        add(new AccessorInfo("Group3", IDfPermitType.ACCESS_RESTRICTION,
-            IDfACL.DF_PERMIT_READ, true));
-      }
-    };
-
-    List<AccessorInfo> accessorList3 = new ArrayList<AccessorInfo>() {
-      {
-        add(new AccessorInfo("User1", IDfPermitType.ACCESS_RESTRICTION,
-            IDfACL.DF_PERMIT_READ, false));
-        add(new AccessorInfo("User3", IDfPermitType.ACCESS_RESTRICTION,
-            IDfACL.DF_PERMIT_WRITE, false));
-        add(new AccessorInfo("Group1", IDfPermitType.ACCESS_PERMIT,
-            IDfACL.DF_PERMIT_BROWSE, true));
-        add(new AccessorInfo("dm_world", IDfPermitType.ACCESS_PERMIT,
-            IDfACL.DF_PERMIT_READ, true));
-      }
-    };
-
-    Map<String, List<AccessorInfo>> aclInfo =
-        new HashMap<String, List<AccessorInfo>>() {
-          {
-            put("4501081f80000100", accessorList1);
-            put("4501081f80000101", accessorList2);
-            put("4501081f80000102", accessorList3);
-          }
-        };
-
     public IDfClientX getProxyClientX() {
       return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
     }
@@ -1501,39 +1459,43 @@ public class DocumentumAdaptorTest {
         this.query = query;
       }
 
-      public IDfCollection execute(IDfSession session, int arg1) {
+      public IDfCollection execute(IDfSession session, int arg1)
+          throws SQLException {
         return Proxies.newProxyInstance(IDfCollection.class,
             new CollectionMock("r_object_id"));
       }
     }
 
     private class CollectionMock {
-      Iterator<String> iterIds;
-      Iterator<String> iterNames;
+      Statement stmt;
+      ResultSet rs;
 
-      public CollectionMock(String colNames) {
-        iterIds = aclInfo.keySet().iterator();
+      public CollectionMock(String colNames) throws SQLException {
+        stmt = jdbcFixture.getConnection().createStatement();
+        rs = stmt.executeQuery("select distinct r_object_id from dm_acl");
       }
 
-      public String getString(String colName) {
+      public String getString(String colName) throws SQLException {
         if ("r_object_id".equals(colName)) {
-          return iterIds.next();
+          return rs.getString("r_object_id");
         } else if ("object_name".equals(colName)) {
-          return iterNames.next();
+          return rs.getString("object_name");
         } else {
           return null;
         }
       }
 
-      public boolean next() {
-        return iterIds.hasNext();
+      public boolean next() throws SQLException {
+        return rs.next();
       }
 
       public int getState() {
         return IDfCollection.DF_READY_STATE;
       }
 
-      public void close() {
+      public void close() throws SQLException {
+        rs.close();
+        stmt.close();
       }
     }
 
@@ -1654,36 +1616,137 @@ public class DocumentumAdaptorTest {
 
     public class ACLMock {
       private String id;
+      List<AccessorInfo> accessorList = new ArrayList<AccessorInfo>();
 
       public ACLMock(String id) {
         this.id = id;
+        try {
+          getAccessorInfo();
+        } catch (SQLException e) {
+          e.printStackTrace();
+        }
+      }
+
+      private void getAccessorInfo() throws SQLException {
+        Statement stmt = null;
+        ResultSet rs = null;
+        try {
+          stmt = jdbcFixture.getConnection().createStatement();
+          rs = stmt.executeQuery("select r_accessor_name,  r_accessor_permit, "
+              + "r_permit_type, r_is_group from dm_acl "
+              + "where r_object_id = '" + id + "'");
+          while (rs.next()) {
+            String accessorName = rs.getString("r_accessor_name");
+            int accessorPermit = rs.getInt("r_accessor_permit");
+            int accessorPermitType = rs.getInt("r_permit_type");
+            boolean isGroup = rs.getBoolean("r_is_group");
+
+            if (!Strings.isNullOrEmpty(accessorName)) {
+              accessorList.add(new AccessorInfo(accessorName,
+                  accessorPermitType, accessorPermit, isGroup));
+            }
+          }
+        } finally {
+          rs.close();
+          stmt.close();
+        }
       }
 
       public int getAccessorCount() {
-        List list = aclInfo.get(id);
-        return list.size();
+        return accessorList.size();
       }
 
       public String getAccessorName(int n) {
-        List list = aclInfo.get(id);
-        return ((AccessorInfo) list.get(n)).getName();
+        return accessorList.get(n).getName();
       }
 
       public int getAccessorPermitType(int n) {
-        List list = aclInfo.get(id);
-        return ((AccessorInfo) list.get(n)).getPermitType();
+        return accessorList.get(n).getPermitType();
       }
 
       public int getAccessorPermit(int n) {
-        List list = aclInfo.get(id);
-        return ((AccessorInfo) list.get(n)).getPermit();
+        return accessorList.get(n).getPermit();
       }
 
       public boolean isGroup(int n) {
-        List list = aclInfo.get(id);
-        return ((AccessorInfo) list.get(n)).isGroup();
+        return accessorList.get(n).isGroup();
+      }
+
+      private boolean isAccessorGroup(String accessorName) throws SQLException {
+        Statement stmt = null;
+        ResultSet rs = null;
+        try {
+          stmt = jdbcFixture.getConnection().createStatement();
+          rs = stmt.executeQuery("select r_is_group from dm_user"
+              + " where user_name = '" + accessorName + "'");
+          if (rs.next()) {
+            return rs.getBoolean(1);
+          }
+        } finally {
+          rs.close();
+          stmt.close();
+        }
+        return false;
+      }
+
+      void grantPermit(IDfPermit permit) throws SQLException {
+        jdbcFixture.executeUpdate(String.format(
+            "insert into dm_acl(r_object_id, r_accessor_name, "
+                + "r_accessor_permit, r_permit_type, r_is_group) values("
+                + "'%s', '%s', '%s', '%s', '%s')",
+            id, permit.getAccessorName(), permit.getPermitValueInt(),
+            permit.getPermitType(), isAccessorGroup(permit.getAccessorName())));
+
+        accessorList.add(new AccessorInfo(permit.getAccessorName(),
+            permit.getPermitType(), permit.getPermitValueInt(),
+            isAccessorGroup(permit.getAccessorName())));
       }
     }
+  }
+
+  private void insertUsers(String... names) throws SQLException {
+    for (String name : names) {
+      jdbcFixture.executeUpdate(String.format(
+          "insert into dm_user(user_name, user_login_name) values('%s', '%s')",
+          name, name));
+    }
+  }
+
+  private void insertGroup(String groupName, String... members)
+      throws SQLException {
+    jdbcFixture.executeUpdate(String.format(
+        "insert into dm_user(user_name, r_is_group) values('%s', TRUE)",
+        groupName));
+    for (String user : members) {
+      jdbcFixture.executeUpdate(String.format(
+          "insert into dm_group(group_name, i_all_users_names) "
+              + "values('%s', '%s')", groupName, user));
+    }
+  }
+
+  private void createAcl(String id) throws SQLException {
+    jdbcFixture.executeUpdate(String.format(
+        "insert into dm_acl(r_object_id) values('%s')", id));
+  }
+
+  private void addAllowPermitToAcl(AclTestProxies.ACLMock aclObj, String name,
+      int permit) throws SQLException {
+    IDfPermit permitobj = new DfPermit();
+    permitobj.setAccessorName(name);
+    permitobj.setPermitType(IDfPermitType.ACCESS_PERMIT);
+    permitobj.setPermitValue(Integer.toString(permit));
+
+    aclObj.grantPermit(permitobj);
+  }
+
+  private void addDenyPermitToAcl(AclTestProxies.ACLMock aclObj, String name,
+      int permit) throws SQLException {
+    IDfPermit permitobj = new DfPermit();
+    permitobj.setAccessorName(name);
+    permitobj.setPermitType(IDfPermitType.ACCESS_RESTRICTION);
+    permitobj.setPermitValue(Integer.toString(permit));
+
+    aclObj.grantPermit(permitobj);
   }
 
   private Config getAclTestAdaptorConfig(DocumentumAdaptor adaptor,
@@ -1707,11 +1770,14 @@ public class DocumentumAdaptorTest {
   // TODO: (Srinivas) -  Add a unit test and perform manual test of
   //                     user and group names with quotes in them.
   @Test
-  public void testAcls() throws DfException, InterruptedException {
+  public void testAcls() throws DfException, InterruptedException,
+      SQLException {
     AclTestProxies proxyCls = new AclTestProxies();
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(proxyCls.getProxyClientX());
-
+    createAcl("4501081f80000100");
+    createAcl("4501081f80000101");
+    createAcl("4501081f80000102");
     Config config = getAclTestAdaptorConfig(adaptor, "");
     Map<DocId, Acl> namedResources =
         adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
@@ -1722,12 +1788,21 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
-  public void testAllowAcls() throws DfException, InterruptedException {
+  public void testAllowAcls() throws DfException, InterruptedException,
+      SQLException {
     AclTestProxies proxyCls = new AclTestProxies();
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(proxyCls.getProxyClientX());
-
     Config config = getAclTestAdaptorConfig(adaptor, "");
+
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    createAcl("4501081f80000100");
+    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000100");
+    addAllowPermitToAcl(aclObj, "User4", IDfACL.DF_PERMIT_WRITE);
+    addAllowPermitToAcl(aclObj, "User5", IDfACL.DF_PERMIT_READ);
+    addDenyPermitToAcl(aclObj, "User1", IDfACL.DF_PERMIT_DELETE);
+    addDenyPermitToAcl(aclObj, "User2", IDfACL.DF_PERMIT_BROWSE);
+    addDenyPermitToAcl(aclObj, "User3", IDfACL.DF_PERMIT_WRITE);
 
     Map<DocId, Acl> namedResources =
         adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
@@ -1751,12 +1826,22 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
-  public void testBrowseAcls() throws DfException, InterruptedException {
+  public void testBrowseAcls() throws DfException, InterruptedException,
+      SQLException {
     AclTestProxies proxyCls = new AclTestProxies();
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(proxyCls.getProxyClientX());
-
     Config config = getAclTestAdaptorConfig(adaptor, "");
+
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    createAcl("4501081f80000100");
+    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000100");
+    addAllowPermitToAcl(aclObj, "User4", IDfACL.DF_PERMIT_WRITE);
+    addAllowPermitToAcl(aclObj, "User5", IDfACL.DF_PERMIT_READ);
+    addDenyPermitToAcl(aclObj, "User1", IDfACL.DF_PERMIT_DELETE);
+    addDenyPermitToAcl(aclObj, "User2", IDfACL.DF_PERMIT_BROWSE);
+    addDenyPermitToAcl(aclObj, "User3", IDfACL.DF_PERMIT_WRITE);
+
     Map<DocId, Acl> namedResources =
         adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
             config.getValue("adaptor.namespace"),
@@ -1777,12 +1862,25 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
-  public void testGroupAcls() throws DfException, InterruptedException {
+  public void testGroupAcls() throws DfException, InterruptedException,
+      SQLException {
     AclTestProxies proxyCls = new AclTestProxies();
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(proxyCls.getProxyClientX());
-
     Config config = getAclTestAdaptorConfig(adaptor, "");
+
+    insertUsers("User1", "User2");
+    insertGroup("Group1", "User2", "User3");
+    insertGroup("Group2", "User4", "User5");
+    insertGroup("Group3", "User6", "User7");
+    createAcl("4501081f80000101");
+    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000101");
+    addAllowPermitToAcl(aclObj, "User1", IDfACL.DF_PERMIT_WRITE);
+    addAllowPermitToAcl(aclObj, "User2", IDfACL.DF_PERMIT_READ);
+    addAllowPermitToAcl(aclObj, "Group1", IDfACL.DF_PERMIT_READ);
+    addAllowPermitToAcl(aclObj, "Group2", IDfACL.DF_PERMIT_WRITE);
+    addDenyPermitToAcl(aclObj, "Group3", IDfACL.DF_PERMIT_READ);
+
     Map<DocId, Acl> namedResources =
         adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
             config.getValue("adaptor.namespace"),
@@ -1802,12 +1900,23 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
-  public void testGroupDmWorldAcl() throws DfException, InterruptedException {
+  public void testGroupDmWorldAcl() throws DfException, InterruptedException,
+      SQLException {
     AclTestProxies proxyCls = new AclTestProxies();
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(proxyCls.getProxyClientX());
-
     Config config = getAclTestAdaptorConfig(adaptor, "");
+
+    insertUsers("User1", "User3");
+    insertGroup("Group1", "User2", "User3");
+    insertGroup("dm_world", "User1", "User2", "User3");
+    createAcl("4501081f80000102");
+    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000102");
+    addAllowPermitToAcl(aclObj, "Group1", IDfACL.DF_PERMIT_BROWSE);
+    addAllowPermitToAcl(aclObj, "dm_world", IDfACL.DF_PERMIT_READ);
+    addDenyPermitToAcl(aclObj, "User1", IDfACL.DF_PERMIT_READ);
+    addDenyPermitToAcl(aclObj, "User3", IDfACL.DF_PERMIT_WRITE);
+
     Map<DocId, Acl> namedResources =
         adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
             config.getValue("adaptor.namespace"),
@@ -1828,8 +1937,17 @@ public class DocumentumAdaptorTest {
     AclTestProxies proxyCls = new AclTestProxies();
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(proxyCls.getProxyClientX());
-
     Config config = getAclTestAdaptorConfig(adaptor, "ajax");
+
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    createAcl("4501081f80000100");
+    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000100");
+    addAllowPermitToAcl(aclObj, "User4", IDfACL.DF_PERMIT_WRITE);
+    addAllowPermitToAcl(aclObj, "User5", IDfACL.DF_PERMIT_READ);
+    addDenyPermitToAcl(aclObj, "User1", IDfACL.DF_PERMIT_DELETE);
+    addDenyPermitToAcl(aclObj, "User2", IDfACL.DF_PERMIT_BROWSE);
+    addDenyPermitToAcl(aclObj, "User3", IDfACL.DF_PERMIT_WRITE);
+
     Map<DocId, Acl> namedResources =
         adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
             config.getValue("adaptor.namespace"),
@@ -1851,8 +1969,17 @@ public class DocumentumAdaptorTest {
     AclTestProxies proxyCls = new AclTestProxies();
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(proxyCls.getProxyClientX());
-
     Config config = getAclTestAdaptorConfig(adaptor, "ajax.example.com");
+
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    createAcl("4501081f80000100");
+    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000100");
+    addAllowPermitToAcl(aclObj, "User4", IDfACL.DF_PERMIT_WRITE);
+    addAllowPermitToAcl(aclObj, "User5", IDfACL.DF_PERMIT_READ);
+    addDenyPermitToAcl(aclObj, "User1", IDfACL.DF_PERMIT_DELETE);
+    addDenyPermitToAcl(aclObj, "User2", IDfACL.DF_PERMIT_BROWSE);
+    addDenyPermitToAcl(aclObj, "User3", IDfACL.DF_PERMIT_WRITE);
+
     Map<DocId, Acl> namedResources =
         adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
             config.getValue("adaptor.namespace"),
@@ -1875,8 +2002,20 @@ public class DocumentumAdaptorTest {
     AclTestProxies proxyCls = new AclTestProxies();
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(proxyCls.getProxyClientX());
-
     Config config = getAclTestAdaptorConfig(adaptor, "ajax");
+
+    insertUsers("User1", "User2");
+    insertGroup("Group1", "User2", "User3");
+    insertGroup("Group2", "User4", "User5");
+    insertGroup("Group3", "User6", "User7");
+    createAcl("4501081f80000101");
+    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000101");
+    addAllowPermitToAcl(aclObj, "User1", IDfACL.DF_PERMIT_WRITE);
+    addAllowPermitToAcl(aclObj, "User2", IDfACL.DF_PERMIT_READ);
+    addAllowPermitToAcl(aclObj, "Group1", IDfACL.DF_PERMIT_READ);
+    addAllowPermitToAcl(aclObj, "Group2", IDfACL.DF_PERMIT_WRITE);
+    addDenyPermitToAcl(aclObj, "Group3", IDfACL.DF_PERMIT_READ);
+
     Map<DocId, Acl> namedResources =
         adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
             config.getValue("adaptor.namespace"),

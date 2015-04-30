@@ -30,7 +30,7 @@ public class JdbcFixture {
   public static Connection getConnection() {
     try {
       JdbcDataSource ds = new JdbcDataSource();
-      ds.setURL("jdbc:h2:mem:test;DEFAULT_ESCAPE=");
+      ds.setURL("jdbc:h2:mem:test;DB_CLOSE_DELAY=-1;DEFAULT_ESCAPE=");
       ds.setUser("sa");
       ds.setPassword("");
       return ds.getConnection();
