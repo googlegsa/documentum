@@ -17,8 +17,10 @@ package com.google.enterprise.adaptor.documentum;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.*;
 
+import com.google.common.base.Joiner;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Multimaps;
@@ -29,6 +31,7 @@ import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
 import com.google.enterprise.adaptor.GroupPrincipal;
+import com.google.enterprise.adaptor.Principal;
 import com.google.enterprise.adaptor.Request;
 import com.google.enterprise.adaptor.Response;
 import com.google.enterprise.adaptor.UserPrincipal;
@@ -70,6 +73,8 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -83,7 +88,8 @@ import java.util.Vector;
 public class DocumentumAdaptorTest {
 
   private static final String CREATE_TABLE_GROUP = "create table dm_group "
-      + "(group_name varchar, i_all_users_names varchar)";
+      + "(group_name varchar, group_source varchar, groups_names varchar, "
+      + "users_names varchar)";
 
   private static final String CREATE_TABLE_USER = "create table dm_user "
       + "(user_name varchar primary key, user_login_name varchar, "
@@ -120,7 +126,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.excludedAttributes", "foo, bar");
     config.addKey("adaptor.namespace", "globalNS");
     config.addKey("documentum.windowsDomain", "");
-    config.addKey("documentum.pushLocalGroupsOnly", "true");
+    config.addKey("documentum.pushLocalGroupsOnly", "false");
     return config;
   }
 
@@ -1362,7 +1368,7 @@ public class DocumentumAdaptorTest {
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
     addFolder(proxyCls, "0b01081f80078d29", folder);
-    StringBuffer expected = new StringBuffer();
+    StringBuilder expected = new StringBuilder();
     expected.append("<!DOCTYPE html>\n<html><head><title>");
     expected.append("Folder path2");
     expected.append("</title></head><body><h1>");
@@ -1701,13 +1707,22 @@ public class DocumentumAdaptorTest {
   private void insertGroup(String groupName, String... members)
       throws SQLException {
     jdbcFixture.executeUpdate(String.format(
-        "insert into dm_user(user_name, r_is_group) values('%s', TRUE)",
-        groupName));
-    for (String user : members) {
-      jdbcFixture.executeUpdate(String.format(
-          "insert into dm_group(group_name, i_all_users_names) "
-              + "values('%s', '%s')", groupName, user));
+        "insert into dm_user(user_name, user_login_name, r_is_group) "
+        + "values('%s', '%s', TRUE)", groupName, groupName));
+    List<String> users = new ArrayList<String>(); 
+    List<String> groups = new ArrayList<String>(); 
+    for (String member : members) {
+      if (member.toLowerCase().startsWith("group")) {
+        groups.add(member);
+      } else {
+        users.add(member);
+      }
     }
+    Joiner joiner = Joiner.on(',');
+    jdbcFixture.executeUpdate(String.format(
+        "insert into dm_group(group_name, users_names, groups_names) "
+        + "values('%s', '%s', '%s')", groupName, joiner.join(users),
+        joiner.join(groups)));
   }
 
   private void createAcl(String id) throws SQLException {
@@ -2183,6 +2198,498 @@ public class DocumentumAdaptorTest {
           config.getValue("documentum.windowsDomain"));
       return new DocumentumAcls(proxyCls.getProxyClientX(), session, principals)
           .getAcls();
+    } finally {
+      proxyCls.sessionManager.release(session);
+    }
+  }
+
+  /* Mock proxy classes for testing pushing Groups */
+  private class GroupTestProxies {
+    IDfSessionManager sessionManager = Proxies.newProxyInstance(
+        IDfSessionManager.class, new SessionManagerMock());
+
+    public IDfClientX getProxyClientX() {
+      return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
+    }
+
+    private class ClientXMock {
+      public IDfQuery getQuery() {
+        return Proxies.newProxyInstance(IDfQuery.class, new QueryMock());
+      }
+    }
+
+    private class QueryMock {
+      private String query;
+
+      public void setDQL(String query) {
+        this.query = query;
+      }
+
+      public IDfCollection execute(IDfSession session, int arg1)
+          throws DfException {
+        return Proxies.newProxyInstance(IDfCollection.class,
+            new CollectionMock(query));
+      }
+    }
+
+    private class CollectionMock {
+      final Statement stmt;
+      final ResultSet rs;
+
+      public CollectionMock(String query) throws DfException {
+        try {
+          stmt = jdbcFixture.getConnection().createStatement();
+          rs = stmt.executeQuery(query);
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+
+      private String[] getRepeatingValue(String colName) throws DfException {
+        String value = getString(colName);
+        if (Strings.isNullOrEmpty(value)) {
+          return new String[0];
+        }
+        return value.split(",");
+      }
+
+      public int getValueCount(String colName) throws DfException {
+        return getRepeatingValue(colName).length;
+      }
+
+      public String getRepeatingString(String colName, int index)
+          throws DfException {
+        return getRepeatingValue(colName)[index].trim();
+      }
+
+      public String getString(String colName) throws DfException {
+        try {
+          return rs.getString(colName);
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+
+      public boolean next() throws DfException {
+        try {
+          return rs.next();
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+
+      public int getState() {
+        return IDfCollection.DF_READY_STATE;
+      }
+
+      public void close() throws DfException {
+        try {
+          rs.close();
+          stmt.close();
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+    }
+
+    private class SessionManagerMock {
+      public IDfSession getSession(String docbaseName) {
+        return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
+      }
+
+      public void release(IDfSession session) {
+      }
+    }
+
+    private class SessionMock {
+      public Object getObjectByQualification(String query) throws DfException {
+        if (Strings.isNullOrEmpty(query)) {
+          return null;
+        }
+        try (Statement stmt = jdbcFixture.getConnection().createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT * FROM " + query)) {
+          if (rs.first()) {
+            if (query.toLowerCase().startsWith("dm_user ")) {
+              return Proxies.newProxyInstance(IDfUser.class, new UserMock(rs));
+            } else if (query.toLowerCase().startsWith("dm_group ")) {
+              return
+                  Proxies.newProxyInstance(IDfGroup.class, new GroupMock(rs));
+            }
+          }
+          return null;
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+    }
+
+    private class UserMock {
+      private String loginName;
+      private String source;
+      private String ldapDn;
+      private boolean isGroup;
+
+      public UserMock(ResultSet rs) throws SQLException {
+        loginName = rs.getString("user_login_name");
+        source = rs.getString("user_source");
+        ldapDn = rs.getString("user_ldap_dn");
+        isGroup = rs.getBoolean("r_is_group");
+      }
+
+      public String getUserLoginName() {
+        return loginName;
+      }
+
+      public String getUserSourceAsString() {
+        return source;
+      }
+
+      public String getUserDistinguishedLDAPName() {
+        return ldapDn;
+      }
+
+      public boolean isGroup() {
+        return isGroup;
+      }
+    }
+
+    private class GroupMock {
+      private String source;
+
+      public GroupMock(ResultSet rs) throws SQLException {
+        source = rs.getString("group_source");
+      }
+
+      public String getGroupSource() {
+        return source;
+      }
+    }
+  }
+
+  @Test
+  public void testGetGroupsNoGroups() throws Exception {
+    GroupTestProxies proxyCls = new GroupTestProxies();
+    Config config = getTestAdaptorConfig();
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    Map<GroupPrincipal, Collection<Principal>> groups =
+        getGroups(proxyCls, config);
+    assertNotNull(groups);
+    assertTrue(groups.toString(), groups.isEmpty());
+  }
+
+  @Test
+  public void testGetGroupsUserMembersOnly() throws Exception {
+    GroupTestProxies proxyCls = new GroupTestProxies();
+    Config config = getTestAdaptorConfig();
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    insertGroup("Group1", "User1", "User2", "User3");
+    insertGroup("Group2", "User3", "User4", "User5");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+        expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
+            ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
+                            new UserPrincipal("User2", "globalNS"),
+                            new UserPrincipal("User3", "globalNS")),
+            new GroupPrincipal("Group2", "localNS"),
+            ImmutableSet.of(new UserPrincipal("User3", "globalNS"),
+                            new UserPrincipal("User4", "globalNS"),
+                            new UserPrincipal("User5", "globalNS")));
+
+    Map<GroupPrincipal, Collection<Principal>> groups =
+        getGroups(proxyCls, config);
+
+    assertEquals(expected, groups);
+  }
+
+  @Test
+  public void testGetGroupsInvalidMembers() throws Exception {
+    GroupTestProxies proxyCls = new GroupTestProxies();
+    Config config = getTestAdaptorConfig();
+    insertUsers("User1", "User3", "User5");
+    insertGroup("Group1", "User1", "User2", "User3");
+    insertGroup("Group2", "User3", "User4", "User5");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+        expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
+            ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
+                            new UserPrincipal("User3", "globalNS")),
+            new GroupPrincipal("Group2", "localNS"),
+            ImmutableSet.of(new UserPrincipal("User3", "globalNS"),
+                            new UserPrincipal("User5", "globalNS")));
+
+    Map<GroupPrincipal, Collection<Principal>> groups =
+        getGroups(proxyCls, config);
+
+    assertEquals(expected, groups);
+  }
+
+  @Test
+  public void testGetGroupsEmptyGroup() throws Exception {
+    GroupTestProxies proxyCls = new GroupTestProxies();
+    Config config = getTestAdaptorConfig();
+    insertUsers("User1", "User3", "User5");
+    insertGroup("Group1", "User1", "User2", "User3");
+    insertGroup("Group2");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+        expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
+            ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
+                            new UserPrincipal("User3", "globalNS")),
+            new GroupPrincipal("Group2", "localNS"),
+            ImmutableSet.<Principal>of());
+
+    Map<GroupPrincipal, Collection<Principal>> groups =
+        getGroups(proxyCls, config);
+
+    assertEquals(expected, groups);
+  }
+
+  @Test
+  public void testGetGroupsUserAndGroupMembers() throws Exception {
+    GroupTestProxies proxyCls = new GroupTestProxies();
+    Config config = getTestAdaptorConfig();
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    insertGroup("Group1", "User1", "User2", "User3");
+    insertGroup("Group2", "Group1", "User4", "User5");
+
+   ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+       expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
+           ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
+                           new UserPrincipal("User2", "globalNS"),
+                           new UserPrincipal("User3", "globalNS")),
+           new GroupPrincipal("Group2", "localNS"),
+           ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
+                           new UserPrincipal("User4", "globalNS"),
+                           new UserPrincipal("User5", "globalNS")));
+
+    Map<GroupPrincipal, Collection<Principal>> groups =
+        getGroups(proxyCls, config);
+
+    assertEquals(expected, groups);
+  }
+
+  @Test
+  public void testGetGroupsDifferentMemberLoginName() throws Exception {
+    GroupTestProxies proxyCls = new GroupTestProxies();
+    Config config = getTestAdaptorConfig();
+    insertUsers("User1", "User2");
+    jdbcFixture.executeUpdate("insert into dm_user(user_name, user_login_name) "
+        + "values('User3', 'UserTres')");
+    insertGroup("Group1", "User1", "User2", "User3");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+        expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
+            ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
+                            new UserPrincipal("User2", "globalNS"),
+                            new UserPrincipal("UserTres", "globalNS")));
+
+    Map<GroupPrincipal, Collection<Principal>> groups =
+        getGroups(proxyCls, config);
+
+    assertEquals(expected, groups);
+  }
+
+  @Test
+  public void testGetGroupsDifferentGroupLoginName() throws Exception {
+    GroupTestProxies proxyCls = new GroupTestProxies();
+    Config config = getTestAdaptorConfig();
+    insertUsers("User1", "User2");
+    jdbcFixture.executeUpdate(
+        "insert into dm_user(user_name, user_login_name, r_is_group) "
+        + "values('Group1', 'GroupUno', TRUE)");
+    jdbcFixture.executeUpdate(
+        "insert into dm_group(group_name, users_names, groups_names) "
+        + "values('Group1', 'User1,User2', '')");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+        expected = ImmutableMap.of(new GroupPrincipal("GroupUno", "localNS"),
+            ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
+                            new UserPrincipal("User2", "globalNS")));
+
+    Map<GroupPrincipal, Collection<Principal>> groups =
+        getGroups(proxyCls, config);
+
+    assertEquals(expected, groups);
+  }
+
+  @Test
+  public void testGetGroupsMemberLdapDn() throws Exception {
+    GroupTestProxies proxyCls = new GroupTestProxies();
+    Config config = getTestAdaptorConfig();
+    insertUsers("User1", "User2");
+    jdbcFixture.executeUpdate("insert into dm_user(user_name, user_login_name, "
+        + "user_source, user_ldap_dn) values('User3', 'User3', 'LDAP', "
+        + "'cn=User3,dc=test,dc=com')");
+    insertGroup("Group1", "User1", "User2", "User3");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+        expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
+            ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
+                            new UserPrincipal("User2", "globalNS"),
+                            new UserPrincipal("test\\User3", "globalNS")));
+
+    Map<GroupPrincipal, Collection<Principal>> groups =
+        getGroups(proxyCls, config);
+
+    assertEquals(expected, groups);
+  }
+
+  @Test
+  public void testGetGroupsGroupLdapDn() throws Exception {
+    GroupTestProxies proxyCls = new GroupTestProxies();
+    Config config = getTestAdaptorConfig();
+    insertUsers("User1", "User2");
+    jdbcFixture.executeUpdate("insert into dm_user(user_name, user_login_name, "
+        + "user_source, user_ldap_dn) values('Group1', 'Group1', 'LDAP', "
+        + "'cn=Group1,dc=test,dc=com')");
+    jdbcFixture.executeUpdate("insert into dm_group(group_name, group_source, "
+        + "users_names, groups_names) values('Group1', 'LDAP', 'User1,User2', "
+        + "'')");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+        expected =
+            ImmutableMap.of(new GroupPrincipal("test\\Group1", "globalNS"),
+                ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
+                                new UserPrincipal("User2", "globalNS")));
+
+    Map<GroupPrincipal, Collection<Principal>> groups =
+        getGroups(proxyCls, config);
+
+    assertEquals(expected, groups);
+  }
+
+  @Test
+  public void testGetGroupsWindowsDomainUsers() throws Exception {
+    GroupTestProxies proxyCls = new GroupTestProxies();
+    Config config = getTestAdaptorConfig();
+    config.overrideKey("documentum.windowsDomain", "TEST");
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    insertGroup("Group1", "User1", "User2", "User3");
+    insertGroup("Group2", "Group1", "User4", "User5");
+
+   ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+       expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
+           ImmutableSet.of(new UserPrincipal("TEST\\User1", "globalNS"),
+                           new UserPrincipal("TEST\\User2", "globalNS"),
+                           new UserPrincipal("TEST\\User3", "globalNS")),
+           new GroupPrincipal("Group2", "localNS"),
+           ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
+                           new UserPrincipal("TEST\\User4", "globalNS"),
+                           new UserPrincipal("TEST\\User5", "globalNS")));
+
+    Map<GroupPrincipal, Collection<Principal>> groups =
+        getGroups(proxyCls, config);
+
+    assertEquals(expected, groups);
+  }
+
+  @Test
+  public void testGetGroupsLocalAndGlobalGroups() throws Exception {
+    GroupTestProxies proxyCls = new GroupTestProxies();
+    Config config = getTestAdaptorConfig();
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    insertGroup("Group1", "User1", "User2", "User3");
+    insertLdapGroup("Group2", "User3", "User4", "User5");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+        expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
+            ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
+                            new UserPrincipal("User2", "globalNS"),
+                            new UserPrincipal("User3", "globalNS")),
+            new GroupPrincipal("Group2", "globalNS"),
+            ImmutableSet.of(new UserPrincipal("User3", "globalNS"),
+                            new UserPrincipal("User4", "globalNS"),
+                            new UserPrincipal("User5", "globalNS")));
+
+    Map<GroupPrincipal, Collection<Principal>> groups =
+        getGroups(proxyCls, config);
+
+    assertEquals(expected, groups);
+  }
+
+  @Test
+  public void testGetGroupsGlobalGroupMembers() throws Exception {
+    GroupTestProxies proxyCls = new GroupTestProxies();
+    Config config = getTestAdaptorConfig();
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    insertLdapGroup("Group1", "User1", "User2", "User3");
+    insertGroup("Group2", "Group1", "User4", "User5");
+
+   ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+       expected = ImmutableMap.of(new GroupPrincipal("Group1", "globalNS"),
+           ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
+                           new UserPrincipal("User2", "globalNS"),
+                           new UserPrincipal("User3", "globalNS")),
+           new GroupPrincipal("Group2", "localNS"),
+           ImmutableSet.of(new GroupPrincipal("Group1", "globalNS"),
+                           new UserPrincipal("User4", "globalNS"),
+                           new UserPrincipal("User5", "globalNS")));
+
+    Map<GroupPrincipal, Collection<Principal>> groups =
+        getGroups(proxyCls, config);
+
+    assertEquals(expected, groups);
+  }
+
+  @Test
+  public void testGetGroupsLocalGroupsOnly() throws Exception {
+    GroupTestProxies proxyCls = new GroupTestProxies();
+    Config config = getTestAdaptorConfig();
+    config.overrideKey("documentum.pushLocalGroupsOnly", "true");
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    insertLdapGroup("Group1", "User1", "User2", "User3");
+    insertGroup("Group2", "Group1", "User4", "User5");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+       expected = ImmutableMap.of(new GroupPrincipal("Group2", "localNS"),
+           ImmutableSet.of(new GroupPrincipal("Group1", "globalNS"),
+                           new UserPrincipal("User4", "globalNS"),
+                           new UserPrincipal("User5", "globalNS")));
+
+    Map<GroupPrincipal, Collection<Principal>> groups =
+        getGroups(proxyCls, config);
+
+    assertEquals(expected, groups);
+  }
+
+  private void insertLdapGroup(String groupName, String... members)
+      throws SQLException {
+    jdbcFixture.executeUpdate(String.format("insert into dm_user("
+        + "user_name, user_login_name, user_source, user_ldap_dn, r_is_group) "
+        + "values('%s', '%s', 'LDAP', '%s', TRUE)", groupName, groupName,
+        "CN=" + groupName));
+    List<String> users = new ArrayList<String>(); 
+    List<String> groups = new ArrayList<String>(); 
+    for (String member : members) {
+      if (member.toLowerCase().startsWith("group")) {
+        groups.add(member);
+      } else {
+        users.add(member);
+      }
+    }
+    Joiner joiner = Joiner.on(',');
+    jdbcFixture.executeUpdate(String.format("insert into dm_group("
+        + "group_name, group_source, users_names, groups_names) "
+        + "values('%s', 'LDAP', '%s', '%s')", groupName, joiner.join(users),
+        joiner.join(groups)));
+  }
+
+  /* TODO(bmj): This should create the adaptor, init it with config, then call
+   * its getDocIds method with a recording pusher and return the pushed groups.
+   */
+  private Map<GroupPrincipal, Collection<Principal>> getGroups(
+      GroupTestProxies proxyCls, Config config) throws DfException {
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
+    IDfSession session = proxyCls.sessionManager
+        .getSession(config.getValue("documentum.docbaseName"));
+    try {
+      Principals principals = new Principals(session, "localNS",
+          config.getValue("adaptor.namespace"),
+          config.getValue("documentum.windowsDomain"));
+      boolean localGroupsOnly = Boolean.parseBoolean(
+          config.getValue("documentum.pushLocalGroupsOnly"));
+      return adaptor.getGroups(dmClientX, session, principals, localGroupsOnly);
     } finally {
       proxyCls.sessionManager.release(session);
     }

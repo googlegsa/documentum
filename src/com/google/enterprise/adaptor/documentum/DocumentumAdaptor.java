@@ -79,6 +79,14 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   /** Charset used in generated HTML responses. */
   private static final Charset CHARSET = Charset.forName("UTF-8");
 
+  /** DQL Query to fetch all groups and their members. */
+  private static final String ALL_GROUPS_QUERY = 
+      "SELECT group_name, groups_names, users_names FROM dm_group";
+
+  /** DQL Query to fetch only the local groups and their members. */
+  private static final String LOCAL_GROUPS_QUERY = ALL_GROUPS_QUERY
+      + " WHERE group_source IS NULL OR group_source <> 'LDAP'";
+
   private final IDfClientX dmClientX;
   private List<String> startPaths;
   private CopyOnWriteArrayList<String> validatedStartPaths =
@@ -325,8 +333,49 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   Map<GroupPrincipal, Collection<Principal>> getGroups(IDfClientX dmClientX,
       IDfSession session, Principals principals, boolean localGroupsOnly)
       throws DfException {
-    // STUB
-    return ImmutableMap.<GroupPrincipal, Collection<Principal>>of();
+    IDfQuery query = dmClientX.getQuery();
+    query.setDQL(localGroupsOnly ? LOCAL_GROUPS_QUERY : ALL_GROUPS_QUERY);
+    IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
+    try {
+      ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups =
+          ImmutableMap.builder();
+      while (result.next()) {
+        String groupName = result.getString("group_name");
+        logger.log(Level.FINE, "Found Group: {0}", groupName);
+        String principalName = principals.getPrincipalName(groupName);
+        if (principalName != null) {
+          GroupPrincipal groupPrincipal = (GroupPrincipal)
+              principals.getPrincipal(groupName, principalName, true);
+          ImmutableSet.Builder<Principal> buildr = ImmutableSet.builder();
+          // All the member users are in one repeating value, all the member
+          // groups are in another repeating value.
+          addMemberPrincipals(buildr, principals, result, "users_names", false);
+          addMemberPrincipals(buildr, principals, result, "groups_names", true);
+          ImmutableSet<Principal> members = buildr.build();
+          logger.log(Level.FINEST, "Pushing Group {0}: {1}",
+              new Object[] { principalName, members });
+          groups.put(groupPrincipal, members);
+        }
+      }
+      return groups.build();
+    } finally {
+      result.close();
+    }
+  }
+
+  /** Adds Principals for all the users or groups to members. */
+  // TODO(bmj): Apparently repeating values on DB2 backends may not work here.
+  private void addMemberPrincipals(ImmutableSet.Builder<Principal> members,
+      Principals principals, IDfCollection result, String attributeName,
+      boolean isGroup) throws DfException {
+    int numMembers = result.getValueCount(attributeName);
+    for (int i = 0; i < numMembers; i++) {
+      String member = result.getRepeatingString(attributeName, i);
+      String principalName = principals.getPrincipalName(member);
+      if (principalName != null) {
+        members.add(principals.getPrincipal(member, principalName, isGroup));
+      }
+    }
   }
 
   /** Gives the bytes of a document referenced with id. 
