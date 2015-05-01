@@ -296,7 +296,9 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   }
 
   /** Gives the bytes of a document referenced with id. 
-   * @throws IOException */
+   *
+   * @throws IOException if a Documentum error occurs
+   */
   @Override
   public void getDocContent(Request req, Response resp) throws IOException {
     // TODO: (sveldurthi) support "/" as start path, to process all cabinets.

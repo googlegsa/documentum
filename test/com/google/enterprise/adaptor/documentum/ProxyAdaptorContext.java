@@ -19,7 +19,6 @@ import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
 import com.google.enterprise.adaptor.DocIdEncoder;
 
-import java.lang.reflect.Proxy;
 import java.net.URI;
 import java.net.URISyntaxException;
 

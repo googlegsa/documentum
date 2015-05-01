@@ -173,7 +173,6 @@ public class Principals {
    * @param domain the domain name
    * @return the first domain component, or {@code null} if the DN
    *     does not contain a DC attribute
-   * @throws InvalidNameException if the input is invalid
    */
   public static String getFirstDomainFromDN(LdapName domain) {
     if (domain.isEmpty()) {

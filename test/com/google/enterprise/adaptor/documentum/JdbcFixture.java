@@ -23,9 +23,17 @@ import java.sql.Statement;
 /** Manages an in-memory H2 database for test purposes. */
 public class JdbcFixture {
   /**
-   * Gets a JDBC connection to a named in-memory database. The default
-   * escape character is disabled, to match the DQL behavior (and
-   * standard SQL).
+   * Gets a JDBC connection to a named in-memory database.
+   * <p>
+   * Connection options:
+   *
+   * <pre>DB_CLOSE_DELAY=-1</pre>
+   * The database will remain open until the JVM exits, rather than
+   * being closed when the last connection to it is closed.
+   *
+   * <pre>DEFAULT_ESCAPE=</pre>
+   * The default escape character is disabled, to match the DQL
+   * behavior (and standard SQL).
    */
   public static Connection getConnection() {
     try {

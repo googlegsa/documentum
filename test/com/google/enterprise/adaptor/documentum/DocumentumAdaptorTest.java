@@ -80,7 +80,6 @@ import java.util.Set;
 import java.util.Vector;
 
 /** Unit tests for DocumentAdaptor class. */
-
 public class DocumentumAdaptorTest {
 
   private static final String CREATE_TABLE_GROUP = "create table dm_group "
@@ -1468,8 +1467,8 @@ public class DocumentumAdaptorTest {
     }
 
     private class CollectionMock {
-      Statement stmt;
-      ResultSet rs;
+      final Statement stmt;
+      final ResultSet rs;
 
       public CollectionMock(String colNames) throws SQLException {
         stmt = jdbcFixture.getConnection().createStatement();
@@ -1629,13 +1628,11 @@ public class DocumentumAdaptorTest {
       }
 
       private void getAccessorInfo() throws SQLException {
-        Statement stmt = null;
-        ResultSet rs = null;
-        try {
-          stmt = jdbcFixture.getConnection().createStatement();
-          rs = stmt.executeQuery("select r_accessor_name,  r_accessor_permit, "
-              + "r_permit_type, r_is_group from dm_acl "
-              + "where r_object_id = '" + id + "'");
+        try (Statement stmt = jdbcFixture.getConnection().createStatement();
+            ResultSet rs = stmt.executeQuery(
+                "select r_accessor_name, r_accessor_permit, "
+                + "r_permit_type, r_is_group from dm_acl "
+                + "where r_object_id = '" + id + "'")) {
           while (rs.next()) {
             String accessorName = rs.getString("r_accessor_name");
             int accessorPermit = rs.getInt("r_accessor_permit");
@@ -1647,9 +1644,6 @@ public class DocumentumAdaptorTest {
                   accessorPermitType, accessorPermit, isGroup));
             }
           }
-        } finally {
-          rs.close();
-          stmt.close();
         }
       }
 
@@ -1674,18 +1668,12 @@ public class DocumentumAdaptorTest {
       }
 
       private boolean isAccessorGroup(String accessorName) throws SQLException {
-        Statement stmt = null;
-        ResultSet rs = null;
-        try {
-          stmt = jdbcFixture.getConnection().createStatement();
-          rs = stmt.executeQuery("select r_is_group from dm_user"
-              + " where user_name = '" + accessorName + "'");
+        try (Statement stmt = jdbcFixture.getConnection().createStatement();
+            ResultSet rs = stmt.executeQuery("select r_is_group from dm_user"
+                + " where user_name = '" + accessorName + "'")) {
           if (rs.next()) {
             return rs.getBoolean(1);
           }
-        } finally {
-          rs.close();
-          stmt.close();
         }
         return false;
       }
