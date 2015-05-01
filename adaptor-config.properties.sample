@@ -1,9 +1,7 @@
 # Sample Config file for Documentum Adaptor
 gsa.hostname=<GSA hostname>
 
-#Documentum config
-# Classpath for DFC needs to include dfc.jar and config directory.
-documentum.classpath=<Classpath for Documentum DFC>
+# Documentum config
 documentum.username=<Documentum username>
 documentum.password=<Password for above user>
 documentum.docbaseName=<Repository name>

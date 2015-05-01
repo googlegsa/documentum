@@ -23,8 +23,25 @@
     value="com.google.enterprise.adaptor.documentum.DocumentumAdaptor"/>
   <property name="adaptor.args" value=""/>
   <property name="cobertura.dir" value="${basedir}/../cobertura/"/>
-  <!-- File to load Documentum classpath property, documentum.classpath -->
-  <property file="adaptor-config.properties"/>
+
+  <!-- Load build environment specific properties. -->
+  <property file="build.properties"/>
+  <fail>
+    <condition>
+      <not><and>
+        <isset property="build.dfc.classpath"/>
+        <available classname="com.documentum.com.IDfClientX"
+                   classpath="${build.dfc.classpath}"/>
+        <available resource="dfc.properties"
+                   classpath="${build.dfc.classpath}"/>
+      </and></not>
+    </condition>
+    The build.dfc.classpath property must be set in build.properties<!--
+    --> or on the command line, and include dfc.jar and the config directory.
+  </fail>
+  <property name="compile.java.version" value="7"/>
+  <property name="compile.java.bootclasspath" value="${build.bootclasspath}"/>
+
   <!-- Adaptor suffix for distribution files. Useful for placing version numbers
        on our jars. -->
   <condition property="adaptor.suffix" value="-${adaptor.version}">
@@ -39,7 +56,7 @@
     </fileset>
 -->
     <pathelement location="${adaptor.jar}"/>
-    <pathelement path="${documentum.classpath}"/>
+    <pathelement path="${build.dfc.classpath}"/>
   </path>
 
   <path id="adaptor.run.classpath">
@@ -110,7 +127,9 @@ lib/plexi submodule or add the the command line argument
     <mkdir dir="${build-src.dir}"/>
 
     <javac srcdir="${src.dir}" destdir="${build-src.dir}" debug="true"
-      includeantruntime="false" encoding="utf-8">
+           includeantruntime="false" encoding="utf-8"
+           source="${compile.java.version}" target="${compile.java.version}">
+      <bootclasspath path="${compile.java.bootclasspath}"/>
       <compilerarg value="-Xlint:unchecked"/>
       <classpath refid="adaptor.build.classpath"/>
     </javac>
@@ -118,7 +137,9 @@ lib/plexi submodule or add the the command line argument
     <mkdir dir="${build-test.dir}"/>
     <!-- Compile JUnit helper -->
     <javac srcdir="${lib.dir}" destdir="${build-test.dir}" debug="true"
-      includeantruntime="true" encoding="utf-8">
+           includeantruntime="true" encoding="utf-8"
+           source="${compile.java.version}" target="${compile.java.version}">
+      <bootclasspath path="${compile.java.bootclasspath}"/>
       <compilerarg value="-Xlint:unchecked"/>
       <classpath location="${junit.jar}"/>
       <include name="JUnitLogFixFormatter.java"/>
@@ -126,7 +147,9 @@ lib/plexi submodule or add the the command line argument
 
     <!-- Compile tests, excluding example tests. -->
     <javac srcdir="${test.dir}" destdir="${build-test.dir}" debug="true"
-      includeantruntime="false" encoding="utf-8">
+           includeantruntime="false" encoding="utf-8"
+           source="${compile.java.version}" target="${compile.java.version}">
+      <bootclasspath path="${compile.java.bootclasspath}"/>
       <compilerarg value="-Xlint:unchecked"/>
       <classpath refid="adaptor.build.classpath"/>
       <classpath location="${build-src.dir}"/>
