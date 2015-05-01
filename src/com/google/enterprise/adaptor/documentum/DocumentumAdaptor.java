@@ -287,7 +287,8 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     IDfSession dmSession = sessionManager.getSession(docbase);
     try {
       DocumentumAcls dctmAcls = new DocumentumAcls(dmClientX, dmSession,
-          localNamespace, globalNamespace, windowsDomain);
+          new Principals(dmSession, localNamespace, globalNamespace,
+          windowsDomain));
       return dctmAcls.getAcls();
     } finally {
       sessionManager.release(dmSession);
