@@ -24,6 +24,7 @@ import com.google.common.collect.Multimap;
 import com.google.common.collect.Multimaps;
 import com.google.common.collect.TreeMultimap;
 import com.google.enterprise.adaptor.Acl;
+import com.google.enterprise.adaptor.Acl.InheritanceType;
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
@@ -2029,5 +2030,233 @@ public class DocumentumAdaptorTest {
         new GroupPrincipal("Group2", "localNS")), allowGroups);
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "localNS")),
         denyGroups);
+  }
+
+  // Tests for required groups and required group sets.
+  private void addRequiredGroupSetToAcl(AclTestProxies.ACLMock aclObj,
+      String name) throws SQLException {
+    IDfPermit permitobj = new DfPermit();
+    permitobj.setAccessorName(name);
+    permitobj.setPermitType(IDfPermitType.REQUIRED_GROUP_SET);
+    aclObj.grantPermit(permitobj);
+  }
+
+  private void addRequiredGroupToAcl(AclTestProxies.ACLMock aclObj, String name)
+      throws SQLException {
+    IDfPermit permitobj = new DfPermit();
+    permitobj.setAccessorName(name);
+    permitobj.setPermitType(IDfPermitType.REQUIRED_GROUP);
+    aclObj.grantPermit(permitobj);
+  }
+
+  @Test
+  public void testRequiredGroupSetAcl() throws DfException,
+      InterruptedException, SQLException {
+    AclTestProxies proxyCls = new AclTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+    Config config = getAclTestAdaptorConfig(adaptor, "");
+
+    insertGroup("Group1", "User2", "User3");
+    insertGroup("Group2", "User4", "User5");
+    insertGroup("Group3", "User6", "User7");
+    createAcl("4501081f80000103");
+    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000103");
+    addAllowPermitToAcl(aclObj, "Group1", IDfACL.DF_PERMIT_READ);
+    addAllowPermitToAcl(aclObj, "Group2", IDfACL.DF_PERMIT_WRITE);
+    addDenyPermitToAcl(aclObj, "Group3", IDfACL.DF_PERMIT_READ);
+    addRequiredGroupSetToAcl(aclObj, "GroupSet1");
+    addRequiredGroupSetToAcl(aclObj, "GroupSet2");
+
+    Map<DocId, Acl> namedResources =
+        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
+            config.getValue("adaptor.namespace"),
+            config.getValue("documentum.windowsDomain"));
+
+    assertEquals(2, namedResources.size());
+
+    Acl acl1 = namedResources.get(new DocId("4501081f80000103_reqGroupSet"));
+    Set<GroupPrincipal> setAllowGroups = acl1.getPermitGroups();
+    Set<GroupPrincipal> setDenyGroups = acl1.getDenyGroups();
+
+    assertEquals(2, setAllowGroups.size());
+    assertEquals(0, setDenyGroups.size());
+    assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
+    assertEquals(ImmutableSet.of(new GroupPrincipal("GroupSet1", "localNS"),
+        new GroupPrincipal("GroupSet2", "localNS")), setAllowGroups);
+
+    Acl acl2 = namedResources.get(new DocId("4501081f80000103"));
+    Set<GroupPrincipal> allowGroups = acl2.getPermitGroups();
+    Set<GroupPrincipal> denyGroups = acl2.getDenyGroups();
+
+    assertEquals(2, allowGroups.size());
+    assertEquals(1, denyGroups.size());
+    assertEquals(new DocId("4501081f80000103_reqGroupSet"),
+        acl2.getInheritFrom());
+    assertEquals(InheritanceType.PARENT_OVERRIDES, acl2.getInheritanceType());
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
+        new GroupPrincipal("Group2", "localNS")), allowGroups);
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "localNS")),
+        denyGroups);
+  }
+
+  @Test
+  public void testRequiredGroupsAcl() throws DfException, InterruptedException,
+      SQLException {
+    AclTestProxies proxyCls = new AclTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+    Config config = getAclTestAdaptorConfig(adaptor, "");
+
+    insertGroup("Group1", "User2", "User3");
+    insertGroup("Group2", "User4", "User5");
+    insertGroup("Group3", "User6", "User7");
+    createAcl("4501081f80000104");
+    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000104");
+    addAllowPermitToAcl(aclObj, "Group1", IDfACL.DF_PERMIT_READ);
+    addAllowPermitToAcl(aclObj, "Group2", IDfACL.DF_PERMIT_WRITE);
+    addDenyPermitToAcl(aclObj, "Group3", IDfACL.DF_PERMIT_READ);
+    addRequiredGroupToAcl(aclObj, "Group4");
+    addRequiredGroupToAcl(aclObj, "Group5");
+    addRequiredGroupToAcl(aclObj, "Group6");
+
+    Map<DocId, Acl> namedResources =
+        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
+            config.getValue("adaptor.namespace"),
+            config.getValue("documentum.windowsDomain"));
+
+    assertEquals(4, namedResources.size());
+
+    Acl acl1 = namedResources.get(new DocId("4501081f80000104_Group6"));
+    Set<GroupPrincipal> allowGroups1 = acl1.getPermitGroups();
+    Set<GroupPrincipal> denyGroups1 = acl1.getDenyGroups();
+
+    assertEquals(new DocId("4501081f80000104_Group5"), acl1.getInheritFrom());
+    assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
+    assertEquals(1, allowGroups1.size());
+    assertEquals(0, denyGroups1.size());
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group6", "localNS")),
+        allowGroups1);
+
+    Acl acl2 = namedResources.get(new DocId("4501081f80000104_Group5"));
+    Set<GroupPrincipal> allowGroups2 = acl2.getPermitGroups();
+    Set<GroupPrincipal> denyGroups2 = acl2.getDenyGroups();
+
+    assertEquals(new DocId("4501081f80000104_Group4"), acl2.getInheritFrom());
+    assertEquals(InheritanceType.AND_BOTH_PERMIT, acl2.getInheritanceType());
+    assertEquals(1, allowGroups2.size());
+    assertEquals(0, denyGroups2.size());
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group5", "localNS")),
+        allowGroups2);
+
+    Acl acl3 = namedResources.get(new DocId("4501081f80000104_Group4"));
+    Set<GroupPrincipal> allowGroups3 = acl3.getPermitGroups();
+    Set<GroupPrincipal> denyGroups3 = acl3.getDenyGroups();
+
+    assertEquals(InheritanceType.AND_BOTH_PERMIT, acl3.getInheritanceType());
+    assertEquals(1, allowGroups3.size());
+    assertEquals(0, denyGroups3.size());
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group4", "localNS")),
+        allowGroups3);
+
+    Acl acl4 = namedResources.get(new DocId("4501081f80000104"));
+    Set<GroupPrincipal> allowGroups4 = acl4.getPermitGroups();
+    Set<GroupPrincipal> denyGroups4 = acl4.getDenyGroups();
+
+    assertEquals(new DocId("4501081f80000104_Group6"), acl4.getInheritFrom());
+    assertEquals(InheritanceType.PARENT_OVERRIDES, acl4.getInheritanceType());
+    assertEquals(2, allowGroups4.size());
+    assertEquals(1, denyGroups4.size());
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
+        new GroupPrincipal("Group2", "localNS")), allowGroups4);
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "localNS")),
+        denyGroups4);
+  }
+
+  @Test
+  public void testRequiredGroupsAndSetsAcl() throws DfException,
+      InterruptedException, SQLException {
+    AclTestProxies proxyCls = new AclTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+    Config config = getAclTestAdaptorConfig(adaptor, "");
+
+    insertGroup("Group1", "User2", "User3");
+    insertGroup("Group2", "User4", "User5");
+    insertGroup("Group3", "User6", "User7");
+    createAcl("4501081f80000105");
+    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000105");
+    addAllowPermitToAcl(aclObj, "Group1", IDfACL.DF_PERMIT_READ);
+    addAllowPermitToAcl(aclObj, "Group2", IDfACL.DF_PERMIT_WRITE);
+    addDenyPermitToAcl(aclObj, "Group3", IDfACL.DF_PERMIT_READ);
+    addRequiredGroupToAcl(aclObj, "Group4");
+    addRequiredGroupToAcl(aclObj, "Group5");
+    addRequiredGroupToAcl(aclObj, "Group6");
+    addRequiredGroupSetToAcl(aclObj, "GroupSet1");
+    addRequiredGroupSetToAcl(aclObj, "GroupSet2");
+
+    Map<DocId, Acl> namedResources =
+        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
+            config.getValue("adaptor.namespace"),
+            config.getValue("documentum.windowsDomain"));
+
+    assertEquals(5, namedResources.size());
+
+    Acl acl1 = namedResources.get(new DocId("4501081f80000105_Group6"));
+    Set<GroupPrincipal> allowGroups1 = acl1.getPermitGroups();
+    Set<GroupPrincipal> denyGroups1 = acl1.getDenyGroups();
+
+    assertEquals(new DocId("4501081f80000105_Group5"), acl1.getInheritFrom());
+    assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
+    assertEquals(1, allowGroups1.size());
+    assertEquals(0, denyGroups1.size());
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group6", "localNS")),
+        allowGroups1);
+
+    Acl acl2 = namedResources.get(new DocId("4501081f80000105_Group5"));
+    Set<GroupPrincipal> allowGroups2 = acl2.getPermitGroups();
+    Set<GroupPrincipal> denyGroups2 = acl2.getDenyGroups();
+
+    assertEquals(new DocId("4501081f80000105_Group4"), acl2.getInheritFrom());
+    assertEquals(InheritanceType.AND_BOTH_PERMIT, acl2.getInheritanceType());
+    assertEquals(1, allowGroups2.size());
+    assertEquals(0, denyGroups2.size());
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group5", "localNS")),
+        allowGroups2);
+
+    Acl acl3 = namedResources.get(new DocId("4501081f80000105_Group4"));
+    Set<GroupPrincipal> allowGroups3 = acl3.getPermitGroups();
+    Set<GroupPrincipal> denyGroups3 = acl3.getDenyGroups();
+
+    assertEquals(InheritanceType.AND_BOTH_PERMIT, acl3.getInheritanceType());
+    assertEquals(1, allowGroups3.size());
+    assertEquals(0, denyGroups3.size());
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group4", "localNS")),
+        allowGroups3);
+
+    Acl acl4 = namedResources.get(new DocId("4501081f80000105_reqGroupSet"));
+    Set<GroupPrincipal> setAllowGroups = acl4.getPermitGroups();
+    Set<GroupPrincipal> setDenyGroups = acl4.getDenyGroups();
+
+    assertEquals(2, setAllowGroups.size());
+    assertEquals(0, setDenyGroups.size());
+    assertEquals(new DocId("4501081f80000105_Group6"), acl4.getInheritFrom());
+    assertEquals(InheritanceType.AND_BOTH_PERMIT, acl4.getInheritanceType());
+    assertEquals(ImmutableSet.of(new GroupPrincipal("GroupSet1", "localNS"),
+        new GroupPrincipal("GroupSet2", "localNS")), setAllowGroups);
+
+    Acl acl5 = namedResources.get(new DocId("4501081f80000105"));
+    Set<GroupPrincipal> allowGroups4 = acl5.getPermitGroups();
+    Set<GroupPrincipal> denyGroups4 = acl5.getDenyGroups();
+
+    assertEquals(new DocId("4501081f80000105_reqGroupSet"),
+        acl5.getInheritFrom());
+    assertEquals(InheritanceType.PARENT_OVERRIDES, acl5.getInheritanceType());
+    assertEquals(2, allowGroups4.size());
+    assertEquals(1, denyGroups4.size());
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
+        new GroupPrincipal("Group2", "localNS")), allowGroups4);
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "localNS")),
+        denyGroups4);
   }
 }
