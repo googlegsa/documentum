@@ -106,6 +106,24 @@ public class DocumentumAdaptorTest {
     jdbcFixture.tearDown();
   }
 
+  private Config getTestAdaptorConfig() {
+    return getTestAdaptorConfig(ProxyAdaptorContext.getInstance());
+  }
+
+  private Config getTestAdaptorConfig(AdaptorContext context) {
+    Config config = context.getConfig();
+    config.addKey("documentum.username", "testuser");
+    config.addKey("documentum.password", "testpwd");
+    config.addKey("documentum.docbaseName", "testdocbase");
+    config.addKey("documentum.src", "/Folder1/path1");
+    config.addKey("documentum.separatorRegex", ",");
+    config.addKey("documentum.excludedAttributes", "foo, bar");
+    config.addKey("adaptor.namespace", "globalNS");
+    config.addKey("documentum.windowsDomain", "");
+    config.addKey("documentum.pushLocalGroupsOnly", "true");
+    return config;
+  }
+
   /**
    * Initialize adaptor using proxy clientX and proxy AdptorContext.
    * Verifies that the proper user is set;
@@ -118,14 +136,7 @@ public class DocumentumAdaptorTest {
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(proxyCls.getProxyClientX());
     AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = context.getConfig();
-    config.addKey("documentum.username", "testuser");
-    config.addKey("documentum.password", "testpwd");
-    config.addKey("documentum.docbaseName", "testdocbase");
-    config.addKey("documentum.src", "/Folder1/path1");
-    config.addKey("documentum.separatorRegex", ",");
-    config.addKey("adaptor.namespace", "globalNS");
-    config.addKey("documentum.excludedAttributes", "foo, bar");
+    Config config = getTestAdaptorConfig(context);
 
     adaptor.init(context);
 
@@ -157,16 +168,9 @@ public class DocumentumAdaptorTest {
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(proxyCls.getProxyClientX());
     AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = context.getConfig();
-    config.addKey("documentum.username", "testuser");
-    config.addKey("documentum.password", "testpwd");
-    config.addKey("documentum.docbaseName", "testdocbase");
-    config.addKey("documentum.src", "/Folder1/path1, /Folder2/path2,"
+    Config config = getTestAdaptorConfig(context);
+    config.overrideKey("documentum.src", "/Folder1/path1, /Folder2/path2,"
         + "/Folder3/path3");
-    config.addKey("documentum.separatorRegex", ",");
-    config.addKey("adaptor.namespace", "globalNS");
-    config.addKey("documentum.excludedAttributes", "foo, bar");
-
     adaptor.init(context);
 
     assertEquals(Arrays.asList("/Folder1/path1", "/Folder2/path2",
@@ -466,19 +470,12 @@ public class DocumentumAdaptorTest {
   private void initValidStartPaths(DocumentumAdaptor adaptor,
       String... paths) throws DfException {
     AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = context.getConfig();
-    config.addKey("documentum.username", "testuser");
-    config.addKey("documentum.password", "testpwd");
-    config.addKey("documentum.docbaseName", "testdocbase");
-    config.addKey("documentum.separatorRegex", ",");
-    config.addKey("adaptor.namespace", "globalNS");
-    config.addKey("documentum.excludedAttributes", "foo, bar");
-
+    Config config = getTestAdaptorConfig(context);
     String startPaths = paths[0];
     for (int i = 1; i < paths.length; i++) {
       startPaths = startPaths + "," + paths[i];
     }
-    config.addKey("documentum.src", startPaths);
+    config.overrideKey("documentum.src", startPaths);
 
     adaptor.init(context);
   }
@@ -1738,23 +1735,6 @@ public class DocumentumAdaptorTest {
     aclObj.grantPermit(permitobj);
   }
 
-  private Config getAclTestAdaptorConfig(DocumentumAdaptor adaptor,
-      String domain) throws DfException {
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = context.getConfig();
-
-    config.addKey("documentum.username", "testuser");
-    config.addKey("documentum.password", "testpwd");
-    config.addKey("documentum.docbaseName", "testdocbase");
-    config.addKey("documentum.src", "/Folder1/path1");
-    config.addKey("documentum.separatorRegex", ",");
-    config.addKey("documentum.excludedAttributes", "foo, bar");
-    config.addKey("adaptor.namespace", "globalNS");
-    config.addKey("documentum.windowsDomain", domain);
-
-    return config;
-  }
-
   // tests for ACLs
   // TODO: (Srinivas) -  Add a unit test and perform manual test of
   //                     user and group names with quotes in them.
@@ -1762,16 +1742,11 @@ public class DocumentumAdaptorTest {
   public void testAcls() throws DfException, InterruptedException,
       SQLException {
     AclTestProxies proxyCls = new AclTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
+    Config config = getTestAdaptorConfig();
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     createAcl("4501081f80000102");
-    Config config = getAclTestAdaptorConfig(adaptor, "");
-    Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
-            config.getValue("adaptor.namespace"),
-            config.getValue("documentum.windowsDomain"));
+    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
 
     assertEquals(3, namedResources.size());
   }
@@ -1780,9 +1755,7 @@ public class DocumentumAdaptorTest {
   public void testAllowAcls() throws DfException, InterruptedException,
       SQLException {
     AclTestProxies proxyCls = new AclTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
-    Config config = getAclTestAdaptorConfig(adaptor, "");
+    Config config = getTestAdaptorConfig();
 
     insertUsers("User1", "User2", "User3", "User4", "User5");
     createAcl("4501081f80000100");
@@ -1793,11 +1766,7 @@ public class DocumentumAdaptorTest {
     addDenyPermitToAcl(aclObj, "User2", IDfACL.DF_PERMIT_BROWSE);
     addDenyPermitToAcl(aclObj, "User3", IDfACL.DF_PERMIT_WRITE);
 
-    Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
-            config.getValue("adaptor.namespace"),
-            config.getValue("documentum.windowsDomain"));
-
+    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
     Acl aclList = namedResources.get(new DocId("4501081f80000100"));
 
     Set<UserPrincipal> allowUsers = aclList.getPermitUsers();
@@ -1818,9 +1787,7 @@ public class DocumentumAdaptorTest {
   public void testBrowseAcls() throws DfException, InterruptedException,
       SQLException {
     AclTestProxies proxyCls = new AclTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
-    Config config = getAclTestAdaptorConfig(adaptor, "");
+    Config config = getTestAdaptorConfig();
 
     insertUsers("User1", "User2", "User3", "User4", "User5");
     createAcl("4501081f80000100");
@@ -1831,11 +1798,7 @@ public class DocumentumAdaptorTest {
     addDenyPermitToAcl(aclObj, "User2", IDfACL.DF_PERMIT_BROWSE);
     addDenyPermitToAcl(aclObj, "User3", IDfACL.DF_PERMIT_WRITE);
 
-    Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
-            config.getValue("adaptor.namespace"),
-            config.getValue("documentum.windowsDomain"));
-
+    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
     Acl aclList = namedResources.get(new DocId("4501081f80000100"));
 
     Set<UserPrincipal> allowUsers = aclList.getPermitUsers();
@@ -1854,9 +1817,7 @@ public class DocumentumAdaptorTest {
   public void testGroupAcls() throws DfException, InterruptedException,
       SQLException {
     AclTestProxies proxyCls = new AclTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
-    Config config = getAclTestAdaptorConfig(adaptor, "");
+    Config config = getTestAdaptorConfig();
 
     insertUsers("User1", "User2");
     insertGroup("Group1", "User2", "User3");
@@ -1870,11 +1831,7 @@ public class DocumentumAdaptorTest {
     addAllowPermitToAcl(aclObj, "Group2", IDfACL.DF_PERMIT_WRITE);
     addDenyPermitToAcl(aclObj, "Group3", IDfACL.DF_PERMIT_READ);
 
-    Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
-            config.getValue("adaptor.namespace"),
-            config.getValue("documentum.windowsDomain"));
-
+    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
     Acl aclList = namedResources.get(new DocId("4501081f80000101"));
 
     Set<GroupPrincipal> allowGroups = aclList.getPermitGroups();
@@ -1892,9 +1849,7 @@ public class DocumentumAdaptorTest {
   public void testGroupDmWorldAcl() throws DfException, InterruptedException,
       SQLException {
     AclTestProxies proxyCls = new AclTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
-    Config config = getAclTestAdaptorConfig(adaptor, "");
+    Config config = getTestAdaptorConfig();
 
     insertUsers("User1", "User3");
     insertGroup("Group1", "User2", "User3");
@@ -1906,11 +1861,7 @@ public class DocumentumAdaptorTest {
     addDenyPermitToAcl(aclObj, "User1", IDfACL.DF_PERMIT_READ);
     addDenyPermitToAcl(aclObj, "User3", IDfACL.DF_PERMIT_WRITE);
 
-    Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
-            config.getValue("adaptor.namespace"),
-            config.getValue("documentum.windowsDomain"));
-
+    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
     Acl aclList = namedResources.get(new DocId("4501081f80000102"));
 
     Set<GroupPrincipal> allowGroups = aclList.getPermitGroups();
@@ -1924,9 +1875,8 @@ public class DocumentumAdaptorTest {
   @Test
   public void testDomainForAclUser() throws Exception {
     AclTestProxies proxyCls = new AclTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
-    Config config = getAclTestAdaptorConfig(adaptor, "ajax");
+    Config config = getTestAdaptorConfig();
+    config.overrideKey("documentum.windowsDomain", "ajax");
 
     insertUsers("User1", "User2", "User3", "User4", "User5");
     createAcl("4501081f80000100");
@@ -1937,10 +1887,7 @@ public class DocumentumAdaptorTest {
     addDenyPermitToAcl(aclObj, "User2", IDfACL.DF_PERMIT_BROWSE);
     addDenyPermitToAcl(aclObj, "User3", IDfACL.DF_PERMIT_WRITE);
 
-    Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
-            config.getValue("adaptor.namespace"),
-            config.getValue("documentum.windowsDomain"));
+    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
 
     Acl aclList = namedResources.get(new DocId("4501081f80000100"));
 
@@ -1956,9 +1903,8 @@ public class DocumentumAdaptorTest {
   @Test
   public void testDnsDomainForAclUser() throws Exception {
     AclTestProxies proxyCls = new AclTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
-    Config config = getAclTestAdaptorConfig(adaptor, "ajax.example.com");
+    Config config = getTestAdaptorConfig();
+    config.overrideKey("documentum.windowsDomain", "ajax.example.com");
 
     insertUsers("User1", "User2", "User3", "User4", "User5");
     createAcl("4501081f80000100");
@@ -1969,11 +1915,7 @@ public class DocumentumAdaptorTest {
     addDenyPermitToAcl(aclObj, "User2", IDfACL.DF_PERMIT_BROWSE);
     addDenyPermitToAcl(aclObj, "User3", IDfACL.DF_PERMIT_WRITE);
 
-    Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
-            config.getValue("adaptor.namespace"),
-            config.getValue("documentum.windowsDomain"));
-
+    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
     Acl aclList = namedResources.get(new DocId("4501081f80000100"));
 
     Set<UserPrincipal> allowUsers = aclList.getPermitUsers();
@@ -1989,9 +1931,8 @@ public class DocumentumAdaptorTest {
   @Test
   public void testDomainForAclGroup() throws Exception {
     AclTestProxies proxyCls = new AclTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
-    Config config = getAclTestAdaptorConfig(adaptor, "ajax");
+    Config config = getTestAdaptorConfig();
+    config.overrideKey("documentum.windowsDomain", "ajax");
 
     insertUsers("User1", "User2");
     insertGroup("Group1", "User2", "User3");
@@ -2005,10 +1946,7 @@ public class DocumentumAdaptorTest {
     addAllowPermitToAcl(aclObj, "Group2", IDfACL.DF_PERMIT_WRITE);
     addDenyPermitToAcl(aclObj, "Group3", IDfACL.DF_PERMIT_READ);
 
-    Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
-            config.getValue("adaptor.namespace"),
-            config.getValue("documentum.windowsDomain"));
+    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
     Acl aclList = namedResources.get(new DocId("4501081f80000101"));
 
     Set<GroupPrincipal> allowGroups = aclList.getPermitGroups();
@@ -2041,9 +1979,7 @@ public class DocumentumAdaptorTest {
   public void testRequiredGroupSetAcl() throws DfException,
       InterruptedException, SQLException {
     AclTestProxies proxyCls = new AclTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
-    Config config = getAclTestAdaptorConfig(adaptor, "");
+    Config config = getTestAdaptorConfig();
 
     insertGroup("Group1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
@@ -2056,11 +1992,7 @@ public class DocumentumAdaptorTest {
     addRequiredGroupSetToAcl(aclObj, "GroupSet1");
     addRequiredGroupSetToAcl(aclObj, "GroupSet2");
 
-    Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
-            config.getValue("adaptor.namespace"),
-            config.getValue("documentum.windowsDomain"));
-
+    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
     assertEquals(2, namedResources.size());
 
     Acl acl1 = namedResources.get(new DocId("4501081f80000103_reqGroupSet"));
@@ -2092,9 +2024,7 @@ public class DocumentumAdaptorTest {
   public void testRequiredGroupsAcl() throws DfException, InterruptedException,
       SQLException {
     AclTestProxies proxyCls = new AclTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
-    Config config = getAclTestAdaptorConfig(adaptor, "");
+    Config config = getTestAdaptorConfig();
 
     insertGroup("Group1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
@@ -2108,10 +2038,7 @@ public class DocumentumAdaptorTest {
     addRequiredGroupToAcl(aclObj, "Group5");
     addRequiredGroupToAcl(aclObj, "Group6");
 
-    Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
-            config.getValue("adaptor.namespace"),
-            config.getValue("documentum.windowsDomain"));
+    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
 
     assertEquals(4, namedResources.size());
 
@@ -2165,9 +2092,7 @@ public class DocumentumAdaptorTest {
   public void testRequiredGroupsAndSetsAcl() throws DfException,
       InterruptedException, SQLException {
     AclTestProxies proxyCls = new AclTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
-    Config config = getAclTestAdaptorConfig(adaptor, "");
+    Config config = getTestAdaptorConfig();
 
     insertGroup("Group1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
@@ -2183,10 +2108,7 @@ public class DocumentumAdaptorTest {
     addRequiredGroupSetToAcl(aclObj, "GroupSet1");
     addRequiredGroupSetToAcl(aclObj, "GroupSet2");
 
-    Map<DocId, Acl> namedResources =
-        adaptor.getAllAcls(proxyCls.sessionManager, "localNS",
-            config.getValue("adaptor.namespace"),
-            config.getValue("documentum.windowsDomain"));
+    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
 
     assertEquals(5, namedResources.size());
 
@@ -2246,5 +2168,23 @@ public class DocumentumAdaptorTest {
         new GroupPrincipal("Group2", "localNS")), allowGroups4);
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "localNS")),
         denyGroups4);
+  }
+
+  /* TODO(bmj): This should create the adaptor, init it with config, then call
+   * its getDocIds method with a recording pusher and return the pushed acls.
+   */
+  private Map<DocId, Acl> getAllAcls(AclTestProxies proxyCls, Config config)
+      throws DfException {
+    IDfSession session = proxyCls.sessionManager
+        .getSession(config.getValue("documentum.docbaseName"));
+    try {
+      Principals principals = new Principals(session, "localNS",
+          config.getValue("adaptor.namespace"),
+          config.getValue("documentum.windowsDomain"));
+      return new DocumentumAcls(proxyCls.getProxyClientX(), session, principals)
+          .getAcls();
+    } finally {
+      proxyCls.sessionManager.release(session);
+    }
   }
 }

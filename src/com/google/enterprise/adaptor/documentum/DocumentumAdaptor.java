@@ -18,6 +18,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Splitter;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.enterprise.adaptor.AbstractAdaptor;
 import com.google.enterprise.adaptor.Acl;
@@ -26,6 +27,7 @@ import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
 import com.google.enterprise.adaptor.DocIdEncoder;
 import com.google.enterprise.adaptor.DocIdPusher;
+import com.google.enterprise.adaptor.GroupPrincipal;
 import com.google.enterprise.adaptor.IOHelper;
 import com.google.enterprise.adaptor.InvalidConfigurationException;
 import com.google.enterprise.adaptor.Principal;
@@ -37,6 +39,7 @@ import com.documentum.com.IDfClientX;
 import com.documentum.fc.client.IDfCollection;
 import com.documentum.fc.client.IDfFolder;
 import com.documentum.fc.client.IDfPersistentObject;
+import com.documentum.fc.client.IDfQuery;
 import com.documentum.fc.client.IDfSession;
 import com.documentum.fc.client.IDfSessionManager;
 import com.documentum.fc.client.IDfSysObject;
@@ -54,6 +57,7 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
@@ -87,7 +91,10 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   private Config config;
   private IDfSessionManager dmSessionManager;
   private String docbase;
+  private String globalNamespace;
   private String localNamespace;
+  private String windowsDomain;
+  private boolean pushLocalGroupsOnly;
 
   public static void main(String[] args) {
     AbstractAdaptor.main(new DocumentumAdaptor(), args);
@@ -128,6 +135,7 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     config.addKey("documentum.separatorRegex", ",");
     config.addKey("adaptor.namespace", Principal.DEFAULT_NAMESPACE);
     config.addKey("documentum.windowsDomain", "");
+    config.addKey("documentum.pushLocalGroupsOnly", "false");
     config.addKey("documentum.excludedAttributes", "a_application_type, "
         + "a_archive, a_category, a_compound_architecture, a_controlling_app, "
         + "a_effective_date, a_effective_flag, a_effective_label, "
@@ -155,10 +163,17 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     docIdEncoder = context.getDocIdEncoder();
     config = context.getConfig();
     validateConfig(config);
-    localNamespace = config.getValue("adaptor.namespace").trim() + "_"
-        + config.getValue("documentum.docbaseName").trim();
+    docbase = config.getValue("documentum.docbaseName").trim();
+    globalNamespace = config.getValue("adaptor.namespace").trim();
+    logger.log(Level.CONFIG, "adaptor.namespace: {0}", globalNamespace);
+    localNamespace = globalNamespace + "_" + docbase;
     logger.log(Level.CONFIG, "local namespace: {0}", localNamespace);
-    docbase = config.getValue("documentum.docbaseName");
+    windowsDomain = config.getValue("documentum.windowsDomain").trim();
+    logger.log(Level.CONFIG, "documentum.windowsDomain: {0}", windowsDomain);
+    pushLocalGroupsOnly = Boolean.parseBoolean(
+        config.getValue("documentum.pushLocalGroupsOnly"));
+    logger.log(Level.CONFIG, "documentum.pushLocalGroupsOnly: {0}", 
+        pushLocalGroupsOnly);
     String src = config.getValue("documentum.src");
     logger.log(Level.CONFIG, "documentum.src: {0}", src);
     String separatorRegex = config.getValue("documentum.separatorRegex");
@@ -170,12 +185,18 @@ public class DocumentumAdaptor extends AbstractAdaptor {
         .trimResults().omitEmptyStrings().split(excludedAttrs));
     logger.log(Level.CONFIG, "documentum.excludedAttributes: {0}",
         excludedAttrs);
+
     initDfc(config);
     dmSessionManager = getDfcSessionManager(config);
-    validateStartPaths();
+    IDfSession dmSession = dmSessionManager.getSession(docbase);
+    try {
+      validateStartPaths(dmSession);
+    } finally {
+      dmSessionManager.release(dmSession);
+    }
     if (validatedStartPaths.isEmpty()) {
       throw new IllegalStateException(
-          "Failed to validate documentum.src paths.");
+         "Failed to validate documentum.src paths.");
     }
   }
 
@@ -210,33 +231,29 @@ public class DocumentumAdaptor extends AbstractAdaptor {
 
   /**
    * Validate start paths and add the valid ones to validatedStartPaths list.
-   * 
-   * @throws DfException if the session can't be established to the repository.
    */
-  private void validateStartPaths() throws DfException {
-    IDfSession dmSession = dmSessionManager.getSession(docbase);
+  private void validateStartPaths(IDfSession dmSession) {
     List<String> validStartPaths = new ArrayList<String>(startPaths.size());
     for (String startPath : startPaths) {
       String documentumFolderPath = normalizePath(startPath);
       logger.log(Level.INFO, "Validating path {0}", documentumFolderPath);
-      IDfSysObject obj = null;
       try {
-        obj = (IDfSysObject) dmSession.getObjectByPath(documentumFolderPath);
+        IDfSysObject obj =
+            (IDfSysObject) dmSession.getObjectByPath(documentumFolderPath);
+        if (obj == null) {
+          logger.log(Level.WARNING, "Invalid start path {0}",
+              documentumFolderPath);
+        } else {
+          logger.log(Level.CONFIG, "Valid start path {0} id:{1}", new Object[] {
+              documentumFolderPath, obj.getObjectId().toString()});
+          validStartPaths.add(documentumFolderPath);
+        }
       } catch (DfException e) {
-        logger.log(Level.WARNING, "Error validating start path {0}",
-            e.getMessage());
-      }
-      if (obj == null) {
-        logger.log(Level.WARNING, "Invalid start path {0}",
-            documentumFolderPath);
-      } else {
-        logger.log(Level.CONFIG, "Valid start path {0} id:{1}", new Object[] {
-            documentumFolderPath, obj.getObjectId().toString()});
-        validStartPaths.add(documentumFolderPath);
+        logger.log(Level.WARNING, "Error validating start path {0}: {1}",
+            new Object[] { documentumFolderPath, e.getMessage() });
       }
     }
     validatedStartPaths.addAllAbsent(validStartPaths);
-    dmSessionManager.release(dmSession);
   }
 
   @VisibleForTesting
@@ -257,42 +274,59 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   public void getDocIds(DocIdPusher pusher) throws InterruptedException,
       IOException {
     logger.entering("DocumentumAdaptor", "getDocIds");
+    IDfSession dmSession;
     try {
-      validateStartPaths();
+      dmSession = dmSessionManager.getSession(docbase);
     } catch (DfException e) {
-      logger.log(Level.WARNING, "Error validating start paths");
+      throw new IOException("Failed to get Documentum Session", e);
     }
-    ArrayList<DocId> docIds = new ArrayList<DocId>();
-    for (String startPath : validatedStartPaths) {
-      docIds.add(docIdFromPath(startPath));
-    }
-    logger.log(Level.FINER, "DocumentumAdaptor DocIds: {0}", docIds);
-    pusher.pushDocIds(docIds);
     try {
-      pusher.pushNamedResources(getAllAcls(dmSessionManager,
-          localNamespace,
-          config.getValue("adaptor.namespace"),
-          config.getValue("documentum.windowsDomain")));
-    } catch (DfException e) {
-      throw new IOException("Error getting Acls", e);
+      // Push the start paths to initiate crawl.
+      validateStartPaths(dmSession);
+      ArrayList<DocId> docIds = new ArrayList<DocId>();
+      for (String startPath : validatedStartPaths) {
+        docIds.add(docIdFromPath(startPath));
+      }
+      logger.log(Level.FINER, "DocumentumAdaptor DocIds: {0}", docIds);
+      pusher.pushDocIds(docIds);
+
+      // Push the ACLs and Groups.
+      DfException savedException = null;
+      Principals principals = new Principals(dmSession, localNamespace,
+          globalNamespace, windowsDomain);
+      try {
+        pusher.pushNamedResources(
+            new DocumentumAcls(dmClientX, dmSession, principals).getAcls());
+      } catch (DfException e) {
+        savedException = e;
+      }
+      try {
+        pusher.pushGroupDefinitions(
+            getGroups(dmClientX, dmSession, principals, pushLocalGroupsOnly),
+            /* case sensitive */ true);
+      } catch (DfException e) {
+        if (savedException == null) {
+          savedException = e;
+        } else {
+          savedException.addSuppressed(e);
+        }
+      }
+      if (savedException != null) {
+        throw new IOException(savedException);
+      }
+    } finally {
+      dmSessionManager.release(dmSession);
     }
     logger.exiting("DocumentumAdaptor", "getDocIds");
   }
 
-  /** Return all Documentum ACL information in a map. */
+  /** Returns a map of groups and their members. */
   @VisibleForTesting
-  Map<DocId, Acl> getAllAcls(IDfSessionManager sessionManager,
-      String localNamespace, String globalNamespace, String windowsDomain)
+  Map<GroupPrincipal, Collection<Principal>> getGroups(IDfClientX dmClientX,
+      IDfSession session, Principals principals, boolean localGroupsOnly)
       throws DfException {
-    IDfSession dmSession = sessionManager.getSession(docbase);
-    try {
-      DocumentumAcls dctmAcls = new DocumentumAcls(dmClientX, dmSession,
-          new Principals(dmSession, localNamespace, globalNamespace,
-          windowsDomain));
-      return dctmAcls.getAcls();
-    } finally {
-      sessionManager.release(dmSession);
-    }
+    // STUB
+    return ImmutableMap.<GroupPrincipal, Collection<Principal>>of();
   }
 
   /** Gives the bytes of a document referenced with id. 
