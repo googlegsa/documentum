@@ -43,7 +43,7 @@ import javax.naming.ldap.Rdn;
 /**
  * Generates Principals for Documentum Users and Groups.
  */
-public class Principals {
+class Principals {
   private static Logger logger = Logger.getLogger(Principals.class.getName());
 
   private final IDfSession dmSession;
@@ -160,7 +160,6 @@ public class Principals {
     }
     return new LdapName(userDnDomain);
   }
-
 
   /**
    * Gets the leftmost DC from an {@code LdapName} of DC RDNs.

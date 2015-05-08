@@ -39,7 +39,7 @@ import java.util.logging.Logger;
 /**
  * Returns all Documentum ACLs in map with doc id as key and Acl as value.
  */
-public class DocumentumAcls {
+class DocumentumAcls {
   private static Logger logger =
       Logger.getLogger(DocumentumAcls.class.getName());
 
