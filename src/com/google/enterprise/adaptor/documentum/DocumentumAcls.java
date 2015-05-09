@@ -66,6 +66,7 @@ class DocumentumAcls {
   }
 
   private IDfQuery makeAclQuery() {
+    // TODO(jlacey): We don't need the ORDER BY clause.
     IDfQuery query = dmClientX.getQuery();
     query.setDQL("select r_object_id from dm_acl order by r_object_id");
     return query;
@@ -91,17 +92,7 @@ class DocumentumAcls {
       while (dmAclCollection.next()) {
         String objectId = dmAclCollection.getString("r_object_id");
         IDfACL dmAcl = (IDfACL) dmSession.getObject(new DfId(objectId));
-        Acl.Builder basicAclBuilder = getBasicAcl(dmAcl);
-
-        if (isRequiredGroupOrSet(dmAcl)) {
-          logger.log(Level.FINE,
-              "ACL {0} has required groups or required group set", objectId);
-          String parentAclId =
-              addRequiredGroupOrSetAclsToMap(dmAcl, objectId, aclMap);
-          basicAclBuilder.setInheritFrom(new DocId(parentAclId));
-        }
-
-        aclMap.put(new DocId(objectId), basicAclBuilder.build());
+        addAclChainToMap(dmAcl, objectId, aclMap);
       }
       return aclMap;
     } finally {
@@ -114,41 +105,24 @@ class DocumentumAcls {
   }
 
   /**
-   * Returns true if Acl permit type is required group or required group set.
-   *
-   * @param dmAcl Documentum ACL object.
-   * @return true if Acl permit type is required group or required group set.
-   * @throws DfException if error in getting accessor info.
-   */
-  private boolean isRequiredGroupOrSet(IDfACL dmAcl) throws DfException {
-    for (int i = 0; i < dmAcl.getAccessorCount(); i++) {
-      int permitType = dmAcl.getAccessorPermitType(i);
-      if (permitType == IDfPermitType.REQUIRED_GROUP
-          || permitType == IDfPermitType.REQUIRED_GROUP_SET) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  /**
-   * Populates the map with doc id and Acl for a Documentum ACL with
-   * required groups or required group sets.
+   * Adds all of the Adaptor Acls for the Documentum ACL to the map.
    *
    * @param dmAcl Documentum ACL object.
    * @param objectId Documentum ACL object id.
    * @param aclMap Map with doc id and acl.
-   * @return the doc ID of the first Adaptor Acl in the chain, which
-   *     the basic Acl will inherit from
    * @throws DfException if error in getting acl info.
    */
-  private String addRequiredGroupOrSetAclsToMap(IDfACL dmAcl,
-      String objectId, Map<DocId, Acl> aclMap) throws DfException {
+  private void addAclChainToMap(IDfACL dmAcl, String objectId,
+      Map<DocId, Acl> aclMap) throws DfException {
     List<String> requiredGroupSet = new ArrayList<String>();
     String parentAclId = null;
+    Set<Principal> permits = new HashSet<Principal>();
+    Set<Principal> denies = new HashSet<Principal>();
+
     for (int i = 0; i < dmAcl.getAccessorCount(); i++) {
       String accessorName = dmAcl.getAccessorName(i);
       int permitType = dmAcl.getAccessorPermitType(i);
+
       if (permitType == IDfPermitType.REQUIRED_GROUP) {
         String aclId = objectId + "_" + accessorName;
         Acl acl = getRequiredAcl(parentAclId, singletonList(accessorName));
@@ -156,6 +130,9 @@ class DocumentumAcls {
         parentAclId = aclId;
       } else if (permitType == IDfPermitType.REQUIRED_GROUP_SET) {
         requiredGroupSet.add(accessorName);
+      } else {
+        processBasicPermissions(accessorName, permitType,
+            dmAcl.getAccessorPermit(i), dmAcl.isGroup(i), permits, denies);
       }
     }
 
@@ -166,7 +143,8 @@ class DocumentumAcls {
       parentAclId = aclId;
     }
 
-    return parentAclId;
+    Acl acl = getBasicAcl(objectId, parentAclId, permits, denies);
+    aclMap.put(new DocId(objectId), acl);
   }
 
   /**
@@ -193,49 +171,71 @@ class DocumentumAcls {
   }
 
   /**
-   * Creates an Adaptor Acl.Builder for the basic permissions in the
-   * ACL object. Populates permits set with users and groups with READ
-   * permission. Populates denies set with users and groups with no
-   * READ permission.
-   * 
-   * @param dmAcl Documentum ACL object to be processed.
-   * @return Adaptor Acl.Builder object.
+   * Creates a principal for an ACL entry with basic permissions.
+   * Populates permits set with users and groups with READ permission.
+   * Populates denies set with users and groups with no READ
+   * permission.
+   *
+   * @param accessorName the ACL entry accessor name
+   * @param permitType the type of the ACL entry (required group,
+   *     access permit, etc.)
+   * @param accessorPermit the access permission of the ACL entry
+   * @param isGroup {@code true} iff the accessor is a group
+   * @param permits the set of permitted principals to populate
+   * @param denies the set of denied principals to populate
    * @throws DfException if error in getting user or group information.
    */
-  private Acl.Builder getBasicAcl(IDfACL dmAcl) throws DfException {
-    Set<Principal> permits = new HashSet<Principal>();
-    Set<Principal> denies = new HashSet<Principal>();
-
-    for (int i = 0; i < dmAcl.getAccessorCount(); i++) {
-      String accessorName = dmAcl.getAccessorName(i);
-      int permitType = dmAcl.getAccessorPermitType(i);
-      String principalName = principals.getPrincipalName(accessorName);
-      if (principalName == null) {
-        continue;
+  private void processBasicPermissions(String accessorName, int permitType,
+      int accessorPermit, boolean isGroup, Set<Principal> permits,
+      Set<Principal> denies) throws DfException {
+    // TODO(jlacey): We need to call this for required groups, too.
+    String principalName = principals.getPrincipalName(accessorName);
+    if (principalName == null) {
+      return;
+    }
+    if (permitType == IDfPermitType.ACCESS_RESTRICTION) {
+      if (accessorPermit <= IDfACL.DF_PERMIT_READ) {
+        denies.add(
+            principals.getPrincipal(accessorName, principalName, isGroup));
       }
-      if (permitType == IDfPermitType.ACCESS_RESTRICTION) {
-        if (dmAcl.getAccessorPermit(i) <= IDfACL.DF_PERMIT_READ) {
-          denies.add(principals.getPrincipal(accessorName, principalName,
-              dmAcl.isGroup(i)));
-        }
-      } else if (permitType == IDfPermitType.ACCESS_PERMIT) {
-        if (dmAcl.getAccessorPermit(i) >= IDfACL.DF_PERMIT_READ) {
-          if (accessorName.equalsIgnoreCase("dm_owner")
-              || accessorName.equalsIgnoreCase("dm_group")) {
-            // skip dm_owner and dm_group for now.
-            // TODO (Srinivas): Need to resolve these acls for
-            //      both allow and deny.
-            continue;
-          } else {
-            permits.add(principals.getPrincipal(accessorName, principalName,
-                dmAcl.isGroup(i)));
-          }
+    } else if (permitType == IDfPermitType.ACCESS_PERMIT) {
+      if (accessorPermit >= IDfACL.DF_PERMIT_READ) {
+        if (accessorName.equalsIgnoreCase("dm_owner")
+            || accessorName.equalsIgnoreCase("dm_group")) {
+          // skip dm_owner and dm_group for now.
+          // TODO (Srinivas): Need to resolve these acls for
+          //      both allow and deny.
+          return;
+        } else {
+          permits.add(
+              principals.getPrincipal(accessorName, principalName, isGroup));
         }
       }
     }
+  }
 
-    return new Acl.Builder().setPermits(permits).setDenies(denies)
+  /*
+   * Creates an Adaptor Acl for the basic permissions in the ACL
+   * object.
+   *
+   * @param objectId Documentum ACL object ID
+   * @param parentAclId the doc ID of the parent ACL in the chain
+   * @param permits the principals permitted access
+   * @param denies the principals denied access
+   * @return Adaptor Acl object
+   * @throws DfException if error in getting user or group information.
+   */
+  private Acl getBasicAcl(String objectId, String parentAclId,
+      Set<Principal> permits, Set<Principal> denies) throws DfException {
+    Acl.Builder builder = new Acl.Builder()
+        .setPermits(permits).setDenies(denies)
         .setEverythingCaseSensitive()
         .setInheritanceType(Acl.InheritanceType.PARENT_OVERRIDES);
+    if (parentAclId != null) {
+      logger.log(Level.FINE,
+          "ACL {0} has required groups or required group set", objectId);
+      builder.setInheritFrom(new DocId(parentAclId));
+    }
+    return builder.build();
   }
 }
