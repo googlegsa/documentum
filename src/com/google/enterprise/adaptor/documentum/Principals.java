@@ -77,8 +77,8 @@ class Principals {
       boolean isGroup) throws DfException {
     Principal principal;
     if (accessorName.equalsIgnoreCase("dm_world") || isGroup) {
-      principal =
-          new GroupPrincipal(principalName, getGroupNamespace(accessorName));
+      String namespace = getGroupNamespace(accessorName);
+      principal = new GroupPrincipal(principalName, namespace);
     } else {
       principal = new UserPrincipal(principalName, globalNamespace);
     }
@@ -198,7 +198,10 @@ class Principals {
         "dm_group where group_name = '" + singleQuoteEscapeString(groupName)
         + "'");
     if (groupObj == null) {
-      return null;
+      // An ACL or Group contains a non-existent group?
+      // Group lookup will not return such a group, and with it in
+      // the local namespace, neither should anyone else.
+      return localNamespace;
     } else if (Strings.isNullOrEmpty(groupObj.getGroupSource())) {
       logger.log(Level.FINER, "local namespace for group {0}", groupName);
       return localNamespace;

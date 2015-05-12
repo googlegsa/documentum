@@ -1999,7 +1999,7 @@ public class DocumentumAdaptorTest {
     AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
 
-    insertUsers("User1",  "User2", "User3", "User4", "User5", "User6", "User7");
+    insertUsers("User1", "User2", "User3", "User4", "User5", "User6", "User7");
     insertGroup("Group1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
     insertGroup("Group3", "User6", "User7");
@@ -2048,7 +2048,7 @@ public class DocumentumAdaptorTest {
     AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
 
-    insertUsers("User1",  "User2", "User3", "User4", "User5", "User6", "User7");
+    insertUsers("User1", "User2", "User3", "User4", "User5", "User6", "User7");
     insertGroup("Group1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
     insertGroup("Group3", "User6", "User7");
@@ -2121,7 +2121,7 @@ public class DocumentumAdaptorTest {
     AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
 
-    insertUsers("User1",  "User2", "User3", "User4", "User5", "User6", "User7");
+    insertUsers("User1", "User2", "User3", "User4", "User5", "User6", "User7");
     insertGroup("Group1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
     insertGroup("Group3", "User6", "User7");
@@ -2202,6 +2202,41 @@ public class DocumentumAdaptorTest {
         new GroupPrincipal("Group2", "localNS")), allowGroups4);
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "localNS")),
         denyGroups4);
+  }
+
+  // TODO(srinivas): we should check whether we have a test of non-existent
+  // users and groups in permits and denies.
+  @Test
+  public void testMissingRequiredGroup() throws Exception {
+    AclTestProxies proxyCls = new AclTestProxies();
+    Config config = getTestAdaptorConfig();
+
+    insertUsers("User1", "User2", "User3");
+    insertGroup("Group1", "User2", "User3");
+
+    createAcl("4501081f80000104");
+    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000104");
+    addAllowPermitToAcl(aclObj, "Group1", IDfACL.DF_PERMIT_READ);
+    addRequiredGroupToAcl(aclObj, "GroupNotExists");
+
+    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
+    assertEquals(2, namedResources.size());
+
+    // TODO(srinivas): non-existent groups should be dropped from the ACL?
+    Acl acl1 = namedResources.get(new DocId("4501081f80000104_GroupNotExists"));
+    assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
+    assertEquals(
+        ImmutableSet.of(new GroupPrincipal("GroupNotExists", "localNS")),
+        acl1.getPermitGroups());
+    assertEquals(ImmutableSet.of(), acl1.getDenyGroups());
+
+    Acl acl2 = namedResources.get(new DocId("4501081f80000104"));
+    assertEquals(new DocId("4501081f80000104_GroupNotExists"),
+        acl2.getInheritFrom());
+    assertEquals(InheritanceType.PARENT_OVERRIDES, acl2.getInheritanceType());
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS")),
+        acl2.getPermitGroups());
+    assertEquals(ImmutableSet.of(), acl2.getDenyGroups());
   }
 
   /* TODO(bmj): This should create the adaptor, init it with config, then call
