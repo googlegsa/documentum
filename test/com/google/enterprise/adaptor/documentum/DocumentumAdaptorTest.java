@@ -1463,9 +1463,9 @@ public class DocumentumAdaptorTest {
       }
 
       public IDfCollection execute(IDfSession session, int arg1)
-          throws SQLException {
+          throws DfException {
         return Proxies.newProxyInstance(IDfCollection.class,
-            new CollectionMock("r_object_id"));
+            new CollectionMock(query));
       }
     }
 
@@ -1473,32 +1473,42 @@ public class DocumentumAdaptorTest {
       final Statement stmt;
       final ResultSet rs;
 
-      public CollectionMock(String colNames) throws SQLException {
-        stmt = jdbcFixture.getConnection().createStatement();
-        rs = stmt.executeQuery("select distinct r_object_id from dm_acl");
-      }
-
-      public String getString(String colName) throws SQLException {
-        if ("r_object_id".equals(colName)) {
-          return rs.getString("r_object_id");
-        } else if ("object_name".equals(colName)) {
-          return rs.getString("object_name");
-        } else {
-          return null;
+      public CollectionMock(String query) throws DfException {
+        try {
+          stmt = jdbcFixture.getConnection().createStatement();
+          rs = stmt.executeQuery(query);
+        } catch (SQLException e) {
+          throw new DfException(e);
         }
       }
 
-      public boolean next() throws SQLException {
-        return rs.next();
+      public String getString(String colName) throws DfException {
+        try {
+          return rs.getString(colName);
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+
+      public boolean next() throws DfException {
+        try {
+          return rs.next();
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
       }
 
       public int getState() {
         return IDfCollection.DF_READY_STATE;
       }
 
-      public void close() throws SQLException {
-        rs.close();
-        stmt.close();
+      public void close() throws DfException {
+        try {
+          rs.close();
+          stmt.close();
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
       }
     }
 
@@ -1517,49 +1527,50 @@ public class DocumentumAdaptorTest {
             new ACLMock(id.toString()));
       }
 
-      public Object getObjectByQualification(String query) {
+      public Object getObjectByQualification(String query) throws DfException {
         if (Strings.isNullOrEmpty(query)) {
           return null;
-        } else {
-          if (query.startsWith("dm_user where user_name = '")) {
-            String userName =
-                query.substring("dm_user where user_name = '".length(),
-                    query.length() - 1);
-            return Proxies.newProxyInstance(IDfUser.class,
-                new UserMock(userName));
-          } else if (query.startsWith("dm_group where group_name = '")) {
-            String groupName =
-                query.substring("dm_group where group_name = '".length(),
-                    query.length() - 1);
-            return Proxies.newProxyInstance(IDfGroup.class,
-                new GroupMock(groupName));
-          } else {
-            return null;
+        }
+        try (Statement stmt = jdbcFixture.getConnection().createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT * FROM " + query)) {
+          if (rs.first()) {
+            if (query.toLowerCase().startsWith("dm_user ")) {
+              return Proxies.newProxyInstance(IDfUser.class, new UserMock(rs));
+            } else if (query.toLowerCase().startsWith("dm_group ")) {
+              return
+                  Proxies.newProxyInstance(IDfGroup.class, new GroupMock(rs));
+            }
           }
+          return null;
+        } catch (SQLException e) {
+          throw new DfException(e);
         }
       }
     }
 
     private class UserMock {
-      private String user;
+      private String loginName;
+      private String source;
+      private String ldapDn;
       private boolean isGroup;
 
-      public UserMock(String user) {
-        this.user = user;
-        // for an entry in dm_user table for groups
-        this.isGroup = user.startsWith("Group");
+      public UserMock(ResultSet rs) throws SQLException {
+        loginName = rs.getString("user_login_name");
+        source = rs.getString("user_source");
+        ldapDn = rs.getString("user_ldap_dn");
+        isGroup = rs.getBoolean("r_is_group");
       }
 
       public String getUserLoginName() {
-        return user;
+        return loginName;
       }
 
       public String getUserSourceAsString() {
-        return "";
+        return source;
       }
 
       public String getUserDistinguishedLDAPName() {
-        return "";
+        return ldapDn;
       }
 
       public boolean isGroup() {
@@ -1568,22 +1579,14 @@ public class DocumentumAdaptorTest {
     }
 
     private class GroupMock {
-      private String user;
+      private String source;
 
-      public GroupMock(String group) {
-        this.user = group;
-      }
-
-      public String getUserLoginName() {
-        return user;
+      public GroupMock(ResultSet rs) throws SQLException {
+        source = rs.getString("group_source");
       }
 
       public String getGroupSource() {
-        return "";
-      }
-
-      public boolean isGroup() {
-        return true;
+        return source;
       }
     }
 
@@ -1996,9 +1999,13 @@ public class DocumentumAdaptorTest {
     AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
 
+    insertUsers("User1",  "User2", "User3", "User4", "User5", "User6", "User7");
     insertGroup("Group1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
     insertGroup("Group3", "User6", "User7");
+    insertGroup("GroupSet1", "Group1", "Group2");
+    insertGroup("GroupSet2", "Group2", "Group3");
+   
     createAcl("4501081f80000103");
     AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000103");
     addAllowPermitToAcl(aclObj, "Group1", IDfACL.DF_PERMIT_READ);
@@ -2041,9 +2048,14 @@ public class DocumentumAdaptorTest {
     AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
 
+    insertUsers("User1",  "User2", "User3", "User4", "User5", "User6", "User7");
     insertGroup("Group1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
     insertGroup("Group3", "User6", "User7");
+    insertGroup("Group4", "User2", "User3");
+    insertGroup("Group5", "User4", "User5");
+    insertGroup("Group6", "User6", "User7");
+
     createAcl("4501081f80000104");
     AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000104");
     addAllowPermitToAcl(aclObj, "Group1", IDfACL.DF_PERMIT_READ);
@@ -2109,9 +2121,16 @@ public class DocumentumAdaptorTest {
     AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
 
+    insertUsers("User1",  "User2", "User3", "User4", "User5", "User6", "User7");
     insertGroup("Group1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
     insertGroup("Group3", "User6", "User7");
+    insertGroup("Group4", "User2", "User3");
+    insertGroup("Group5", "User4", "User5");
+    insertGroup("Group6", "User6", "User7");
+    insertGroup("GroupSet1", "Group1", "Group2");
+    insertGroup("GroupSet2", "Group5", "Group6");
+
     createAcl("4501081f80000105");
     AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000105");
     addAllowPermitToAcl(aclObj, "Group1", IDfACL.DF_PERMIT_READ);
