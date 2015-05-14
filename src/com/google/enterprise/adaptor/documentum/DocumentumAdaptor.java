@@ -21,7 +21,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.enterprise.adaptor.AbstractAdaptor;
-import com.google.enterprise.adaptor.Acl;
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
@@ -30,6 +29,7 @@ import com.google.enterprise.adaptor.DocIdPusher;
 import com.google.enterprise.adaptor.GroupPrincipal;
 import com.google.enterprise.adaptor.IOHelper;
 import com.google.enterprise.adaptor.InvalidConfigurationException;
+import com.google.enterprise.adaptor.PollingIncrementalLister;
 import com.google.enterprise.adaptor.Principal;
 import com.google.enterprise.adaptor.Request;
 import com.google.enterprise.adaptor.Response;
@@ -72,7 +72,8 @@ import java.util.regex.Pattern;
 /** Adaptor to feed Documentum repository content into a 
  *  Google Search Appliance.
  */
-public class DocumentumAdaptor extends AbstractAdaptor {
+public class DocumentumAdaptor extends AbstractAdaptor implements
+    PollingIncrementalLister {
   private static Logger logger =
       Logger.getLogger(DocumentumAdaptor.class.getName());
 
@@ -647,5 +648,28 @@ public class DocumentumAdaptor extends AbstractAdaptor {
     dmSessionManager.setIdentity(docbaseName, dmLoginInfo);
 
     return dmSessionManager;
+  }
+
+  @Override
+  public void getModifiedDocIds(DocIdPusher pusher) throws IOException,
+      InterruptedException {
+    pushAclUpdates(pusher);
+    pushDocumentUpdates(pusher);
+  }
+
+  /**
+   * Push ACL updates to GSA.
+   * @param pusher DocIdPusher.
+   */
+  private void pushAclUpdates(DocIdPusher pusher) {
+    // stub to handle ACL updates
+  }
+
+  /**
+   * Push Document updates to GSA.
+   * @param pusher DocIdPusher.
+   */
+  private void pushDocumentUpdates(DocIdPusher pusher) {
+    // stub to handle Document updates
   }
 }
