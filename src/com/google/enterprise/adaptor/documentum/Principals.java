@@ -76,7 +76,10 @@ class Principals {
   public Principal getPrincipal(String accessorName, String principalName,
       boolean isGroup) throws DfException {
     Principal principal;
-    if (accessorName.equalsIgnoreCase("dm_world") || isGroup) {
+    // special group local to repository
+    if (accessorName.equalsIgnoreCase("dm_world")) {
+      principal = new GroupPrincipal(principalName, localNamespace);
+    } else if (isGroup) {
       String namespace = getGroupNamespace(accessorName);
       principal = new GroupPrincipal(principalName, namespace);
     } else {
@@ -189,11 +192,6 @@ class Principals {
    * @throws DfException if error in getting group information.
    */
   private String getGroupNamespace(String groupName) throws DfException {
-    // special group local to repository
-    if (groupName.equalsIgnoreCase("dm_world")) {
-      return localNamespace;
-    }
-
     IDfGroup groupObj = (IDfGroup) dmSession.getObjectByQualification(
         "dm_group where group_name = '" + singleQuoteEscapeString(groupName)
         + "'");

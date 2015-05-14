@@ -18,10 +18,12 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.*;
 
 import com.google.common.base.Joiner;
+import com.google.common.base.Predicate;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Multimaps;
 import com.google.common.collect.TreeMultimap;
@@ -2342,14 +2344,25 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
-  public void testGetGroupsNoGroups() throws Exception {
+  public void testGetGroupsDmWorldOnly() throws Exception {
     GroupTestProxies proxyCls = new GroupTestProxies();
     Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2", "User3", "User4", "User5");
+
+    // The only group should be the virtual group, dm_world, which consists
+    // of all users.
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+        expected = ImmutableMap.of(new GroupPrincipal("dm_world", "localNS"),
+            ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
+                            new UserPrincipal("User2", "globalNS"),
+                            new UserPrincipal("User3", "globalNS"),
+                            new UserPrincipal("User4", "globalNS"),
+                            new UserPrincipal("User5", "globalNS")));
+
     Map<GroupPrincipal, Collection<Principal>> groups =
         getGroups(proxyCls, config);
-    assertNotNull(groups);
-    assertTrue(groups.toString(), groups.isEmpty());
+
+    assertEquals(expected, groups);
   }
 
   @Test
@@ -2373,7 +2386,7 @@ public class DocumentumAdaptorTest {
     Map<GroupPrincipal, Collection<Principal>> groups =
         getGroups(proxyCls, config);
 
-    assertEquals(expected, groups);
+    assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
@@ -2395,7 +2408,7 @@ public class DocumentumAdaptorTest {
     Map<GroupPrincipal, Collection<Principal>> groups =
         getGroups(proxyCls, config);
 
-    assertEquals(expected, groups);
+    assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
@@ -2416,7 +2429,7 @@ public class DocumentumAdaptorTest {
     Map<GroupPrincipal, Collection<Principal>> groups =
         getGroups(proxyCls, config);
 
-    assertEquals(expected, groups);
+    assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
@@ -2440,7 +2453,7 @@ public class DocumentumAdaptorTest {
     Map<GroupPrincipal, Collection<Principal>> groups =
         getGroups(proxyCls, config);
 
-    assertEquals(expected, groups);
+    assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
@@ -2461,7 +2474,7 @@ public class DocumentumAdaptorTest {
     Map<GroupPrincipal, Collection<Principal>> groups =
         getGroups(proxyCls, config);
 
-    assertEquals(expected, groups);
+    assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
@@ -2484,7 +2497,7 @@ public class DocumentumAdaptorTest {
     Map<GroupPrincipal, Collection<Principal>> groups =
         getGroups(proxyCls, config);
 
-    assertEquals(expected, groups);
+    assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
@@ -2493,8 +2506,8 @@ public class DocumentumAdaptorTest {
     Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2");
     jdbcFixture.executeUpdate("insert into dm_user(user_name, user_login_name, "
-        + "user_source, user_ldap_dn) values('User3', 'User3', 'LDAP', "
-        + "'cn=User3,dc=test,dc=com')");
+        + "user_source, user_ldap_dn, r_is_group) values('User3', 'User3', "
+        + "'LDAP', 'cn=User3,dc=test,dc=com', TRUE)");
     insertGroup("Group1", "User1", "User2", "User3");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
@@ -2506,7 +2519,7 @@ public class DocumentumAdaptorTest {
     Map<GroupPrincipal, Collection<Principal>> groups =
         getGroups(proxyCls, config);
 
-    assertEquals(expected, groups);
+    assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
@@ -2530,7 +2543,7 @@ public class DocumentumAdaptorTest {
     Map<GroupPrincipal, Collection<Principal>> groups =
         getGroups(proxyCls, config);
 
-    assertEquals(expected, groups);
+    assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
@@ -2555,7 +2568,7 @@ public class DocumentumAdaptorTest {
     Map<GroupPrincipal, Collection<Principal>> groups =
         getGroups(proxyCls, config);
 
-    assertEquals(expected, groups);
+    assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
@@ -2579,7 +2592,7 @@ public class DocumentumAdaptorTest {
     Map<GroupPrincipal, Collection<Principal>> groups =
         getGroups(proxyCls, config);
 
-    assertEquals(expected, groups);
+    assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
@@ -2603,7 +2616,7 @@ public class DocumentumAdaptorTest {
     Map<GroupPrincipal, Collection<Principal>> groups =
         getGroups(proxyCls, config);
 
-    assertEquals(expected, groups);
+    assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
@@ -2624,7 +2637,16 @@ public class DocumentumAdaptorTest {
     Map<GroupPrincipal, Collection<Principal>> groups =
         getGroups(proxyCls, config);
 
-    assertEquals(expected, groups);
+    assertEquals(expected, filterDmWorld(groups));
+  }
+
+  /* Filters the 'dm_world' group out of the map of groups. */
+  private <T> Map<GroupPrincipal, T> filterDmWorld(Map<GroupPrincipal, T> map) {
+    return Maps.filterKeys(map, new Predicate<GroupPrincipal>() {
+        public boolean apply(GroupPrincipal principal) {
+          return !"dm_world".equals(principal.getName());
+        }
+      });
   }
 
   private void insertLdapGroup(String groupName, String... members)

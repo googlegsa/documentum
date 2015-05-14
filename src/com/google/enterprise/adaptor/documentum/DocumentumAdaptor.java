@@ -87,6 +87,12 @@ public class DocumentumAdaptor extends AbstractAdaptor {
   private static final String LOCAL_GROUPS_QUERY = ALL_GROUPS_QUERY
       + " WHERE group_source IS NULL OR group_source <> 'LDAP'";
 
+  /** DQL Query to fetch all users for dm_world magic group. */
+  // TODO(bmj): Filter out disabled users (and do so in getPrincipal, too),
+  // with user_state = 0 "indicating a user who can log in".
+  private static final String ALL_USERS_QUERY = "SELECT user_name FROM dm_user"
+      + " WHERE r_is_group IS NULL OR r_is_group IS FALSE";
+
   private final IDfClientX dmClientX;
   private List<String> startPaths;
   private CopyOnWriteArrayList<String> validatedStartPaths =
@@ -357,6 +363,10 @@ public class DocumentumAdaptor extends AbstractAdaptor {
           groups.put(groupPrincipal, members);
         }
       }
+      // Add special dm_world group, which is all users.
+      GroupPrincipal groupPrincipal = (GroupPrincipal)
+          principals.getPrincipal("dm_world", "dm_world", true);
+      groups.put(groupPrincipal, getDmWorldPrincipals(session, principals));
       return groups.build();
     } finally {
       result.close();
@@ -375,6 +385,27 @@ public class DocumentumAdaptor extends AbstractAdaptor {
       if (principalName != null) {
         members.add(principals.getPrincipal(member, principalName, isGroup));
       }
+    }
+  }
+
+  /** Adds Principals for all users in special dm_world group to members. */
+  private Collection<Principal> getDmWorldPrincipals(IDfSession session,
+      Principals principals) throws DfException {
+    IDfQuery query = dmClientX.getQuery();
+    query.setDQL(ALL_USERS_QUERY);
+    IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
+    try {
+      ImmutableSet.Builder<Principal> members = ImmutableSet.builder();
+      while (result.next()) {
+        String member = result.getString("user_name");
+        String principalName = principals.getPrincipalName(member);
+        if (principalName != null) {
+          members.add(principals.getPrincipal(member, principalName, false));
+        }
+      }      
+      return members.build();
+    } finally {
+      result.close();
     }
   }
 
