@@ -88,8 +88,8 @@ import java.util.Vector;
 public class DocumentumAdaptorTest {
 
   private static final String CREATE_TABLE_GROUP = "create table dm_group "
-      + "(group_name varchar, group_source varchar, groups_names varchar, "
-      + "users_names varchar)";
+      + "(r_object_id varchar, group_name varchar, group_source varchar, "
+      + "groups_names varchar, users_names varchar)";
 
   private static final String CREATE_TABLE_USER = "create table dm_user "
       + "(user_name varchar primary key, user_login_name varchar, "

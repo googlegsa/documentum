@@ -82,7 +82,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
   /** DQL Query to fetch all groups and their members. */
   private static final String ALL_GROUPS_QUERY = 
-      "SELECT group_name, groups_names, users_names FROM dm_group";
+      "SELECT r_object_id, group_name, groups_names, users_names FROM dm_group";
 
   /** DQL Query to fetch only the local groups and their members. */
   private static final String LOCAL_GROUPS_QUERY = ALL_GROUPS_QUERY
@@ -92,7 +92,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   // TODO(bmj): Filter out disabled users (and do so in getPrincipal, too),
   // with user_state = 0 "indicating a user who can log in".
   private static final String ALL_USERS_QUERY = "SELECT user_name FROM dm_user"
-      + " WHERE r_is_group IS NULL OR r_is_group IS FALSE";
+      + " WHERE r_is_group IS NULL OR r_is_group = FALSE";
 
   private final IDfClientX dmClientX;
   private List<String> startPaths;
