@@ -21,6 +21,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.enterprise.adaptor.AbstractAdaptor;
+import com.google.enterprise.adaptor.Acl;
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
@@ -653,16 +654,36 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   @Override
   public void getModifiedDocIds(DocIdPusher pusher) throws IOException,
       InterruptedException {
+    logger.entering("DocumentumAdaptor", "getDocIds");
     pushAclUpdates(pusher);
     pushDocumentUpdates(pusher);
+    logger.exiting("DocumentumAdaptor", "getDocIds");
   }
 
   /**
    * Push ACL updates to GSA.
+   *
    * @param pusher DocIdPusher.
+   * @throws InterruptedException if pusher is interrupted.
+   * @throws IOException if error in getting ACL information.
    */
-  private void pushAclUpdates(DocIdPusher pusher) {
-    // stub to handle ACL updates
+  private void pushAclUpdates(DocIdPusher pusher) throws InterruptedException,
+      IOException {
+    logger.log(Level.INFO, "pushAclUpdates");
+    IDfSession dmSession = null;
+    try {
+      dmSession = dmSessionManager.getSession(docbase);
+      DocumentumAcls dctmAcls =
+          new DocumentumAcls(dmClientX, dmSession, new Principals(dmSession,
+              localNamespace, config.getValue("adaptor.namespace"),
+              config.getValue("documentum.windowsDomain")));
+      Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls();
+      pusher.pushNamedResources(aclMap);
+    } catch (DfException e) {
+      throw new IOException("Error getting Acls", e);
+    } finally {
+      dmSessionManager.release(dmSession);
+    }
   }
 
   /**

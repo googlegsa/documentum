@@ -72,8 +72,10 @@ import java.net.URI;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Calendar;
 import java.util.Collection;
 import java.util.Enumeration;
 import java.util.HashMap;
@@ -99,12 +101,17 @@ public class DocumentumAdaptorTest {
       + "(r_object_id varchar, r_accessor_name varchar, "
       + "r_accessor_permit int, r_permit_type int, r_is_group boolean)";
 
+  private static final String CREATE_TABLE_AUDITTRAIL_ACL =
+      "create table dm_audittrail_acl "
+      + "(r_object_id varchar, chronicle_id varchar, audited_obj_id varchar, "
+      + "event_name varchar, time_stamp_utc timestamp)";
+
   private JdbcFixture jdbcFixture = new JdbcFixture();
 
   @Before
   public void setUp() throws Exception {
     jdbcFixture.executeUpdate(CREATE_TABLE_GROUP, CREATE_TABLE_USER,
-        CREATE_TABLE_ACL);
+        CREATE_TABLE_ACL, CREATE_TABLE_AUDITTRAIL_ACL);
   }
 
   @After
@@ -2690,5 +2697,390 @@ public class DocumentumAdaptorTest {
     } finally {
       proxyCls.sessionManager.release(session);
     }
+  }
+
+
+  /* Mock proxy classes for testing ACL Updates */
+  private class AclUpdateTestProxies {
+    IDfSessionManager sessionManager = Proxies.newProxyInstance(
+        IDfSessionManager.class, new SessionManagerMock());
+
+    public IDfClientX getProxyClientX() {
+      return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
+    }
+
+    private class ClientXMock {
+      public IDfQuery getQuery() {
+        return Proxies.newProxyInstance(IDfQuery.class, new QueryMock());
+      }
+    }
+
+    private class QueryMock {
+      private String query;
+
+      public void setDQL(String query) {
+        this.query = query;
+      }
+
+      public IDfCollection execute(IDfSession session, int arg1)
+          throws SQLException {
+        return Proxies.newProxyInstance(IDfCollection.class,
+            new CollectionMock(query));
+      }
+    }
+
+    private class CollectionMock {
+      Statement stmt;
+      ResultSet rs;
+
+      public CollectionMock(String query) throws SQLException {
+        stmt = jdbcFixture.getConnection().createStatement();
+        query = query.replace("DATETOSTRING(time_stamp_utc, "
+            + "'yyyy-mm-dd hh:mi:ss') as time_stamp_utc_str",
+            "time_stamp_utc as time_stamp_utc_str");
+        query = query.replace("date", "convert(parseDateTime");
+        query = query.replace("'yyyy-mm-dd hh:mi:ss')", "'"
+            + DocumentumAcls.DATE_FORMAT + "'), timestamp)");
+        rs = stmt.executeQuery(query);
+      }
+
+      public String getString(String colName) throws SQLException {
+        if (colName.equals("time_stamp_utc_str")) {
+          colName = "time_stamp_utc";
+        }
+        return rs.getString(colName);
+      }
+
+      public boolean next() throws SQLException {
+        return rs.next();
+      }
+
+      public int getState() {
+        return IDfCollection.DF_READY_STATE;
+      }
+
+      public void close() throws SQLException {
+        rs.close();
+        stmt.close();
+      }
+    }
+
+    private class SessionManagerMock {
+      public IDfSession getSession(String docbaseName) {
+        return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
+      }
+
+      public void release(IDfSession session) {
+      }
+    }
+
+    private class SessionMock {
+      public IDfACL getObject(IDfId id) {
+        return Proxies.newProxyInstance(IDfACL.class,
+            new ACLMock(id.toString()));
+      }
+
+      public Object getObjectByQualification(String query) throws DfException {
+        if (Strings.isNullOrEmpty(query)) {
+          return null;
+        }
+        try (Statement stmt = jdbcFixture.getConnection().createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT * FROM " + query)) {
+          if (rs.first()) {
+            if (query.toLowerCase().startsWith("dm_user ")) {
+              return Proxies.newProxyInstance(IDfUser.class, new UserMock(rs));
+            } else if (query.toLowerCase().startsWith("dm_group ")) {
+              return
+                  Proxies.newProxyInstance(IDfGroup.class, new GroupMock(rs));
+            }
+          }
+          return null;
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+    }
+
+    private class UserMock {
+      private String loginName;
+      private String source;
+      private String ldapDn;
+      private boolean isGroup;
+
+      public UserMock(ResultSet rs) throws SQLException {
+        loginName = rs.getString("user_login_name");
+        source = rs.getString("user_source");
+        ldapDn = rs.getString("user_ldap_dn");
+        isGroup = rs.getBoolean("r_is_group");
+      }
+
+      public String getUserLoginName() {
+        return loginName;
+      }
+
+      public String getUserSourceAsString() {
+        return source;
+      }
+
+      public String getUserDistinguishedLDAPName() {
+        return ldapDn;
+      }
+
+      public boolean isGroup() {
+        return isGroup;
+      }
+    }
+
+    private class GroupMock {
+      private String source;
+
+      public GroupMock(ResultSet rs) throws SQLException {
+        source = rs.getString("group_source");
+      }
+
+      public String getGroupSource() {
+        return source;
+      }
+    }
+
+    private class AccessorInfo {
+      String name;
+      int permitType;
+      int permit;
+      boolean isGroup;
+
+      AccessorInfo(String name, int permitType, int permit, boolean isGroup) {
+        this.name = name;
+        this.permitType = permitType;
+        this.permit = permit;
+        this.isGroup = isGroup;
+      }
+
+      String getName() {
+        return name;
+      }
+
+      int getPermitType() {
+        return permitType;
+      }
+
+      int getPermit() {
+        return permit;
+      }
+
+      boolean isGroup() {
+        return isGroup;
+      }
+    }
+
+    public class ACLMock {
+      private String id;
+      List<AccessorInfo> accessorList = new ArrayList<AccessorInfo>();
+
+      public ACLMock(String id) {
+        this.id = id;
+        try {
+          getAccessorInfo();
+        } catch (SQLException e) {
+          e.printStackTrace();
+        }
+      }
+
+      private void getAccessorInfo() throws SQLException {
+        Statement stmt = null;
+        ResultSet rs = null;
+        try {
+          stmt = jdbcFixture.getConnection().createStatement();
+          rs = stmt.executeQuery("select r_accessor_name,  r_accessor_permit, "
+              + "r_permit_type, r_is_group from dm_acl "
+              + "where r_object_id = '" + id + "'");
+          while (rs.next()) {
+            String accessorName = rs.getString("r_accessor_name");
+            int accessorPermit = rs.getInt("r_accessor_permit");
+            int accessorPermitType = rs.getInt("r_permit_type");
+            boolean isGroup = rs.getBoolean("r_is_group");
+
+            if (!Strings.isNullOrEmpty(accessorName)) {
+              accessorList.add(new AccessorInfo(accessorName,
+                  accessorPermitType, accessorPermit, isGroup));
+            }
+          }
+        } finally {
+          rs.close();
+          stmt.close();
+        }
+      }
+
+      public int getAccessorCount() {
+        return accessorList.size();
+      }
+
+      public String getAccessorName(int n) {
+        return accessorList.get(n).getName();
+      }
+
+      public int getAccessorPermitType(int n) {
+        return accessorList.get(n).getPermitType();
+      }
+
+      public int getAccessorPermit(int n) {
+        return accessorList.get(n).getPermit();
+      }
+
+      public boolean isGroup(int n) {
+        return accessorList.get(n).isGroup();
+      }
+
+      private boolean isAccessorGroup(String accessorName) throws SQLException {
+        Statement stmt = null;
+        ResultSet rs = null;
+        try {
+          stmt = jdbcFixture.getConnection().createStatement();
+          rs = stmt.executeQuery("select r_is_group from dm_user"
+              + " where user_name = '" + accessorName + "'");
+          if (rs.next()) {
+            return rs.getBoolean(1);
+          }
+        } finally {
+          rs.close();
+          stmt.close();
+        }
+        return false;
+      }
+
+      void grantPermit(IDfPermit permit) throws SQLException {
+        jdbcFixture.executeUpdate(String.format(
+            "insert into dm_acl(r_object_id, r_accessor_name, "
+                + "r_accessor_permit, r_permit_type, r_is_group) values("
+                + "'%s', '%s', '%s', '%s', '%s')",
+            id, permit.getAccessorName(), permit.getPermitValueInt(),
+            permit.getPermitType(), isAccessorGroup(permit.getAccessorName())));
+
+        accessorList.add(new AccessorInfo(permit.getAccessorName(),
+            permit.getPermitType(), permit.getPermitValueInt(),
+            isAccessorGroup(permit.getAccessorName())));
+      }
+    }
+  }
+
+  private void insertAclAudit(String id, String chronicleId, String auditObjId,
+      String eventName, String date) throws SQLException {
+    jdbcFixture.executeUpdate(String.format(
+        "insert into dm_audittrail_acl(r_object_id, chronicle_id, "
+            + "audited_obj_id, event_name, time_stamp_utc) "
+            + "values('%s', '%s', '%s', '%s', convert(parseDateTime('%s', "
+            + "'yyyy-MM-dd hh:mm:ss'), timestamp))",
+            id, chronicleId, auditObjId, eventName, date));
+  }
+
+  private DocumentumAcls getDocumentumAcls() throws DfException {
+    AclUpdateTestProxies proxyCls = new AclUpdateTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+    Config config = getTestAdaptorConfig();
+    IDfSession session = proxyCls.sessionManager.getSession("test");
+    DocumentumAcls dctmAcls =
+        new DocumentumAcls(proxyCls.getProxyClientX(), session, new Principals(
+            session, "localNS", config.getValue("adaptor.namespace"),
+            config.getValue("documentum.windowsDomain")));
+    return dctmAcls;
+  }
+
+  @Test
+  public void testUpdateAcls() throws DfException, InterruptedException,
+      SQLException {
+    createAcl("4501081f80000100");
+    createAcl("4501081f80000101");
+    createAcl("4501081f80000102");
+    String dateStr = getDateString(5);
+    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
+    insertAclAudit("125", "236", "4501081f80000102", "dm_destroy", dateStr);
+
+    Map<DocId, Acl> aclMap = getDocumentumAcls().getUpdateAcls();
+    assertEquals(3, aclMap.size());
+    assertEquals( ImmutableSet.of(
+        new DocId("4501081f80000100"),
+        new DocId("4501081f80000101"),
+        new DocId("4501081f80000102")), aclMap.keySet());
+
+    Acl acl = aclMap.get(new DocId("4501081f80000100"));
+    assertTrue(acl.getPermitUsers().isEmpty());
+  }
+
+  @Test
+  public void testUpdateAclsWithSameChronicleId() throws DfException,
+      InterruptedException, SQLException {
+    createAcl("4501081f80000100");
+    createAcl("4501081f80000101");
+    createAcl("4501081f80000102");
+    String dateStr = getDateString(6);
+    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "234", "4501081f80000101", "dm_saveasnew", dateStr);
+    insertAclAudit("125", "234", "4501081f80000102", "dm_destroy", dateStr);
+
+    Map<DocId, Acl> aclMap = getDocumentumAcls().getUpdateAcls();
+    assertEquals(1, aclMap.size());
+    assertEquals(ImmutableSet.of(new DocId("4501081f80000100")),
+        aclMap.keySet());
+  }
+
+  @Test
+  public void testPreviouslyUpdatedAcls() throws DfException,
+      InterruptedException, SQLException {
+    createAcl("4501081f80000100");
+    createAcl("4501081f80000101");
+    createAcl("4501081f80000102");
+    String dateStr = getDateString(-10);
+    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
+    insertAclAudit("125", "236", "4501081f80000102", "dm_destroy", dateStr);
+
+    Map<DocId, Acl> aclMap = getDocumentumAcls().getUpdateAcls();
+    assertEquals(0, aclMap.size());
+  }
+
+  @Test
+  public void testMultiUpdateAcls() throws DfException, InterruptedException,
+      SQLException {
+    DocumentumAcls dctmAcls = getDocumentumAcls();
+
+    createAcl("4501081f80000100");
+    createAcl("4501081f80000101");
+    createAcl("4501081f80000102");
+    String dateStr = getDateString(10);
+    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
+    insertAclAudit("125", "236", "4501081f80000102", "dm_saveasnew", dateStr);
+
+    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls();
+    assertEquals(3, aclMap.size());
+    assertEquals( ImmutableSet.of(
+        new DocId("4501081f80000100"),
+        new DocId("4501081f80000101"),
+        new DocId("4501081f80000102")), aclMap.keySet());
+
+    dateStr = getDateString(15);
+    insertAclAudit("126", "237", "4501081f80000103", "dm_saveasnew", dateStr);
+    insertAclAudit("127", "238", "4501081f80000104", "dm_destroy", dateStr);
+
+    aclMap = dctmAcls.getUpdateAcls();
+    assertEquals(2, aclMap.size());
+    assertEquals(ImmutableSet.of(
+        new DocId("4501081f80000103"), 
+        new DocId("4501081f80000104")), aclMap.keySet());
+  }
+
+  /**
+   * Returns date string with minutes added to current time.
+   *
+   * @param min minutes to add.
+   * @return date in string format.
+   */
+  private String getDateString(int min) {
+    SimpleDateFormat format = new SimpleDateFormat(DocumentumAcls.DATE_FORMAT);
+    Calendar calendar = Calendar.getInstance();
+    calendar.add(Calendar.MINUTE, min);
+    return format.format(calendar.getTime());
   }
 }
