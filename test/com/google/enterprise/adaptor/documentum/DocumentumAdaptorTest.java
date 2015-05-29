@@ -2735,19 +2735,13 @@ public class DocumentumAdaptorTest {
 
       public CollectionMock(String query) throws SQLException {
         stmt = jdbcFixture.getConnection().createStatement();
-        query = query.replace("DATETOSTRING(time_stamp_utc, "
-            + "'yyyy-mm-dd hh:mi:ss') as time_stamp_utc_str",
-            "time_stamp_utc as time_stamp_utc_str");
-        query = query.replace("date", "convert(parseDateTime");
-        query = query.replace("'yyyy-mm-dd hh:mi:ss')", "'"
-            + DocumentumAcls.DATE_FORMAT + "'), timestamp)");
+        query = query.replace("DATETOSTRING", "FORMATDATETIME")
+            .replace("date(", "parseDateTime(")
+            .replace("yyyy-mm-dd hh:mi:ss", DocumentumAcls.DATE_FORMAT);
         rs = stmt.executeQuery(query);
       }
 
       public String getString(String colName) throws SQLException {
-        if (colName.equals("time_stamp_utc_str")) {
-          colName = "time_stamp_utc";
-        }
         return rs.getString(colName);
       }
 
@@ -2987,19 +2981,17 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
-  public void testUpdateAcls() throws DfException, InterruptedException,
-      SQLException {
+  public void testUpdateAcls() throws Exception {
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     createAcl("4501081f80000102");
-    String dateStr = getDateString(5);
+    String dateStr = getNowPlusMinutes(5);
     insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
     insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "236", "4501081f80000102", "dm_destroy", dateStr);
 
     Map<DocId, Acl> aclMap = getDocumentumAcls().getUpdateAcls();
-    assertEquals(3, aclMap.size());
-    assertEquals( ImmutableSet.of(
+    assertEquals(ImmutableSet.of(
         new DocId("4501081f80000100"),
         new DocId("4501081f80000101"),
         new DocId("4501081f80000102")), aclMap.keySet());
@@ -3009,78 +3001,91 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
-  public void testUpdateAclsWithSameChronicleId() throws DfException,
-      InterruptedException, SQLException {
+  public void testUpdateAclsWithSameChronicleId() throws Exception {
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     createAcl("4501081f80000102");
-    String dateStr = getDateString(6);
+    String dateStr = getNowPlusMinutes(6);
     insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
     insertAclAudit("124", "234", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "234", "4501081f80000102", "dm_destroy", dateStr);
 
     Map<DocId, Acl> aclMap = getDocumentumAcls().getUpdateAcls();
-    assertEquals(1, aclMap.size());
     assertEquals(ImmutableSet.of(new DocId("4501081f80000100")),
         aclMap.keySet());
   }
 
   @Test
-  public void testPreviouslyUpdatedAcls() throws DfException,
-      InterruptedException, SQLException {
+  public void testPreviouslyUpdatedAcls() throws Exception {
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     createAcl("4501081f80000102");
-    String dateStr = getDateString(-10);
+    String dateStr = getNowPlusMinutes(-10);
     insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
     insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "236", "4501081f80000102", "dm_destroy", dateStr);
 
     Map<DocId, Acl> aclMap = getDocumentumAcls().getUpdateAcls();
-    assertEquals(0, aclMap.size());
+    assertEquals(ImmutableMap.of(), aclMap);
   }
 
   @Test
-  public void testMultiUpdateAcls() throws DfException, InterruptedException,
-      SQLException {
+  public void testMultiUpdateAcls() throws Exception {
     DocumentumAcls dctmAcls = getDocumentumAcls();
 
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     createAcl("4501081f80000102");
-    String dateStr = getDateString(10);
+    String dateStr = getNowPlusMinutes(10);
     insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
     insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "236", "4501081f80000102", "dm_saveasnew", dateStr);
 
     Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls();
-    assertEquals(3, aclMap.size());
-    assertEquals( ImmutableSet.of(
+    assertEquals(ImmutableSet.of(
         new DocId("4501081f80000100"),
         new DocId("4501081f80000101"),
         new DocId("4501081f80000102")), aclMap.keySet());
 
-    dateStr = getDateString(15);
+    dateStr = getNowPlusMinutes(15);
     insertAclAudit("126", "237", "4501081f80000103", "dm_saveasnew", dateStr);
     insertAclAudit("127", "238", "4501081f80000104", "dm_destroy", dateStr);
 
     aclMap = dctmAcls.getUpdateAcls();
-    assertEquals(2, aclMap.size());
     assertEquals(ImmutableSet.of(
         new DocId("4501081f80000103"), 
         new DocId("4501081f80000104")), aclMap.keySet());
   }
 
+  @Test
+  public void testMultiUpdateAclsWithNoResults() throws Exception {
+    DocumentumAcls dctmAcls = getDocumentumAcls();
+
+    createAcl("4501081f80000106");
+    createAcl("4501081f80000107");
+    String dateStr = getNowPlusMinutes(20);
+    insertAclAudit("128", "234", "4501081f80000106", "dm_saveasnew", dateStr);
+    insertAclAudit("129", "235", "4501081f80000107", "dm_saveasnew", dateStr);
+
+    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls();
+    assertEquals(ImmutableSet.of(
+        new DocId("4501081f80000106"),
+        new DocId("4501081f80000107")), aclMap.keySet());
+
+    aclMap = dctmAcls.getUpdateAcls();
+    assertEquals(ImmutableSet.of(), aclMap.keySet());
+  }
+
   /**
    * Returns date string with minutes added to current time.
    *
-   * @param min minutes to add.
+   * @param minutes minutes to add.
    * @return date in string format.
    */
-  private String getDateString(int min) {
+  private String getNowPlusMinutes(int minutes) {
     SimpleDateFormat format = new SimpleDateFormat(DocumentumAcls.DATE_FORMAT);
     Calendar calendar = Calendar.getInstance();
-    calendar.add(Calendar.MINUTE, min);
+    calendar.add(Calendar.MINUTE, minutes);
     return format.format(calendar.getTime());
   }
 }

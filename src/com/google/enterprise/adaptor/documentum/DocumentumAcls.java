@@ -16,6 +16,7 @@ package com.google.enterprise.adaptor.documentum;
 
 import static java.util.Collections.singletonList;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.enterprise.adaptor.Acl;
@@ -55,14 +56,15 @@ class DocumentumAcls {
   private static Logger logger =
       Logger.getLogger(DocumentumAcls.class.getName());
 
+  @VisibleForTesting
   static final String DATE_FORMAT = "yyyy-MM-dd HH:mm:ss";
+
+  private static String aclModifiedDate;
+  private static String aclModifyId;
 
   private final IDfClientX dmClientX;
   private final IDfSession dmSession;
   private final Principals principals;
-
-  private static String aclModifiedDate;
-  private static String aclModifyId;
 
   DocumentumAcls(IDfClientX dmClientX, IDfSession dmSession,
       Principals principals) {
@@ -78,6 +80,39 @@ class DocumentumAcls {
     // TODO(jlacey): We don't need the ORDER BY clause.
     IDfQuery query = dmClientX.getQuery();
     query.setDQL("select r_object_id from dm_acl order by r_object_id");
+    return query;
+  }
+
+  private IDfQuery makeUpdateAclQuery() {
+    StringBuilder queryStr = new StringBuilder(
+        "select r_object_id, chronicle_id, audited_obj_id, event_name, "
+        + "time_stamp_utc, "
+        + "DATETOSTRING(time_stamp_utc, 'yyyy-mm-dd hh:mi:ss') "
+        + "as time_stamp_utc_str "
+        + "from dm_audittrail_acl "
+        + "where (event_name='dm_save' or event_name='dm_saveasnew' "
+        + "or event_name='dm_destroy')");
+
+    String whereBoundedClause = " and ((time_stamp_utc = "
+        + "date(''{0}'',''yyyy-mm-dd hh:mi:ss'') and (r_object_id > ''{1}'')) "
+        + "OR (time_stamp_utc > date(''{0}'',''yyyy-mm-dd hh:mi:ss'')))";
+
+    if (Strings.isNullOrEmpty(aclModifiedDate)) {
+      aclModifiedDate = new SimpleDateFormat(DATE_FORMAT).format(new Date());
+      logger.log(Level.FINE, "Setting ModifiedDate to now: {0}",
+          aclModifiedDate);
+      aclModifyId = "0";
+    }
+
+    // TODO (Srinivas): Adjust modified date to server TZ offset
+    Object[] arguments = {aclModifiedDate, aclModifyId};
+    queryStr.append(MessageFormat.format(whereBoundedClause, arguments));
+    queryStr.append(" order by time_stamp_utc, r_object_id, event_name");
+    logger.log(Level.FINE, "Modify date: {0} ; Modify ID: {1}", arguments);
+    logger.log(Level.FINER, "Update ACL query: {0}", queryStr);
+
+    IDfQuery query = dmClientX.getQuery();
+    query.setDQL(queryStr.toString());
     return query;
   }
 
@@ -102,6 +137,49 @@ class DocumentumAcls {
         String objectId = dmAclCollection.getString("r_object_id");
         IDfACL dmAcl = (IDfACL) dmSession.getObject(new DfId(objectId));
         addAclChainToMap(dmAcl, objectId, aclMap);
+      }
+      return aclMap;
+    } finally {
+      try {
+        dmAclCollection.close();
+      } catch (DfException e) {
+        logger.log(Level.WARNING, "Error closing collection", e);
+      }
+    }
+  }
+
+  /**
+   * Returns all updated Documentum ACLs in map with doc id and Acl.
+   *
+   * In Documentum, ACLs are high level objects separate from content objects.
+   * An ACL can be applied to one or many content objects. Or, each object
+   * can have it's own individual ACL applied to it. So this method needs to
+   * send all the ACLs in Documentum to GSA.
+   *
+   * @return Documentum ACLs in map
+   * @throws DfException if error in getting ACL information.
+   */
+  public Map<DocId, Acl> getUpdateAcls() throws DfException {
+    HashSet<String> aclModifiedIds = new HashSet<String>();
+    IDfQuery query = makeUpdateAclQuery();
+    IDfCollection dmAclCollection =
+        query.execute(dmSession, IDfQuery.DF_EXECREAD_QUERY);
+    try {
+      Map<DocId, Acl> aclMap = new HashMap<DocId, Acl>();
+      while (dmAclCollection.next()) {
+        aclModifiedDate = dmAclCollection.getString("time_stamp_utc_str");
+        aclModifyId = dmAclCollection.getString("r_object_id");
+        String chronicleId = dmAclCollection.getString("chronicle_id");
+        String modifyObjectId = dmAclCollection.getString("audited_obj_id");
+
+        if (aclModifiedIds.contains(chronicleId)) {
+          logger.log(Level.FINE,
+              "Skipping redundant modify of: {0}", chronicleId);
+          continue;
+        }
+        IDfACL dmAcl = (IDfACL) dmSession.getObject(new DfId(modifyObjectId));
+        addAclChainToMap(dmAcl, modifyObjectId, aclMap);
+        aclModifiedIds.add(chronicleId);
       }
       return aclMap;
     } finally {
@@ -246,88 +324,5 @@ class DocumentumAcls {
       builder.setInheritFrom(new DocId(parentAclId));
     }
     return builder.build();
-  }
-
-  /**
-   * Returns all updated Documentum ACLs in map with doc id and Acl.
-   *
-   * In Documentum, ACLs are high level objects separate from content objects.
-   * An ACL can be applied to one or many content objects. Or, each object
-   * can have it's own individual ACL applied to it. So this method needs to
-   * send all the ACLs in Documentum to GSA.
-   *
-   * @return Documentum ACLs in map
-   * @throws DfException if error in getting ACL information.
-   */
-  public Map<DocId, Acl> getUpdateAcls() throws DfException {
-    HashSet<String> aclModifiedIds = new HashSet<String>();
-    IDfQuery query = makeUpdateAclQuery();
-    IDfCollection dmAclCollection =
-        query.execute(dmSession, IDfQuery.DF_EXECREAD_QUERY);
-    try {
-      Map<DocId, Acl> aclMap = new HashMap<DocId, Acl>();
-      while (dmAclCollection.next()) {
-        aclModifyId = dmAclCollection.getString("r_object_id");
-        aclModifiedDate = dmAclCollection.getString("time_stamp_utc_str");
-        String chronicleId = dmAclCollection.getString("chronicle_id");
-        String modifyObjectId = dmAclCollection.getString("audited_obj_id");
-
-        if (aclModifiedIds.contains(chronicleId)) {
-          logger.log(Level.FINE,
-              "Skipping redundant modify of: {0}", chronicleId);
-          continue;
-        }
-        IDfACL dmAcl = (IDfACL) dmSession.getObject(new DfId(modifyObjectId));
-        addAclChainToMap(dmAcl, modifyObjectId, aclMap);
-        aclModifiedIds.add(chronicleId);
-      }
-      return aclMap;
-    } finally {
-      try {
-        dmAclCollection.close();
-      } catch (DfException e) {
-        logger.log(Level.WARNING, "Error closing collection", e);
-      }
-    }
-  }
-
-  private IDfQuery makeUpdateAclQuery() {
-    StringBuilder queryStr = new StringBuilder(
-        "select r_object_id, chronicle_id, audited_obj_id, event_name, "
-        + "time_stamp_utc, "
-        + "DATETOSTRING(time_stamp_utc, 'yyyy-mm-dd hh:mi:ss') "
-        + "as time_stamp_utc_str "
-        + "from dm_audittrail_acl "
-        + "where (event_name='dm_save' or event_name='dm_saveasnew' "
-        + "or event_name='dm_destroy')");
-
-    String whereBoundedClause = " and ((time_stamp_utc = "
-        + "date(''{0}'',''yyyy-mm-dd hh:mi:ss'') and (r_object_id > ''{1}'')) "
-        + "OR (time_stamp_utc > date(''{0}'',''yyyy-mm-dd hh:mi:ss'')))";
-    String whereBoundedClauseDateOnly = " and (time_stamp_utc > "
-        + "date(''{0}'',''yyyy-mm-dd hh:mi:ss''))";
-
-    if (Strings.isNullOrEmpty(aclModifiedDate)) {
-      aclModifiedDate = getNOW();
-      logger.log(Level.FINE, "Setting ModifiedDate to now: {0}",
-          aclModifiedDate);
-    }
-
-    Object[] arguments = {aclModifiedDate, aclModifyId};
-    queryStr.append(MessageFormat.format(
-        (arguments[1] == null) ? whereBoundedClauseDateOnly
-            : whereBoundedClause, arguments));
-    queryStr.append(" order by time_stamp_utc, r_object_id, event_name");
-    logger.log(Level.FINE, "ModifiedDate: {0} ; Modify Id: {1}", arguments);
-    logger.log(Level.FINER, "UpdateAcl query: {0}", queryStr.toString());
-
-    IDfQuery query = dmClientX.getQuery();
-    query.setDQL(queryStr.toString());
-    return query;
-  }
-
-  private String getNOW() {
-    SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-    return format.format(new Date());
   }
 }
