@@ -15,6 +15,7 @@
 package com.google.enterprise.adaptor.documentum;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
@@ -57,9 +58,12 @@ import java.io.InputStream;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.Charset;
+import java.text.MessageFormat;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Date;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Locale;
@@ -95,6 +99,14 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private static final String ALL_USERS_QUERY = "SELECT user_name FROM dm_user"
       + " WHERE r_is_group IS NULL OR r_is_group = FALSE";
 
+  private static final SimpleDateFormat dateFormat =
+      new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+
+  // Initial checkpoints will have timestamps 24 hours in the past,
+  // because Documentum timestamps are local server time.
+  private static final String YESTERDAY = dateFormat.format(
+      new Date(System.currentTimeMillis() - (24 * 60 * 60 * 1000L)));
+
   private final IDfClientX dmClientX;
   private List<String> startPaths;
   private CopyOnWriteArrayList<String> validatedStartPaths =
@@ -112,8 +124,55 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private String windowsDomain;
   private boolean pushLocalGroupsOnly;
 
+  private Checkpoint modifiedDocumentsCheckpoint = new Checkpoint();
+
   public static void main(String[] args) {
     AbstractAdaptor.main(new DocumentumAdaptor(), args);
+  }
+
+  /**
+   * Remembers last objectId and its modification date for incremental updates.
+   */
+  static class Checkpoint {
+    private final String lastModified;
+    private final String objectId;
+
+    public Checkpoint() {
+      this(YESTERDAY, "0");
+    }
+
+    public Checkpoint(String lastModified, String objectId) {
+      this.lastModified = lastModified;
+      this.objectId = objectId;
+    }
+
+    public String getLastModified() {
+      return lastModified;
+    }
+
+    public String getObjectId() {
+      return objectId;
+    }
+
+    @Override
+    public boolean equals(Object other) {
+      // Simplified equals implementation good enough for the tests.
+      if (other instanceof Checkpoint) {
+        return toString().equals(((Checkpoint) other).toString());
+      } else {
+        return false;
+      }
+    }
+
+    @Override
+    public int hashCode() {
+      return toString().hashCode();
+    }
+
+    @Override
+    public String toString() {
+      return "{" + lastModified + ", " + objectId + "}";
+    }
   }
 
   // Strip leading and trailing slashes so our DocIds show up
@@ -654,10 +713,34 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   @Override
   public void getModifiedDocIds(DocIdPusher pusher) throws IOException,
       InterruptedException {
-    logger.entering("DocumentumAdaptor", "getDocIds");
-    pushAclUpdates(pusher);
-    pushDocumentUpdates(pusher);
-    logger.exiting("DocumentumAdaptor", "getDocIds");
+    logger.entering("DocumentumAdaptor", "getModifiedDocIds");
+    IDfSession dmSession;
+    try {
+      dmSession = dmSessionManager.getSession(docbase);
+    } catch (DfException e) {
+      throw new IOException("Failed to get Documentum Session", e);
+    }
+    try {
+      DfException savedException = null;
+
+      // Push modified documents.
+      try {
+        validateStartPaths(dmSession);
+        modifiedDocumentsCheckpoint = pushDocumentUpdates(pusher, dmClientX, 
+            dmSession, validatedStartPaths, modifiedDocumentsCheckpoint);
+      } catch (DfException e) {
+        savedException = e;
+      }
+      // TODO(bmj): Pass in session, clientx, etc.
+      pushAclUpdates(pusher);
+
+      if (savedException != null) {
+        throw new IOException(savedException);
+      }
+    } finally {
+      dmSessionManager.release(dmSession);
+    }
+    logger.exiting("DocumentumAdaptor", "getModifiedDocIds");
   }
 
   /**
@@ -688,9 +771,91 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
   /**
    * Push Document updates to GSA.
-   * @param pusher DocIdPusher.
    */
-  private void pushDocumentUpdates(DocIdPusher pusher) {
-    // stub to handle Document updates
+  @VisibleForTesting
+  Checkpoint pushDocumentUpdates(DocIdPusher pusher, IDfClientX dmClientX,
+      IDfSession session, List<String> startPaths, Checkpoint checkpoint)
+      throws DfException, IOException, InterruptedException {
+    String queryStr = makeUpdatedDocsQuery(startPaths, checkpoint);
+    logger.log(Level.FINER, "Modified DocIds Query: {0}", queryStr);
+    IDfQuery query = dmClientX.getQuery();
+    query.setDQL(queryStr);
+    IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
+    try {
+      String lastModified = checkpoint.getLastModified();
+      String objectId = checkpoint.getObjectId();
+      ImmutableList.Builder<DocId> builder = ImmutableList.builder();
+      while (result.next()) {
+        lastModified = result.getString("r_modify_date_str");
+        objectId = result.getString("r_object_id");
+        IDfType type = session.getType(result.getString("r_object_type"));
+        if (type.isTypeOf("dm_folder")) {
+          addUpdatedDocIds(builder, session, startPaths, objectId, null);
+        } else if (type.isTypeOf("dm_document")) {
+          String name = result.getString("object_name");
+          int numFolders = result.getValueCount("i_folder_id");
+          for (int i = 0; i < numFolders; i++) {
+            String folderId = result.getRepeatingString("i_folder_id", i);
+            addUpdatedDocIds(builder, session, startPaths, folderId, name);
+          }
+        }
+      }
+      List<DocId> docids = builder.build();
+      logger.log(Level.FINER, "DocumentumAdaptor Modified DocIds: {0}", docids);
+      pusher.pushDocIds(docids);
+      return new Checkpoint(lastModified, objectId);
+    } finally {
+      result.close();
+    }
+  }
+
+  /**
+   * A document can reside under multiple folder paths.
+   * Only push those paths that are under our start paths.
+   *
+   * @param builder builder for list of DocIds
+   * @param folderId the ID of a Documentum folder
+   * @param name the document name to append to the folder
+   *    paths for a document, or null for a folder
+   */
+  private void addUpdatedDocIds(ImmutableList.Builder<DocId> builder,
+      IDfSession session, List<String> startPaths, String folderId, String name)
+      throws DfException {
+    IDfFolder folder = session.getFolderBySpecification(folderId);
+    if (folder != null) {
+      for (int i = 0; i < folder.getFolderPathCount(); i++) {
+        String path = folder.getFolderPath(i);
+        if (isUnderStartPath(path, startPaths)) {
+          if (Strings.isNullOrEmpty(name)) {
+            builder.add(docIdFromPath(path));
+          } else {
+            builder.add(docIdFromPath(path + "/" + name));
+          }
+        }
+      }
+    }
+  }
+
+  protected String makeUpdatedDocsQuery(List<String> startPaths,
+      Checkpoint checkpoint) {
+    StringBuilder query = new StringBuilder();
+    query.append("SELECT object_name, r_object_id, r_object_type, ")
+        .append("i_folder_id, r_modify_date, ")
+        .append("DATETOSTRING(r_modify_date, 'yyyy-mm-dd hh:mi:ss') ")
+        .append("AS r_modify_date_str FROM dm_sysobject ")
+        // Limit the returned object types to dm_document, dm_folder,
+        // or any type that is a subtype of dm_document or dm_folder.
+       .append("WHERE (TYPE(dm_document) OR TYPE(dm_folder)) AND ")
+       .append(MessageFormat.format(
+            "((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') AND "
+            + "r_object_id > ''{1}'') OR (r_modify_date > DATE(''{0}'',"
+            + "''yyyy-mm-dd hh:mi:ss'')))",
+            checkpoint.getLastModified(), checkpoint.getObjectId()));
+
+    // Limit our search to modified docs under a start path.
+    query.append(" AND (FOLDER('");
+    Joiner.on("',descend) OR FOLDER('").appendTo(query, startPaths);
+    query.append("',descend)) ORDER BY r_modify_date, r_object_id");
+    return query.toString();
   }
 }

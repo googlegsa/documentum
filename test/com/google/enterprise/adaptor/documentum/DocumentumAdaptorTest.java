@@ -14,6 +14,7 @@
 
 package com.google.enterprise.adaptor.documentum;
 
+import static com.google.enterprise.adaptor.documentum.DocumentumAdaptor.Checkpoint;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.*;
 
@@ -32,6 +33,8 @@ import com.google.enterprise.adaptor.Acl.InheritanceType;
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
+import com.google.enterprise.adaptor.DocIdPusher;
+import com.google.enterprise.adaptor.DocIdPusher.Record;
 import com.google.enterprise.adaptor.GroupPrincipal;
 import com.google.enterprise.adaptor.Principal;
 import com.google.enterprise.adaptor.Request;
@@ -66,6 +69,7 @@ import org.junit.Test;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URI;
@@ -89,13 +93,10 @@ import java.util.Vector;
 /** Unit tests for DocumentAdaptor class. */
 public class DocumentumAdaptorTest {
 
-  private static final String CREATE_TABLE_GROUP = "create table dm_group "
-      + "(r_object_id varchar, group_name varchar, group_source varchar, "
-      + "groups_names varchar, users_names varchar)";
-
-  private static final String CREATE_TABLE_USER = "create table dm_user "
-      + "(user_name varchar primary key, user_login_name varchar, "
-      + "user_source varchar, user_ldap_dn varchar, r_is_group boolean)";
+  private static final String EPOCH_1970 = "1970-01-01 00:00:00";
+  private static final String JAN_1970 = "1970-01-01 02:03:04";
+  private static final String FEB_1970 = "1970-02-01 02:03:04";
+  private static final String MAR_1970 = "1970-03-01 02:03:04";
 
   private static final String CREATE_TABLE_ACL = "create table dm_acl "
       + "(r_object_id varchar, r_accessor_name varchar, "
@@ -106,12 +107,29 @@ public class DocumentumAdaptorTest {
       + "(r_object_id varchar, chronicle_id varchar, audited_obj_id varchar, "
       + "event_name varchar, time_stamp_utc timestamp)";
 
+  private static final String CREATE_TABLE_FOLDER = "create table dm_folder "
+      + "(r_object_id varchar, r_folder_path varchar)";
+
+  private static final String CREATE_TABLE_GROUP = "create table dm_group "
+      + "(r_object_id varchar, group_name varchar, group_source varchar, "
+      + "groups_names varchar, users_names varchar)";
+
+  private static final String CREATE_TABLE_USER = "create table dm_user "
+      + "(user_name varchar primary key, user_login_name varchar, "
+      + "user_source varchar, user_ldap_dn varchar, r_is_group boolean)";
+
+  private static final String CREATE_TABLE_SYSOBJECT =
+      "create table dm_sysobject "
+      + "(r_object_id varchar, r_object_type varchar, object_name varchar, "
+      + "i_folder_id varchar, object_path varchar, r_modify_date timestamp)";
+
   private JdbcFixture jdbcFixture = new JdbcFixture();
 
   @Before
   public void setUp() throws Exception {
-    jdbcFixture.executeUpdate(CREATE_TABLE_GROUP, CREATE_TABLE_USER,
-        CREATE_TABLE_ACL, CREATE_TABLE_AUDITTRAIL_ACL);
+    jdbcFixture.executeUpdate(CREATE_TABLE_ACL, CREATE_TABLE_AUDITTRAIL_ACL,
+        CREATE_TABLE_FOLDER, CREATE_TABLE_GROUP, CREATE_TABLE_USER,
+        CREATE_TABLE_SYSOBJECT);
   }
 
   @After
@@ -2243,7 +2261,7 @@ public class DocumentumAdaptorTest {
 
       public String getRepeatingString(String colName, int index)
           throws DfException {
-        return getRepeatingValue(colName)[index].trim();
+        return getRepeatingValue(colName)[index];
       }
 
       public String getString(String colName) throws DfException {
@@ -2699,7 +2717,6 @@ public class DocumentumAdaptorTest {
     }
   }
 
-
   /* Mock proxy classes for testing ACL Updates */
   private class AclUpdateTestProxies {
     IDfSessionManager sessionManager = Proxies.newProxyInstance(
@@ -3087,5 +3104,502 @@ public class DocumentumAdaptorTest {
     Calendar calendar = Calendar.getInstance();
     calendar.add(Calendar.MINUTE, minutes);
     return format.format(calendar.getTime());
+  }
+
+  @Test
+  public void testCheckpoint() throws Exception {
+    Checkpoint checkpoint = new Checkpoint();
+    assertEquals("0", checkpoint.getObjectId());
+    assertNotNull(checkpoint.getLastModified());
+    assertTrue(checkpoint.equals(checkpoint));
+
+    checkpoint = new Checkpoint("foo", "bar");
+    assertEquals("foo", checkpoint.getLastModified());
+    assertEquals("bar", checkpoint.getObjectId());
+    assertTrue(checkpoint.equals(checkpoint));
+    assertTrue(checkpoint.equals(new Checkpoint("foo", "bar")));
+    assertFalse(checkpoint.equals(null));
+    assertFalse(checkpoint.equals(new Checkpoint()));
+    assertFalse(checkpoint.equals(new Checkpoint("foo", "xyzzy")));
+  }
+
+  /* Mock proxy classes for testing pushing modified DocIds. */
+  private class ModifiedDocIdTestProxies {
+    IDfSessionManager sessionManager = Proxies.newProxyInstance(
+        IDfSessionManager.class, new SessionManagerMock());
+
+    public IDfClientX getProxyClientX() {
+      return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
+    }
+
+    private class ClientXMock {
+      public IDfQuery getQuery() {
+        return Proxies.newProxyInstance(IDfQuery.class, new QueryMock());
+      }
+    }
+
+    private class QueryMock {
+      private String query;
+
+      public void setDQL(String query) {
+        this.query = query;
+      }
+
+      public IDfCollection execute(IDfSession session, int arg1)
+          throws DfException {
+        return Proxies.newProxyInstance(IDfCollection.class,
+            new CollectionMock(query));
+      }
+    }
+
+    private class CollectionMock {
+      final Statement stmt;
+      final ResultSet rs;
+
+      public CollectionMock(String query) throws DfException {
+        try {
+          stmt = jdbcFixture.getConnection().createStatement();
+          query = query.replace("DATETOSTRING", "FORMATDATETIME")
+              .replace("DATE(", "PARSEDATETIME(")
+              .replace("yyyy-mm-dd hh:mi:ss", "yyyy-MM-dd HH:mm:ss")
+              .replace("TYPE(dm_document)", "r_object_type LIKE 'dm_document%'")
+              .replace("TYPE(dm_folder)", "r_object_type LIKE 'dm_folder%'")
+              .replace("FOLDER(", "(object_path LIKE ")
+              .replace("',descend", "%'");
+          rs = stmt.executeQuery(query);
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+
+      private String[] getRepeatingValue(String colName) throws DfException {
+        String value = getString(colName);
+        if (Strings.isNullOrEmpty(value)) {
+          return new String[0];
+        }
+        return value.split(",");
+      }
+
+      public int getValueCount(String colName) throws DfException {
+        return getRepeatingValue(colName).length;
+      }
+
+      public String getRepeatingString(String colName, int index)
+          throws DfException {
+        return getRepeatingValue(colName)[index];
+      }
+
+      public String getString(String colName) throws DfException {
+        try {
+          return rs.getString(colName);
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+
+      public boolean next() throws DfException {
+        try {
+          return rs.next();
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+
+      public int getState() {
+        return IDfCollection.DF_READY_STATE;
+      }
+
+      public void close() throws DfException {
+        try {
+          rs.close();
+          stmt.close();
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+    }
+
+    private class SessionManagerMock {
+      public IDfSession getSession(String docbaseName) {
+        return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
+      }
+
+      public void release(IDfSession session) {
+      }
+    }
+
+    private class SessionMock {
+      public IDfFolder getFolderBySpecification(String spec)
+          throws DfException {
+        if (Strings.isNullOrEmpty(spec)) {
+          return null;
+        }
+        String query = String.format(
+            "SELECT * FROM dm_folder WHERE r_object_id = '%s'", spec);
+        try (Statement stmt = jdbcFixture.getConnection().createStatement();
+             ResultSet rs = stmt.executeQuery(query)) {
+          if (rs.first()) {
+            return
+                Proxies.newProxyInstance(IDfFolder.class, new FolderMock(rs));
+          }
+          return null;
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+
+      public IDfType getType(String type) {
+        return Proxies.newProxyInstance(IDfType.class, new TypeMock(type));
+      }
+    }
+
+    private class FolderMock {
+      private String[] folderPaths;
+
+      public FolderMock(ResultSet rs) throws SQLException {
+        this.folderPaths = rs.getString("r_folder_path").split(",");
+      }
+       
+      public int getFolderPathCount() {
+        return folderPaths.length;
+      }
+
+      public String getFolderPath(int index) {
+        return folderPaths[index];
+      }
+    }
+
+    private class TypeMock {
+      private final String type;
+
+      public TypeMock(String type) {
+        this.type = type;
+      }
+
+      public boolean isTypeOf(String otherType) {
+        return type.startsWith(otherType);
+      }
+    }
+  }
+
+  private void insertSysObject(String lastModified, String id, String name,
+      String path, String type, String... folderIds) throws SQLException {
+    jdbcFixture.executeUpdate(String.format(
+        "insert into dm_sysobject(r_object_id, object_name, object_path, "
+        + "r_object_type, i_folder_id, r_modify_date) "
+        + "values('%s', '%s', '%s', '%s', '%s', "
+        + "parseDateTime('%s', 'yyyy-MM-dd hh:mm:ss'))",
+        id, name, path, type, Joiner.on(",").join(folderIds), lastModified));
+  }
+
+  private void insertDocument(String lastModified, String id, String path,
+      String... folderIds) throws SQLException {
+    String name = path.substring(path.lastIndexOf("/") + 1);
+    insertSysObject(lastModified, id, name, path, "dm_document", folderIds);
+  }
+
+  private void insertFolder(String lastModified, String id, String... paths)
+       throws SQLException {
+    jdbcFixture.executeUpdate(String.format(
+        "insert into dm_folder(r_object_id, r_folder_path) values('%s', '%s')",
+        id, Joiner.on(",").join(paths)));
+    for (String path : paths) {
+      String name = path.substring(path.lastIndexOf("/") + 1);
+      insertSysObject(lastModified, id, name, path, "dm_folder");
+    }
+  }
+
+  /**
+   * Builds a list of expected DocId Records that the Pusher should receive.
+   *
+   * @param folderPath the full path to a folder.
+   * @param objectNames ojects within that folder that should be added to the
+   *        expected list. If one of the full folderPath is included in
+   *        object names, the folder itself is included in the expected results.
+   */
+  private List<Record> makeExpectedDocIds(String folderPath, 
+      String... objectNames) {
+    assertTrue(folderPath.startsWith("/"));
+    // DocIds drop the leading slash, so it makes a pretty URL.
+    String folder = folderPath.substring(1);
+
+    ImmutableList.Builder<Record> builder = ImmutableList.builder();
+    for (String name : objectNames) {
+      DocId docid = new DocId(
+          name.equals(folderPath) ? folder : (folder + "/" + name));
+      builder.add(new Record.Builder(docid).build());
+    }
+    return builder.build();
+  }
+
+  /** Convenience method to assemble a list of start paths for readability. */
+  private List<String> startPaths(String... paths) {
+    return ImmutableList.copyOf(paths);
+  }
+
+  @Test
+  public void testNoDocuments() throws Exception {
+    String folder = "/Folder1";
+    Checkpoint startCheckpoint = new Checkpoint();
+    checkModifiedDocIdsPushed(startPaths(folder), startCheckpoint,
+        ImmutableList.<Record>of(), startCheckpoint);
+  }
+
+  @Test
+  public void testNoModifiedDocuments() throws Exception {
+    String folderId = "0b01081f80001000";
+    String folder = "/Folder1";
+    insertFolder(JAN_1970, folderId, folder);
+    insertDocument(JAN_1970, "0b01081f80001001", folder + "/foo", folderId);
+    insertDocument(JAN_1970, "0b01081f80001002", folder + "/bar", folderId);
+
+    Checkpoint startCheckpoint = new Checkpoint();
+    checkModifiedDocIdsPushed(startPaths(folder), startCheckpoint,
+        ImmutableList.<Record>of(), startCheckpoint);
+  }
+
+  @Test
+  public void testModifiedDocumentsNoCheckpointObjId() throws Exception {
+    String folderId = "0b01081f80001000";
+    String folder = "/Folder1";
+    insertFolder(JAN_1970, folderId, folder);
+    insertDocument(FEB_1970, "0b01081f80001001", folder + "/foo", folderId);
+    insertDocument(FEB_1970, "0b01081f80001002", folder + "/bar", folderId);
+
+    checkModifiedDocIdsPushed(startPaths(folder),
+        new Checkpoint(EPOCH_1970, "0"),
+        makeExpectedDocIds(folder, folder, "foo", "bar"),
+        new Checkpoint(FEB_1970, "0b01081f80001002"));
+  }
+
+  @Test
+  public void testModifiedDocumentsSameCheckpointTime() throws Exception {
+    String folderId = "0b01081f80001000";
+    String folder = "/Folder1";
+    insertFolder(JAN_1970, folderId, folder);
+    insertDocument(JAN_1970, "0b01081f80001001", folder + "/foo", folderId);
+    insertDocument(JAN_1970, "0b01081f80001002", folder + "/bar", folderId);
+    insertDocument(FEB_1970, "0b01081f80001003", folder + "/baz", folderId);
+
+    checkModifiedDocIdsPushed(startPaths(folder),
+        new Checkpoint(JAN_1970, "0b01081f80001001"),
+        makeExpectedDocIds(folder, "bar", "baz"),
+        new Checkpoint(FEB_1970, "0b01081f80001003"));
+  }
+
+  @Test
+  public void testModifiedDocumentsNewerModifyDate() throws Exception {
+    String folderId = "0b01081f80001000";
+    String folder = "/Folder1";
+    insertFolder(JAN_1970, folderId, folder);
+    insertDocument(JAN_1970, "0b01081f80001001", folder + "/foo", folderId);
+    insertDocument(FEB_1970, "0b01081f80001002", folder + "/bar", folderId);
+    insertDocument(MAR_1970, "0b01081f80001003", folder + "/baz", folderId);
+
+    checkModifiedDocIdsPushed(startPaths(folder),
+        new Checkpoint(JAN_1970, "0b01081f80001001"),
+        makeExpectedDocIds(folder, "bar", "baz"),
+        new Checkpoint(MAR_1970, "0b01081f80001003"));
+  }
+
+  @Test
+  public void testModifiedFolder() throws Exception {
+    String folderId = "0b01081f80001000";
+    String folder = "/Folder1";
+    insertFolder(JAN_1970, folderId, folder);
+
+    checkModifiedDocIdsPushed(startPaths(folder),
+        new Checkpoint(EPOCH_1970, "0b01081f80001003"),
+        makeExpectedDocIds(folder, folder),
+        new Checkpoint(JAN_1970, folderId));
+  }
+
+  @Test
+  public void testModifiedFolderNewerThanChildren() throws Exception {
+    String folderId = "0b01081f80001000";
+    String folder = "/Folder1";
+    insertFolder(MAR_1970, folderId, folder);
+    insertDocument(JAN_1970, "0b01081f80001001", folder + "/foo", folderId);
+    insertDocument(FEB_1970, "0b01081f80001002", folder + "/bar", folderId);
+    insertDocument(MAR_1970, "0b01081f80001003", folder + "/baz", folderId);
+
+    checkModifiedDocIdsPushed(startPaths(folder),
+        new Checkpoint(JAN_1970, "0b01081f80001001"),
+        makeExpectedDocIds(folder, "bar", folder, "baz"),
+        new Checkpoint(MAR_1970, "0b01081f80001003"));
+  }
+
+  @Test
+  public void testModifiedDocumentsOutsideStartPath() throws Exception {
+    String folder1Id = "0b01081f80001000";
+    String folder1 = "/Folder1";
+    insertFolder(JAN_1970, folder1Id, folder1);
+    insertDocument(FEB_1970, "0b01081f80001001", folder1 + "/foo", folder1Id);
+    insertDocument(FEB_1970, "0b01081f80001002", folder1 + "/bar", folder1Id);
+    String folder2Id = "0b01081f80002000";
+    String folder2 = "/Folder2";
+    insertFolder(JAN_1970, folder2Id, folder2);
+    insertDocument(FEB_1970, "0b01081f80002001", folder2 + "/baz", folder2Id);
+
+    checkModifiedDocIdsPushed(startPaths(folder1),
+        new Checkpoint(JAN_1970, folder1Id),
+        makeExpectedDocIds(folder1, "foo", "bar"),
+        new Checkpoint(FEB_1970, "0b01081f80001002"));
+  }
+
+  @Test
+  public void testModifiedDocumentsOneParentOutsideStartPath()
+      throws Exception {
+    String folder1Id = "0b01081f80001000";
+    String folder1 = "/Folder1";
+    insertFolder(JAN_1970, folder1Id, folder1);
+    String folder2Id = "0b01081f80002000";
+    String folder2 = "/Folder2";
+    insertFolder(JAN_1970, folder2Id, folder2);
+    insertDocument(FEB_1970, "0b01081f80001001", folder1 + "/foo", folder1Id);
+    insertDocument(FEB_1970, "0b01081f80001002", folder1 + "/bar", folder1Id,
+                   folder2Id);
+
+    checkModifiedDocIdsPushed(startPaths(folder1),
+        new Checkpoint(JAN_1970, folder1Id),
+        makeExpectedDocIds(folder1, "foo", "bar"),
+        new Checkpoint(FEB_1970, "0b01081f80001002"));
+  }
+
+  @Test
+  public void testModifiedDocumentsMultipleParentsInStartPaths()
+      throws Exception {
+    String folder1Id = "0b01081f80001000";
+    String folder1 = "/Folder1";
+    insertFolder(JAN_1970, folder1Id, folder1);
+    String folder2Id = "0b01081f80002000";
+    String folder2 = "/Folder2";
+    insertFolder(JAN_1970, folder2Id, folder2);
+    insertDocument(FEB_1970, "0b01081f80001001", folder1 + "/foo", folder1Id);
+    insertDocument(FEB_1970, "0b01081f80001002", folder1 + "/bar", folder1Id,
+                   folder2Id);
+
+    checkModifiedDocIdsPushed(startPaths(folder1, folder2),
+        new Checkpoint(FEB_1970, folder1Id),
+        new ImmutableList.Builder<Record>()
+           .addAll(makeExpectedDocIds(folder1, "foo", "bar"))
+           .addAll(makeExpectedDocIds(folder2, "bar"))
+           .build(),
+        new Checkpoint(FEB_1970, "0b01081f80001002"));
+  }
+
+  @Test
+  public void testModifiedDocumentsMultipleStartPaths() throws Exception {
+    String folder1Id = "0b01081f80001000";
+    String folder1 = "/Folder1";
+    insertFolder(JAN_1970, folder1Id, folder1);
+    insertDocument(MAR_1970, "0b01081f80001001", folder1 + "/foo", folder1Id);
+    insertDocument(MAR_1970, "0b01081f80001002", folder1 + "/bar", folder1Id);
+    String folder2Id = "0b01081f80002000";
+    String folder2 = "/Folder2";
+    insertFolder(JAN_1970, folder2Id, folder2);
+    insertDocument(MAR_1970, "0b01081f80002001", folder2 + "/baz", folder2Id);
+
+    checkModifiedDocIdsPushed(startPaths(folder1, folder2),
+        new Checkpoint(FEB_1970, folder1Id),
+        new ImmutableList.Builder<Record>()
+           .addAll(makeExpectedDocIds(folder1, "foo", "bar"))
+           .addAll(makeExpectedDocIds(folder2, "baz"))
+           .build(),
+        new Checkpoint(MAR_1970, "0b01081f80002001"));
+  }
+
+  @Test
+  public void testModifiedDocumentsInSubfolder() throws Exception {
+    String folder1Id = "0b01081f80001000";
+    String folder1 = "/Folder1";
+    insertFolder(JAN_1970, folder1Id, folder1);
+    insertDocument(MAR_1970, "0b01081f80001001", folder1 + "/foo", folder1Id);
+    insertDocument(MAR_1970, "0b01081f80001002", folder1 + "/bar", folder1Id);
+    String folder2Id = "0b01081f80002000";
+    String folder2 = "/Folder1/Folder2";
+    insertFolder(JAN_1970, folder2Id, folder2);
+    insertDocument(MAR_1970, "0b01081f80002001", folder2 + "/baz", folder2Id);
+
+    checkModifiedDocIdsPushed(startPaths(folder1),
+        new Checkpoint(FEB_1970, folder1Id),
+        new ImmutableList.Builder<Record>()
+           .addAll(makeExpectedDocIds(folder1, "foo", "bar"))
+           .addAll(makeExpectedDocIds(folder2, "baz"))
+           .build(),
+        new Checkpoint(MAR_1970, "0b01081f80002001"));
+  }
+
+  @Test
+  public void testModifiedDocumentsNotDocumentOrFolder() throws Exception {
+    String folderId = "0b01081f80001000";
+    String folder = "/Folder1";
+    insertFolder(JAN_1970, folderId, folder);
+    insertDocument(FEB_1970, "0b01081f80001001", folder + "/foo", folderId);
+    insertDocument(MAR_1970, "0b01081f80001002", folder + "/bar", folderId);
+    insertSysObject(MAR_1970, "0b01081f80001003", "baz", folder + "/baz",
+        "dm_other", folderId);
+
+    checkModifiedDocIdsPushed(startPaths(folder),
+        new Checkpoint(FEB_1970, folder),
+        makeExpectedDocIds(folder, "foo", "bar"),
+        new Checkpoint(MAR_1970, "0b01081f80001002"));
+  }
+
+  @Test
+  public void testModifiedDocumentsWithFolderSubtype() throws Exception {
+    String folderId = "0b01081f80001000";
+    String folder = "/Folder1";
+    jdbcFixture.executeUpdate(String.format(
+        "insert into dm_folder(r_object_id, r_folder_path) values('%s', '%s')",
+        folderId, folder));
+    insertSysObject(FEB_1970, folderId, "Folder1", folder, "dm_folder_subtype",
+        folderId);
+    insertDocument(FEB_1970, "0b01081f80001001", folder + "/foo", folderId);
+    insertDocument(MAR_1970, "0b01081f80001002", folder + "/bar", folderId);
+
+    checkModifiedDocIdsPushed(startPaths(folder),
+        new Checkpoint(JAN_1970, folderId),
+        makeExpectedDocIds(folder, folder, "foo", "bar"),
+        new Checkpoint(MAR_1970, "0b01081f80001002"));
+  }
+
+  @Test
+  public void testModifiedDocumentsWithDocumentSubtype() throws Exception {
+    String folderId = "0b01081f80001000";
+    String folder = "/Folder1";
+    insertFolder(JAN_1970, folderId, folder);
+    insertDocument(FEB_1970, "0b01081f80001001", folder + "/foo", folderId);
+    insertDocument(MAR_1970, "0b01081f80001002", folder + "/bar", folderId);
+    insertSysObject(MAR_1970, "0b01081f80001003", "baz", folder + "/baz",
+        "dm_document_subtype", folderId);
+
+    checkModifiedDocIdsPushed(startPaths(folder),
+        new Checkpoint(FEB_1970, folder),
+        makeExpectedDocIds(folder, "foo", "bar", "baz"),
+        new Checkpoint(MAR_1970, "0b01081f80001003"));
+  }
+
+  /* TODO(bmj): This should create the adaptor, init it with config, then call
+   * its getModifiedDocIds method with a recording pusher.
+   */
+  private void checkModifiedDocIdsPushed(List<String> startPaths,
+      Checkpoint checkpoint, List<Record> expectedDocIds,
+      Checkpoint expectedCheckpoint)
+      throws DfException, IOException, InterruptedException {
+    ModifiedDocIdTestProxies proxyCls = new ModifiedDocIdTestProxies();
+    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
+    IDfSession session = proxyCls.sessionManager.getSession("foo");
+    Checkpoint endCheckpoint;
+    try {
+      endCheckpoint = adaptor.pushDocumentUpdates(pusher, dmClientX, session,
+          startPaths, checkpoint);
+    } finally {
+      proxyCls.sessionManager.release(session);
+    }
+    assertEquals(expectedDocIds, pusher.getRecords());
+    assertEquals(expectedCheckpoint, endCheckpoint);
   }
 }
