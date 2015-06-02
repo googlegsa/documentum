@@ -124,6 +124,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private String windowsDomain;
   private boolean pushLocalGroupsOnly;
 
+  private Checkpoint modifiedAclsCheckpoint = new Checkpoint();
   private Checkpoint modifiedDocumentsCheckpoint = new Checkpoint();
 
   public static void main(String[] args) {
@@ -731,8 +732,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       } catch (DfException e) {
         savedException = e;
       }
-      // TODO(bmj): Pass in session, clientx, etc.
-      pushAclUpdates(pusher);
+      
+      Principals principals = new Principals(dmSession, localNamespace,
+          globalNamespace, windowsDomain);
+      try {
+        modifiedAclsCheckpoint = pushAclUpdates(pusher, dmClientX, dmSession,
+          principals, modifiedAclsCheckpoint);
+      } catch (DfException e) {
+        savedException = e;
+      }
 
       if (savedException != null) {
         throw new IOException(savedException);
@@ -745,28 +753,16 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
   /**
    * Push ACL updates to GSA.
-   *
-   * @param pusher DocIdPusher.
-   * @throws InterruptedException if pusher is interrupted.
-   * @throws IOException if error in getting ACL information.
    */
-  private void pushAclUpdates(DocIdPusher pusher) throws InterruptedException,
-      IOException {
+  Checkpoint pushAclUpdates(DocIdPusher pusher, IDfClientX dmClientX,
+      IDfSession session, Principals principals, Checkpoint checkpoint)
+      throws DfException, IOException, InterruptedException {
     logger.log(Level.INFO, "pushAclUpdates");
-    IDfSession dmSession = null;
-    try {
-      dmSession = dmSessionManager.getSession(docbase);
-      DocumentumAcls dctmAcls =
-          new DocumentumAcls(dmClientX, dmSession, new Principals(dmSession,
-              localNamespace, config.getValue("adaptor.namespace"),
-              config.getValue("documentum.windowsDomain")));
-      Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls();
-      pusher.pushNamedResources(aclMap);
-    } catch (DfException e) {
-      throw new IOException("Error getting Acls", e);
-    } finally {
-      dmSessionManager.release(dmSession);
-    }
+    DocumentumAcls dctmAcls =
+        new DocumentumAcls(dmClientX, session, principals);
+    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(checkpoint);
+    pusher.pushNamedResources(aclMap);
+    return dctmAcls.getUpdateAclsCheckpoint();
   }
 
   /**

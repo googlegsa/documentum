@@ -14,7 +14,6 @@
 
 package com.google.enterprise.adaptor.documentum;
 
-import static com.google.enterprise.adaptor.documentum.DocumentumAdaptor.Checkpoint;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.*;
 
@@ -40,6 +39,7 @@ import com.google.enterprise.adaptor.Principal;
 import com.google.enterprise.adaptor.Request;
 import com.google.enterprise.adaptor.Response;
 import com.google.enterprise.adaptor.UserPrincipal;
+import com.google.enterprise.adaptor.documentum.DocumentumAdaptor.Checkpoint;
 
 import com.documentum.com.IDfClientX;
 import com.documentum.fc.client.DfPermit;
@@ -2754,7 +2754,7 @@ public class DocumentumAdaptorTest {
         stmt = jdbcFixture.getConnection().createStatement();
         query = query.replace("DATETOSTRING", "FORMATDATETIME")
             .replace("date(", "parseDateTime(")
-            .replace("yyyy-mm-dd hh:mi:ss", DocumentumAcls.DATE_FORMAT);
+            .replace("yyyy-mm-dd hh:mi:ss", "yyyy-MM-dd HH:mm:ss");
         rs = stmt.executeQuery(query);
       }
 
@@ -2979,8 +2979,8 @@ public class DocumentumAdaptorTest {
     jdbcFixture.executeUpdate(String.format(
         "insert into dm_audittrail_acl(r_object_id, chronicle_id, "
             + "audited_obj_id, event_name, time_stamp_utc) "
-            + "values('%s', '%s', '%s', '%s', convert(parseDateTime('%s', "
-            + "'yyyy-MM-dd hh:mm:ss'), timestamp))",
+            + "values('%s', '%s', '%s', '%s', parseDateTime('%s', "
+            + "'yyyy-MM-dd HH:mm:ss'))",
             id, chronicleId, auditObjId, eventName, date));
   }
 
@@ -2999,6 +2999,8 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testUpdateAcls() throws Exception {
+    DocumentumAcls dctmAcls = getDocumentumAcls();
+
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     createAcl("4501081f80000102");
@@ -3007,11 +3009,13 @@ public class DocumentumAdaptorTest {
     insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "236", "4501081f80000102", "dm_destroy", dateStr);
 
-    Map<DocId, Acl> aclMap = getDocumentumAcls().getUpdateAcls();
+    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(new Checkpoint());
     assertEquals(ImmutableSet.of(
         new DocId("4501081f80000100"),
         new DocId("4501081f80000101"),
         new DocId("4501081f80000102")), aclMap.keySet());
+    assertEquals(new Checkpoint(dateStr, "125"),
+        dctmAcls.getUpdateAclsCheckpoint());
 
     Acl acl = aclMap.get(new DocId("4501081f80000100"));
     assertTrue(acl.getPermitUsers().isEmpty());
@@ -3019,6 +3023,8 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testUpdateAclsWithSameChronicleId() throws Exception {
+    DocumentumAcls dctmAcls = getDocumentumAcls();
+
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     createAcl("4501081f80000102");
@@ -3027,13 +3033,17 @@ public class DocumentumAdaptorTest {
     insertAclAudit("124", "234", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "234", "4501081f80000102", "dm_destroy", dateStr);
 
-    Map<DocId, Acl> aclMap = getDocumentumAcls().getUpdateAcls();
+    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(new Checkpoint());
     assertEquals(ImmutableSet.of(new DocId("4501081f80000100")),
         aclMap.keySet());
+    assertEquals(new Checkpoint(dateStr, "125"),
+        dctmAcls.getUpdateAclsCheckpoint());
   }
 
   @Test
   public void testPreviouslyUpdatedAcls() throws Exception {
+    DocumentumAcls dctmAcls = getDocumentumAcls();
+
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     createAcl("4501081f80000102");
@@ -3042,8 +3052,10 @@ public class DocumentumAdaptorTest {
     insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "236", "4501081f80000102", "dm_destroy", dateStr);
 
-    Map<DocId, Acl> aclMap = getDocumentumAcls().getUpdateAcls();
+    Checkpoint checkpoint = new Checkpoint(getNowPlusMinutes(0), "0");
+    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(checkpoint);
     assertEquals(ImmutableMap.of(), aclMap);
+    assertEquals(checkpoint, dctmAcls.getUpdateAclsCheckpoint());
   }
 
   @Test
@@ -3058,20 +3070,24 @@ public class DocumentumAdaptorTest {
     insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "236", "4501081f80000102", "dm_saveasnew", dateStr);
 
-    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls();
+    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(new Checkpoint());
     assertEquals(ImmutableSet.of(
         new DocId("4501081f80000100"),
         new DocId("4501081f80000101"),
         new DocId("4501081f80000102")), aclMap.keySet());
+    assertEquals(new Checkpoint(dateStr, "125"),
+        dctmAcls.getUpdateAclsCheckpoint());
 
     dateStr = getNowPlusMinutes(15);
     insertAclAudit("126", "237", "4501081f80000103", "dm_saveasnew", dateStr);
     insertAclAudit("127", "238", "4501081f80000104", "dm_destroy", dateStr);
 
-    aclMap = dctmAcls.getUpdateAcls();
+    aclMap = dctmAcls.getUpdateAcls(dctmAcls.getUpdateAclsCheckpoint());
     assertEquals(ImmutableSet.of(
         new DocId("4501081f80000103"), 
         new DocId("4501081f80000104")), aclMap.keySet());
+    assertEquals(new Checkpoint(dateStr, "127"),
+        dctmAcls.getUpdateAclsCheckpoint());
   }
 
   @Test
@@ -3084,13 +3100,16 @@ public class DocumentumAdaptorTest {
     insertAclAudit("128", "234", "4501081f80000106", "dm_saveasnew", dateStr);
     insertAclAudit("129", "235", "4501081f80000107", "dm_saveasnew", dateStr);
 
-    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls();
+    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(new Checkpoint());
     assertEquals(ImmutableSet.of(
         new DocId("4501081f80000106"),
         new DocId("4501081f80000107")), aclMap.keySet());
+    Checkpoint checkpoint = dctmAcls.getUpdateAclsCheckpoint();
+    assertEquals(new Checkpoint(dateStr, "129"), checkpoint);
 
-    aclMap = dctmAcls.getUpdateAcls();
+    aclMap = dctmAcls.getUpdateAcls(checkpoint);
     assertEquals(ImmutableSet.of(), aclMap.keySet());
+    assertEquals(checkpoint, dctmAcls.getUpdateAclsCheckpoint());
   }
 
   /**
@@ -3100,7 +3119,7 @@ public class DocumentumAdaptorTest {
    * @return date in string format.
    */
   private String getNowPlusMinutes(int minutes) {
-    SimpleDateFormat format = new SimpleDateFormat(DocumentumAcls.DATE_FORMAT);
+    SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
     Calendar calendar = Calendar.getInstance();
     calendar.add(Calendar.MINUTE, minutes);
     return format.format(calendar.getTime());
