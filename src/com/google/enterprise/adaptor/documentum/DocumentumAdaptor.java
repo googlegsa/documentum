@@ -471,6 +471,149 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
   }
 
+  @Override
+  public void getModifiedDocIds(DocIdPusher pusher) throws IOException,
+      InterruptedException {
+    logger.entering("DocumentumAdaptor", "getModifiedDocIds");
+    IDfSession dmSession;
+    try {
+      dmSession = dmSessionManager.getSession(docbase);
+    } catch (DfException e) {
+      throw new IOException("Failed to get Documentum Session", e);
+    }
+    try {
+      DfException savedException = null;
+
+      // Push modified documents.
+      try {
+        validateStartPaths(dmSession);
+        modifiedDocumentsCheckpoint = pushDocumentUpdates(pusher, dmClientX, 
+            dmSession, validatedStartPaths, modifiedDocumentsCheckpoint);
+      } catch (DfException e) {
+        savedException = e;
+      }
+      
+      Principals principals = new Principals(dmSession, localNamespace,
+          globalNamespace, windowsDomain);
+      try {
+        modifiedAclsCheckpoint = pushAclUpdates(pusher, dmClientX, dmSession,
+          principals, modifiedAclsCheckpoint);
+      } catch (DfException e) {
+        savedException = e;
+      }
+
+      if (savedException != null) {
+        throw new IOException(savedException);
+      }
+    } finally {
+      dmSessionManager.release(dmSession);
+    }
+    logger.exiting("DocumentumAdaptor", "getModifiedDocIds");
+  }
+
+  /**
+   * Push ACL updates to GSA.
+   */
+  private Checkpoint pushAclUpdates(DocIdPusher pusher, IDfClientX dmClientX,
+      IDfSession session, Principals principals, Checkpoint checkpoint)
+      throws DfException, IOException, InterruptedException {
+    DocumentumAcls dctmAcls =
+        new DocumentumAcls(dmClientX, session, principals);
+    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(checkpoint);
+    pusher.pushNamedResources(aclMap);
+    return dctmAcls.getUpdateAclsCheckpoint();
+  }
+
+  /**
+   * Push Document updates to GSA.
+   */
+  @VisibleForTesting
+  Checkpoint pushDocumentUpdates(DocIdPusher pusher, IDfClientX dmClientX,
+      IDfSession session, List<String> startPaths, Checkpoint checkpoint)
+      throws DfException, IOException, InterruptedException {
+    String queryStr = makeUpdatedDocsQuery(startPaths, checkpoint);
+    logger.log(Level.FINER, "Modified DocIds Query: {0}", queryStr);
+    IDfQuery query = dmClientX.getQuery();
+    query.setDQL(queryStr);
+    IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
+    try {
+      String lastModified = checkpoint.getLastModified();
+      String objectId = checkpoint.getObjectId();
+      ImmutableList.Builder<DocId> builder = ImmutableList.builder();
+      while (result.next()) {
+        lastModified = result.getString("r_modify_date_str");
+        objectId = result.getString("r_object_id");
+        IDfType type = session.getType(result.getString("r_object_type"));
+        if (type.isTypeOf("dm_folder")) {
+          addUpdatedDocIds(builder, session, startPaths, objectId, null);
+        } else if (type.isTypeOf("dm_document")) {
+          String name = result.getString("object_name");
+          int numFolders = result.getValueCount("i_folder_id");
+          for (int i = 0; i < numFolders; i++) {
+            String folderId = result.getRepeatingString("i_folder_id", i);
+            addUpdatedDocIds(builder, session, startPaths, folderId, name);
+          }
+        }
+      }
+      List<DocId> docids = builder.build();
+      logger.log(Level.FINER, "DocumentumAdaptor Modified DocIds: {0}", docids);
+      pusher.pushDocIds(docids);
+      return new Checkpoint(lastModified, objectId);
+    } finally {
+      result.close();
+    }
+  }
+
+  /**
+   * A document can reside under multiple folder paths.
+   * Only push those paths that are under our start paths.
+   *
+   * @param builder builder for list of DocIds
+   * @param folderId the ID of a Documentum folder
+   * @param name the document name to append to the folder
+   *    paths for a document, or null for a folder
+   */
+  private void addUpdatedDocIds(ImmutableList.Builder<DocId> builder,
+      IDfSession session, List<String> startPaths, String folderId, String name)
+      throws DfException {
+    IDfFolder folder = session.getFolderBySpecification(folderId);
+    if (folder != null) {
+      for (int i = 0; i < folder.getFolderPathCount(); i++) {
+        String path = folder.getFolderPath(i);
+        if (isUnderStartPath(path, startPaths)) {
+          if (Strings.isNullOrEmpty(name)) {
+            builder.add(docIdFromPath(path));
+          } else {
+            builder.add(docIdFromPath(path + "/" + name));
+          }
+        }
+      }
+    }
+  }
+
+  protected String makeUpdatedDocsQuery(List<String> startPaths,
+      Checkpoint checkpoint) {
+    StringBuilder query = new StringBuilder();
+    query.append("SELECT object_name, r_object_id, r_object_type, ")
+        .append("i_folder_id, r_modify_date, ")
+        .append("DATETOSTRING(r_modify_date, 'yyyy-mm-dd hh:mi:ss') ")
+        .append("AS r_modify_date_str FROM dm_sysobject ")
+        // Limit the returned object types to dm_document, dm_folder,
+        // or any type that is a subtype of dm_document or dm_folder.
+       .append("WHERE (TYPE(dm_document) OR TYPE(dm_folder)) AND ")
+       .append(MessageFormat.format(
+            "((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') AND "
+            + "r_object_id > ''{1}'') OR (r_modify_date > DATE(''{0}'',"
+            + "''yyyy-mm-dd hh:mi:ss'')))",
+            checkpoint.getLastModified(), checkpoint.getObjectId()));
+
+    // Limit our search to modified docs under a start path.
+    query.append(" AND (FOLDER('");
+    Joiner.on("',descend) OR FOLDER('").appendTo(query, startPaths);
+    query.append("',descend)) ORDER BY r_modify_date, r_object_id");
+    return query.toString();
+  }
+
   /** Gives the bytes of a document referenced with id. 
    *
    * @throws IOException if a Documentum error occurs
@@ -709,149 +852,5 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     dmSessionManager.setIdentity(docbaseName, dmLoginInfo);
 
     return dmSessionManager;
-  }
-
-  @Override
-  public void getModifiedDocIds(DocIdPusher pusher) throws IOException,
-      InterruptedException {
-    logger.entering("DocumentumAdaptor", "getModifiedDocIds");
-    IDfSession dmSession;
-    try {
-      dmSession = dmSessionManager.getSession(docbase);
-    } catch (DfException e) {
-      throw new IOException("Failed to get Documentum Session", e);
-    }
-    try {
-      DfException savedException = null;
-
-      // Push modified documents.
-      try {
-        validateStartPaths(dmSession);
-        modifiedDocumentsCheckpoint = pushDocumentUpdates(pusher, dmClientX, 
-            dmSession, validatedStartPaths, modifiedDocumentsCheckpoint);
-      } catch (DfException e) {
-        savedException = e;
-      }
-      
-      Principals principals = new Principals(dmSession, localNamespace,
-          globalNamespace, windowsDomain);
-      try {
-        modifiedAclsCheckpoint = pushAclUpdates(pusher, dmClientX, dmSession,
-          principals, modifiedAclsCheckpoint);
-      } catch (DfException e) {
-        savedException = e;
-      }
-
-      if (savedException != null) {
-        throw new IOException(savedException);
-      }
-    } finally {
-      dmSessionManager.release(dmSession);
-    }
-    logger.exiting("DocumentumAdaptor", "getModifiedDocIds");
-  }
-
-  /**
-   * Push ACL updates to GSA.
-   */
-  Checkpoint pushAclUpdates(DocIdPusher pusher, IDfClientX dmClientX,
-      IDfSession session, Principals principals, Checkpoint checkpoint)
-      throws DfException, IOException, InterruptedException {
-    logger.log(Level.INFO, "pushAclUpdates");
-    DocumentumAcls dctmAcls =
-        new DocumentumAcls(dmClientX, session, principals);
-    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(checkpoint);
-    pusher.pushNamedResources(aclMap);
-    return dctmAcls.getUpdateAclsCheckpoint();
-  }
-
-  /**
-   * Push Document updates to GSA.
-   */
-  @VisibleForTesting
-  Checkpoint pushDocumentUpdates(DocIdPusher pusher, IDfClientX dmClientX,
-      IDfSession session, List<String> startPaths, Checkpoint checkpoint)
-      throws DfException, IOException, InterruptedException {
-    String queryStr = makeUpdatedDocsQuery(startPaths, checkpoint);
-    logger.log(Level.FINER, "Modified DocIds Query: {0}", queryStr);
-    IDfQuery query = dmClientX.getQuery();
-    query.setDQL(queryStr);
-    IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
-    try {
-      String lastModified = checkpoint.getLastModified();
-      String objectId = checkpoint.getObjectId();
-      ImmutableList.Builder<DocId> builder = ImmutableList.builder();
-      while (result.next()) {
-        lastModified = result.getString("r_modify_date_str");
-        objectId = result.getString("r_object_id");
-        IDfType type = session.getType(result.getString("r_object_type"));
-        if (type.isTypeOf("dm_folder")) {
-          addUpdatedDocIds(builder, session, startPaths, objectId, null);
-        } else if (type.isTypeOf("dm_document")) {
-          String name = result.getString("object_name");
-          int numFolders = result.getValueCount("i_folder_id");
-          for (int i = 0; i < numFolders; i++) {
-            String folderId = result.getRepeatingString("i_folder_id", i);
-            addUpdatedDocIds(builder, session, startPaths, folderId, name);
-          }
-        }
-      }
-      List<DocId> docids = builder.build();
-      logger.log(Level.FINER, "DocumentumAdaptor Modified DocIds: {0}", docids);
-      pusher.pushDocIds(docids);
-      return new Checkpoint(lastModified, objectId);
-    } finally {
-      result.close();
-    }
-  }
-
-  /**
-   * A document can reside under multiple folder paths.
-   * Only push those paths that are under our start paths.
-   *
-   * @param builder builder for list of DocIds
-   * @param folderId the ID of a Documentum folder
-   * @param name the document name to append to the folder
-   *    paths for a document, or null for a folder
-   */
-  private void addUpdatedDocIds(ImmutableList.Builder<DocId> builder,
-      IDfSession session, List<String> startPaths, String folderId, String name)
-      throws DfException {
-    IDfFolder folder = session.getFolderBySpecification(folderId);
-    if (folder != null) {
-      for (int i = 0; i < folder.getFolderPathCount(); i++) {
-        String path = folder.getFolderPath(i);
-        if (isUnderStartPath(path, startPaths)) {
-          if (Strings.isNullOrEmpty(name)) {
-            builder.add(docIdFromPath(path));
-          } else {
-            builder.add(docIdFromPath(path + "/" + name));
-          }
-        }
-      }
-    }
-  }
-
-  protected String makeUpdatedDocsQuery(List<String> startPaths,
-      Checkpoint checkpoint) {
-    StringBuilder query = new StringBuilder();
-    query.append("SELECT object_name, r_object_id, r_object_type, ")
-        .append("i_folder_id, r_modify_date, ")
-        .append("DATETOSTRING(r_modify_date, 'yyyy-mm-dd hh:mi:ss') ")
-        .append("AS r_modify_date_str FROM dm_sysobject ")
-        // Limit the returned object types to dm_document, dm_folder,
-        // or any type that is a subtype of dm_document or dm_folder.
-       .append("WHERE (TYPE(dm_document) OR TYPE(dm_folder)) AND ")
-       .append(MessageFormat.format(
-            "((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') AND "
-            + "r_object_id > ''{1}'') OR (r_modify_date > DATE(''{0}'',"
-            + "''yyyy-mm-dd hh:mi:ss'')))",
-            checkpoint.getLastModified(), checkpoint.getObjectId()));
-
-    // Limit our search to modified docs under a start path.
-    query.append(" AND (FOLDER('");
-    Joiner.on("',descend) OR FOLDER('").appendTo(query, startPaths);
-    query.append("',descend)) ORDER BY r_modify_date, r_object_id");
-    return query.toString();
   }
 }
