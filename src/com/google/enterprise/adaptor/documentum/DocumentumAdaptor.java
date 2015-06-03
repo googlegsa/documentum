@@ -28,6 +28,7 @@ import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
 import com.google.enterprise.adaptor.DocIdEncoder;
 import com.google.enterprise.adaptor.DocIdPusher;
+import com.google.enterprise.adaptor.DocIdPusher.Record;
 import com.google.enterprise.adaptor.GroupPrincipal;
 import com.google.enterprise.adaptor.IOHelper;
 import com.google.enterprise.adaptor.InvalidConfigurationException;
@@ -176,6 +177,16 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
   }
 
+  // Returns a DocId of a path with optional name to append.
+  @VisibleForTesting
+  static DocId docIdFromPath(String path, String name) {
+    if (Strings.isNullOrEmpty(name)) {
+      return docIdFromPath(path);
+    } else {
+      return docIdFromPath(path + "/" + name);
+    }
+  }
+  
   // Strip leading and trailing slashes so our DocIds show up
   // as children of the baseDocUrl.
   @VisibleForTesting
@@ -539,7 +550,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     try {
       String lastModified = checkpoint.getLastModified();
       String objectId = checkpoint.getObjectId();
-      ImmutableList.Builder<DocId> builder = ImmutableList.builder();
+      ImmutableList.Builder<Record> builder = ImmutableList.builder();
       while (result.next()) {
         lastModified = result.getString("r_modify_date_str");
         objectId = result.getString("r_object_id");
@@ -555,9 +566,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
           }
         }
       }
-      List<DocId> docids = builder.build();
-      logger.log(Level.FINER, "DocumentumAdaptor Modified DocIds: {0}", docids);
-      pusher.pushDocIds(docids);
+      List<Record> records = builder.build();
+      logger.log(Level.FINER, "DocumentumAdaptor Modified DocIds: {0}",
+          records);
+      pusher.pushRecords(records);
       return new Checkpoint(lastModified, objectId);
     } finally {
       result.close();
@@ -573,7 +585,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    * @param name the document name to append to the folder
    *    paths for a document, or null for a folder
    */
-  private void addUpdatedDocIds(ImmutableList.Builder<DocId> builder,
+  private void addUpdatedDocIds(ImmutableList.Builder<Record> builder,
       IDfSession session, List<String> startPaths, String folderId, String name)
       throws DfException {
     IDfFolder folder = session.getFolderBySpecification(folderId);
@@ -581,11 +593,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       for (int i = 0; i < folder.getFolderPathCount(); i++) {
         String path = folder.getFolderPath(i);
         if (isUnderStartPath(path, startPaths)) {
-          if (Strings.isNullOrEmpty(name)) {
-            builder.add(docIdFromPath(path));
-          } else {
-            builder.add(docIdFromPath(path + "/" + name));
-          }
+          builder.add(new Record.Builder(docIdFromPath(path, name))
+              .setCrawlImmediately(true).build());
         }
       }
     }
@@ -754,7 +763,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       String objName = child.getString("object_name");
       logger.log(Level.FINER, "VDoc Child Object Id: {0}; Name: {1}",
           new Object[] {objId, objName});
-      DocId childDocId = docIdFromPath(docIdToPath(id) + "/" + objName);
+      DocId childDocId = docIdFromPath(docIdToPath(id), objName);
       resp.addAnchor(docIdEncoder.encodeDocId(childDocId), objName);
     }
   }
@@ -779,7 +788,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         String objName = dmCollection.getString("object_name");
         logger.log(Level.FINER, "Object Id: {0}; Name: {1}",
             new Object[] {objId, objName});
-        DocId childDocId = docIdFromPath(docIdToPath(id) + "/" + objName);
+        DocId childDocId = docIdFromPath(docIdToPath(id), objName);
         htmlWriter.addLink(childDocId, objName);
       }
       htmlWriter.finish();

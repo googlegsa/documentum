@@ -3338,15 +3338,14 @@ public class DocumentumAdaptorTest {
    */
   private List<Record> makeExpectedDocIds(String folderPath, 
       String... objectNames) {
-    assertTrue(folderPath.startsWith("/"));
-    // DocIds drop the leading slash, so it makes a pretty URL.
-    String folder = folderPath.substring(1);
-
     ImmutableList.Builder<Record> builder = ImmutableList.builder();
     for (String name : objectNames) {
-      DocId docid = new DocId(
-          name.equals(folderPath) ? folder : (folder + "/" + name));
-      builder.add(new Record.Builder(docid).build());
+      if (name.equals(folderPath)) {
+        name = null;
+      }
+      DocId docid = DocumentumAdaptor.docIdFromPath(folderPath, name);
+      builder.add(
+          new Record.Builder(docid).setCrawlImmediately(true).build());
     }
     return builder.build();
   }
