@@ -2370,7 +2370,6 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testGetGroupsDmWorldOnly() throws Exception {
-    GroupTestProxies proxyCls = new GroupTestProxies();
     Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2", "User3", "User4", "User5");
 
@@ -2384,15 +2383,13 @@ public class DocumentumAdaptorTest {
                             new UserPrincipal("User4", "globalNS"),
                             new UserPrincipal("User5", "globalNS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups =
-        getGroups(proxyCls, config);
+    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
 
     assertEquals(expected, groups);
   }
 
   @Test
   public void testGetGroupsUserMembersOnly() throws Exception {
-    GroupTestProxies proxyCls = new GroupTestProxies();
     Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2", "User3", "User4", "User5");
     insertGroup("Group1", "User1", "User2", "User3");
@@ -2408,15 +2405,13 @@ public class DocumentumAdaptorTest {
                             new UserPrincipal("User4", "globalNS"),
                             new UserPrincipal("User5", "globalNS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups =
-        getGroups(proxyCls, config);
+    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
 
     assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
   public void testGetGroupsInvalidMembers() throws Exception {
-    GroupTestProxies proxyCls = new GroupTestProxies();
     Config config = getTestAdaptorConfig();
     insertUsers("User1", "User3", "User5");
     insertGroup("Group1", "User1", "User2", "User3");
@@ -2430,15 +2425,13 @@ public class DocumentumAdaptorTest {
             ImmutableSet.of(new UserPrincipal("User3", "globalNS"),
                             new UserPrincipal("User5", "globalNS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups =
-        getGroups(proxyCls, config);
+    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
 
     assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
   public void testGetGroupsEmptyGroup() throws Exception {
-    GroupTestProxies proxyCls = new GroupTestProxies();
     Config config = getTestAdaptorConfig();
     insertUsers("User1", "User3", "User5");
     insertGroup("Group1", "User1", "User2", "User3");
@@ -2451,15 +2444,13 @@ public class DocumentumAdaptorTest {
             new GroupPrincipal("Group2", "localNS"),
             ImmutableSet.<Principal>of());
 
-    Map<GroupPrincipal, Collection<Principal>> groups =
-        getGroups(proxyCls, config);
+    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
 
     assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
   public void testGetGroupsUserAndGroupMembers() throws Exception {
-    GroupTestProxies proxyCls = new GroupTestProxies();
     Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2", "User3", "User4", "User5");
     insertGroup("Group1", "User1", "User2", "User3");
@@ -2475,15 +2466,13 @@ public class DocumentumAdaptorTest {
                            new UserPrincipal("User4", "globalNS"),
                            new UserPrincipal("User5", "globalNS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups =
-        getGroups(proxyCls, config);
+    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
 
     assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
   public void testGetGroupsDifferentMemberLoginName() throws Exception {
-    GroupTestProxies proxyCls = new GroupTestProxies();
     Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2");
     jdbcFixture.executeUpdate("insert into dm_user(user_name, user_login_name) "
@@ -2496,15 +2485,13 @@ public class DocumentumAdaptorTest {
                             new UserPrincipal("User2", "globalNS"),
                             new UserPrincipal("UserTres", "globalNS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups =
-        getGroups(proxyCls, config);
+    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
 
     assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
   public void testGetGroupsDifferentGroupLoginName() throws Exception {
-    GroupTestProxies proxyCls = new GroupTestProxies();
     Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2");
     jdbcFixture.executeUpdate(
@@ -2519,15 +2506,13 @@ public class DocumentumAdaptorTest {
             ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
                             new UserPrincipal("User2", "globalNS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups =
-        getGroups(proxyCls, config);
+    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
 
     assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
   public void testGetGroupsMemberLdapDn() throws Exception {
-    GroupTestProxies proxyCls = new GroupTestProxies();
     Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2");
     jdbcFixture.executeUpdate("insert into dm_user(user_name, user_login_name, "
@@ -2541,15 +2526,13 @@ public class DocumentumAdaptorTest {
                             new UserPrincipal("User2", "globalNS"),
                             new UserPrincipal("test\\User3", "globalNS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups =
-        getGroups(proxyCls, config);
+    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
 
     assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
   public void testGetGroupsGroupLdapDn() throws Exception {
-    GroupTestProxies proxyCls = new GroupTestProxies();
     Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2");
     jdbcFixture.executeUpdate("insert into dm_user(user_name, user_login_name, "
@@ -2565,15 +2548,13 @@ public class DocumentumAdaptorTest {
                 ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
                                 new UserPrincipal("User2", "globalNS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups =
-        getGroups(proxyCls, config);
+    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
 
     assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
   public void testGetGroupsWindowsDomainUsers() throws Exception {
-    GroupTestProxies proxyCls = new GroupTestProxies();
     Config config = getTestAdaptorConfig();
     config.overrideKey("documentum.windowsDomain", "TEST");
     insertUsers("User1", "User2", "User3", "User4", "User5");
@@ -2590,15 +2571,13 @@ public class DocumentumAdaptorTest {
                            new UserPrincipal("TEST\\User4", "globalNS"),
                            new UserPrincipal("TEST\\User5", "globalNS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups =
-        getGroups(proxyCls, config);
+    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
 
     assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
   public void testGetGroupsLocalAndGlobalGroups() throws Exception {
-    GroupTestProxies proxyCls = new GroupTestProxies();
     Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2", "User3", "User4", "User5");
     insertGroup("Group1", "User1", "User2", "User3");
@@ -2614,15 +2593,13 @@ public class DocumentumAdaptorTest {
                             new UserPrincipal("User4", "globalNS"),
                             new UserPrincipal("User5", "globalNS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups =
-        getGroups(proxyCls, config);
+    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
 
     assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
   public void testGetGroupsGlobalGroupMembers() throws Exception {
-    GroupTestProxies proxyCls = new GroupTestProxies();
     Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2", "User3", "User4", "User5");
     insertLdapGroup("Group1", "User1", "User2", "User3");
@@ -2638,15 +2615,13 @@ public class DocumentumAdaptorTest {
                            new UserPrincipal("User4", "globalNS"),
                            new UserPrincipal("User5", "globalNS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups =
-        getGroups(proxyCls, config);
+    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
 
     assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
   public void testGetGroupsLocalGroupsOnly() throws Exception {
-    GroupTestProxies proxyCls = new GroupTestProxies();
     Config config = getTestAdaptorConfig();
     config.overrideKey("documentum.pushLocalGroupsOnly", "true");
     insertUsers("User1", "User2", "User3", "User4", "User5");
@@ -2659,8 +2634,7 @@ public class DocumentumAdaptorTest {
                            new UserPrincipal("User4", "globalNS"),
                            new UserPrincipal("User5", "globalNS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups =
-        getGroups(proxyCls, config);
+    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
 
     assertEquals(expected, filterDmWorld(groups));
   }
@@ -2699,8 +2673,9 @@ public class DocumentumAdaptorTest {
   /* TODO(bmj): This should create the adaptor, init it with config, then call
    * its getDocIds method with a recording pusher and return the pushed groups.
    */
-  private Map<GroupPrincipal, Collection<Principal>> getGroups(
-      GroupTestProxies proxyCls, Config config) throws DfException {
+  private Map<GroupPrincipal, Collection<Principal>> getGroups(Config config)
+       throws DfException {
+    GroupTestProxies proxyCls = new GroupTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
     IDfSession session = proxyCls.sessionManager
