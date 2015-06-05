@@ -112,7 +112,7 @@ public class DocumentumAdaptorTest {
 
   private static final String CREATE_TABLE_GROUP = "create table dm_group "
       + "(r_object_id varchar, group_name varchar, group_source varchar, "
-      + "groups_names varchar, users_names varchar)";
+      + "groups_names varchar, users_names varchar, r_modify_date timestamp)";
 
   private static final String CREATE_TABLE_USER = "create table dm_user "
       + "(user_name varchar primary key, user_login_name varchar, "
@@ -120,8 +120,9 @@ public class DocumentumAdaptorTest {
 
   private static final String CREATE_TABLE_SYSOBJECT =
       "create table dm_sysobject "
-      + "(r_object_id varchar, r_object_type varchar, object_name varchar, "
-      + "i_folder_id varchar, object_path varchar, r_modify_date timestamp)";
+      + "(r_object_id varchar, r_modify_date timestamp, r_object_type varchar, "
+      // Note: mock_object_path is an artifact used to emulate FOLDER predicate.
+      + "object_name varchar, i_folder_id varchar, mock_object_path varchar)";
 
   private JdbcFixture jdbcFixture = new JdbcFixture();
 
@@ -1728,9 +1729,15 @@ public class DocumentumAdaptorTest {
 
   private void insertGroup(String groupName, String... members)
       throws SQLException {
-    jdbcFixture.executeUpdate(String.format(
-        "insert into dm_user(user_name, user_login_name, r_is_group) "
-        + "values('%s', '%s', TRUE)", groupName, groupName));
+    insertGroupEx(getNowPlusMinutes(0), "", groupName, members);
+  }
+
+  private void insertGroupEx(String lastModified, String source,
+      String groupName, String... members) throws SQLException {
+    jdbcFixture.executeUpdate(String.format("INSERT INTO dm_user"
+        + "(user_name, user_login_name, user_source, user_ldap_dn, r_is_group) "
+        + "VALUES('%s', '%s', '%s', '%s', TRUE)", groupName, groupName,
+        source, "LDAP".equals(source) ? ("CN=" + groupName) : ""));
     List<String> users = new ArrayList<String>(); 
     List<String> groups = new ArrayList<String>(); 
     for (String member : members) {
@@ -1741,10 +1748,12 @@ public class DocumentumAdaptorTest {
       }
     }
     Joiner joiner = Joiner.on(',');
-    jdbcFixture.executeUpdate(String.format(
-        "insert into dm_group(group_name, users_names, groups_names) "
-        + "values('%s', '%s', '%s')", groupName, joiner.join(users),
-        joiner.join(groups)));
+    jdbcFixture.executeUpdate(String.format("INSERT INTO dm_group"
+        + "(r_object_id, group_name, group_source, users_names, groups_names, "
+        + "r_modify_date) VALUES('%s', '%s', '%s', '%s', '%s', "
+        + "PARSEDATETIME('%s', 'yyyy-MM-dd HH:mm:ss'))",
+        "12" + groupName, groupName, source, joiner.join(users),
+        joiner.join(groups), lastModified));
   }
 
   private void createAcl(String id) throws SQLException {
@@ -2241,6 +2250,9 @@ public class DocumentumAdaptorTest {
       public CollectionMock(String query) throws DfException {
         try {
           stmt = jdbcFixture.getConnection().createStatement();
+          query = query.replace("DATETOSTRING", "FORMATDATETIME")
+              .replace("DATE(", "PARSEDATETIME(")
+              .replace("yyyy-mm-dd hh:mi:ss", "yyyy-MM-dd HH:mm:ss");
           rs = stmt.executeQuery(query);
         } catch (SQLException e) {
           throw new DfException(e);
@@ -2650,24 +2662,7 @@ public class DocumentumAdaptorTest {
 
   private void insertLdapGroup(String groupName, String... members)
       throws SQLException {
-    jdbcFixture.executeUpdate(String.format("insert into dm_user("
-        + "user_name, user_login_name, user_source, user_ldap_dn, r_is_group) "
-        + "values('%s', '%s', 'LDAP', '%s', TRUE)", groupName, groupName,
-        "CN=" + groupName));
-    List<String> users = new ArrayList<String>(); 
-    List<String> groups = new ArrayList<String>(); 
-    for (String member : members) {
-      if (member.toLowerCase().startsWith("group")) {
-        groups.add(member);
-      } else {
-        users.add(member);
-      }
-    }
-    Joiner joiner = Joiner.on(',');
-    jdbcFixture.executeUpdate(String.format("insert into dm_group("
-        + "group_name, group_source, users_names, groups_names) "
-        + "values('%s', 'LDAP', '%s', '%s')", groupName, joiner.join(users),
-        joiner.join(groups)));
+    insertGroupEx(getNowPlusMinutes(0), "LDAP", groupName, members);
   }
 
   /* TODO(bmj): This should create the adaptor, init it with config, then call
@@ -2690,6 +2685,137 @@ public class DocumentumAdaptorTest {
     } finally {
       proxyCls.sessionManager.release(session);
     }
+  }
+
+  @Test
+  public void testGetGroupUpdatesNoDmWorld() throws Exception {
+    Config config = getTestAdaptorConfig();
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+
+    // The virtual group, dm_world, should not be pushed for updates.
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+      expected = ImmutableMap.<GroupPrincipal, Collection<Principal>>of();
+
+    Checkpoint checkpoint = new Checkpoint();
+    checkModifiedGroupsPushed(config, checkpoint, expected, checkpoint);
+  }
+
+  @Test
+  public void testGetGroupUpdatesAllNew() throws Exception {
+    Config config = getTestAdaptorConfig();
+    insertUsers("User1", "User2");
+    insertModifiedGroup(FEB_1970, "Group1", "User1");
+    insertModifiedGroup(MAR_1970, "Group2", "User2");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+        expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
+            ImmutableSet.of(new UserPrincipal("User1", "globalNS")),
+            new GroupPrincipal("Group2", "localNS"),
+            ImmutableSet.of(new UserPrincipal("User2", "globalNS")));
+
+    checkModifiedGroupsPushed(config, new Checkpoint(JAN_1970, "0"),
+        expected, new Checkpoint(MAR_1970, "12Group2"));
+  }
+
+  @Test
+  public void testGetGroupUpdatesSomeNew() throws Exception {
+    Config config = getTestAdaptorConfig();
+    insertUsers("User1", "User2");
+    insertModifiedGroup(JAN_1970, "Group1", "User1");
+    insertModifiedGroup(FEB_1970, "Group2", "User2");
+    insertModifiedGroup(MAR_1970, "Group3", "User2");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+        expected = ImmutableMap.of(new GroupPrincipal("Group2", "localNS"),
+            ImmutableSet.of(new UserPrincipal("User2", "globalNS")),
+            new GroupPrincipal("Group3", "localNS"),
+            ImmutableSet.of(new UserPrincipal("User2", "globalNS")));
+
+    checkModifiedGroupsPushed(config, new Checkpoint(JAN_1970, "12Group1"),
+        expected, new Checkpoint(MAR_1970, "12Group3"));
+  }
+
+  @Test
+  public void testGetGroupUpdatesNoneNew() throws Exception {
+    Config config = getTestAdaptorConfig();
+    insertUsers("User1", "User2");
+    insertModifiedGroup(FEB_1970, "Group1", "User1");
+    insertModifiedGroup(MAR_1970, "Group2", "User2");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+      expected = ImmutableMap.<GroupPrincipal, Collection<Principal>>of();
+
+    Checkpoint checkpoint = new Checkpoint(MAR_1970, "12Group2");
+    checkModifiedGroupsPushed(config, checkpoint, expected, checkpoint);
+  }
+
+  @Test
+  public void testGetGroupUpdatesSomeLdapGroups() throws Exception {
+    Config config = getTestAdaptorConfig();
+    insertUsers("User1", "User2");
+    insertModifiedGroup(JAN_1970, "Group1", "User1");
+    insertModifiedGroup(FEB_1970, "Group2", "User2");
+    insertGroupEx(MAR_1970, "LDAP", "GroupLDAP", "User2");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+        expected = ImmutableMap.of(new GroupPrincipal("Group2", "localNS"),
+            ImmutableSet.of(new UserPrincipal("User2", "globalNS")),
+            new GroupPrincipal("GroupLDAP", "globalNS"),
+            ImmutableSet.of(new UserPrincipal("User2", "globalNS")));
+
+    checkModifiedGroupsPushed(config, new Checkpoint(JAN_1970, "12Group1"),
+        expected, new Checkpoint(MAR_1970, "12GroupLDAP"));
+  }
+
+  @Test
+  public void testGetGroupUpdatesLocalGroupsOnly() throws Exception {
+    Config config = getTestAdaptorConfig();
+    config.overrideKey("documentum.pushLocalGroupsOnly", "true");
+    insertUsers("User1", "User2");
+    insertModifiedGroup(JAN_1970, "Group1", "User1");
+    insertModifiedGroup(FEB_1970, "Group2", "User2");
+    insertGroupEx(MAR_1970, "LDAP", "GroupLDAP", "User2");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+        expected = ImmutableMap.of(new GroupPrincipal("Group2", "localNS"),
+            ImmutableSet.of(new UserPrincipal("User2", "globalNS")));
+
+    checkModifiedGroupsPushed(config, new Checkpoint(JAN_1970, "12Group1"),
+        expected, new Checkpoint(FEB_1970, "12Group2"));
+  }
+
+  private void insertModifiedGroup(String lastModified, String groupName,
+      String... members) throws SQLException {
+    insertGroupEx(lastModified, "", groupName, members);
+  }
+
+  /* TODO(bmj): This should create the adaptor, init it with config, then call
+   * its getModifiedDocIds method with a recording pusher.
+   */
+  private void checkModifiedGroupsPushed(Config config, Checkpoint checkpoint,
+      Map<GroupPrincipal, ? extends Collection<? extends Principal>>
+      expectedGroups, Checkpoint expectedCheckpoint)
+      throws DfException, IOException, InterruptedException {
+    GroupTestProxies proxyCls = new GroupTestProxies();
+    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
+    IDfSession session = proxyCls.sessionManager
+        .getSession(config.getValue("documentum.docbaseName"));
+    Checkpoint endCheckpoint;
+    try {
+      Principals principals = new Principals(session, "localNS",
+          config.getValue("adaptor.namespace"),
+          config.getValue("documentum.windowsDomain"));
+      boolean localGroupsOnly = Boolean.parseBoolean(
+          config.getValue("documentum.pushLocalGroupsOnly"));
+      endCheckpoint = adaptor.pushGroupUpdates(pusher, dmClientX, session,
+          principals, localGroupsOnly, checkpoint);
+    } finally {
+      proxyCls.sessionManager.release(session);
+    }
+    assertEquals(expectedGroups, pusher.getGroups());
+    assertEquals(expectedCheckpoint, endCheckpoint);
   }
 
   /* Mock proxy classes for testing ACL Updates */
@@ -3158,7 +3284,7 @@ public class DocumentumAdaptorTest {
               .replace("yyyy-mm-dd hh:mi:ss", "yyyy-MM-dd HH:mm:ss")
               .replace("TYPE(dm_document)", "r_object_type LIKE 'dm_document%'")
               .replace("TYPE(dm_folder)", "r_object_type LIKE 'dm_folder%'")
-              .replace("FOLDER(", "(object_path LIKE ")
+              .replace("FOLDER(", "(mock_object_path LIKE ")
               .replace("',descend", "%'");
           rs = stmt.executeQuery(query);
         } catch (SQLException e) {
@@ -3279,7 +3405,7 @@ public class DocumentumAdaptorTest {
   private void insertSysObject(String lastModified, String id, String name,
       String path, String type, String... folderIds) throws SQLException {
     jdbcFixture.executeUpdate(String.format(
-        "insert into dm_sysobject(r_object_id, object_name, object_path, "
+        "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
         + "r_object_type, i_folder_id, r_modify_date) "
         + "values('%s', '%s', '%s', '%s', '%s', "
         + "parseDateTime('%s', 'yyyy-MM-dd hh:mm:ss'))",

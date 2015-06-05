@@ -127,6 +127,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
   private Checkpoint modifiedAclsCheckpoint = new Checkpoint();
   private Checkpoint modifiedDocumentsCheckpoint = new Checkpoint();
+  private Checkpoint modifiedGroupsCheckpoint = new Checkpoint();
 
   public static void main(String[] args) {
     AbstractAdaptor.main(new DocumentumAdaptor(), args);
@@ -419,22 +420,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups =
           ImmutableMap.builder();
       while (result.next()) {
-        String groupName = result.getString("group_name");
-        logger.log(Level.FINE, "Found Group: {0}", groupName);
-        String principalName = principals.getPrincipalName(groupName);
-        if (principalName != null) {
-          GroupPrincipal groupPrincipal = (GroupPrincipal)
-              principals.getPrincipal(groupName, principalName, true);
-          ImmutableSet.Builder<Principal> buildr = ImmutableSet.builder();
-          // All the member users are in one repeating value, all the member
-          // groups are in another repeating value.
-          addMemberPrincipals(buildr, principals, result, "users_names", false);
-          addMemberPrincipals(buildr, principals, result, "groups_names", true);
-          ImmutableSet<Principal> members = buildr.build();
-          logger.log(Level.FINEST, "Pushing Group {0}: {1}",
-              new Object[] { principalName, members });
-          groups.put(groupPrincipal, members);
-        }
+        addGroup(groups, principals, result);
       }
       // Add special dm_world group, which is all users.
       GroupPrincipal groupPrincipal = (GroupPrincipal)
@@ -446,7 +432,29 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
   }
 
-  /** Adds Principals for all the users or groups to members. */
+  /** Adds a group and its members to the collection of groups. */
+  private void addGroup(
+      ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups,
+      Principals principals, IDfCollection result) throws DfException {
+    String groupName = result.getString("group_name");
+    logger.log(Level.FINE, "Found Group: {0}", groupName);
+    String principalName = principals.getPrincipalName(groupName);
+    if (principalName != null) {
+      GroupPrincipal groupPrincipal = (GroupPrincipal)
+          principals.getPrincipal(groupName, principalName, true);
+      ImmutableSet.Builder<Principal> builder = ImmutableSet.builder();
+      // All the member users are in one repeating value, all the member
+      // groups are in another repeating value.
+      addMemberPrincipals(builder, principals, result, "users_names", false);
+      addMemberPrincipals(builder, principals, result, "groups_names", true);
+      ImmutableSet<Principal> members = builder.build();
+      logger.log(Level.FINEST, "Pushing Group {0}: {1}",
+           new Object[] { principalName, members });
+      groups.put(groupPrincipal, members);
+    }
+  }
+
+  /** Adds Principals for all the users or groups to the set of members. */
   // TODO(bmj): Apparently repeating values on DB2 backends may not work here.
   private void addMemberPrincipals(ImmutableSet.Builder<Principal> members,
       Principals principals, IDfCollection result, String attributeName,
@@ -509,6 +517,14 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       try {
         modifiedAclsCheckpoint = pushAclUpdates(pusher, dmClientX, dmSession,
           principals, modifiedAclsCheckpoint);
+      } catch (DfException e) {
+        savedException = e;
+      }
+
+      try {
+        modifiedGroupsCheckpoint = pushGroupUpdates(pusher, dmClientX,
+            dmSession, principals, pushLocalGroupsOnly, 
+            modifiedGroupsCheckpoint);
       } catch (DfException e) {
         savedException = e;
       }
@@ -600,7 +616,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
   }
 
-  protected String makeUpdatedDocsQuery(List<String> startPaths,
+  private String makeUpdatedDocsQuery(List<String> startPaths,
       Checkpoint checkpoint) {
     StringBuilder query = new StringBuilder();
     query.append("SELECT object_name, r_object_id, r_object_type, ")
@@ -620,6 +636,54 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     query.append(" AND (FOLDER('");
     Joiner.on("',descend) OR FOLDER('").appendTo(query, startPaths);
     query.append("',descend)) ORDER BY r_modify_date, r_object_id");
+    return query.toString();
+  }
+
+  /**
+   * Push Group updates to GSA.
+   */
+  @VisibleForTesting
+  Checkpoint pushGroupUpdates(DocIdPusher pusher, IDfClientX dmClientX,
+      IDfSession session, Principals principals, boolean localGroupsOnly,
+      Checkpoint checkpoint)
+      throws DfException, IOException, InterruptedException {
+    String queryStr = makeUpdatedGroupsQuery(localGroupsOnly, checkpoint);
+    logger.log(Level.FINER, "Modified Groups Query: {0}", queryStr);
+    IDfQuery query = dmClientX.getQuery();
+    query.setDQL(queryStr);
+    IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
+    try {
+      String lastModified = checkpoint.getLastModified();
+      String objectId = checkpoint.getObjectId();
+      ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups =
+          ImmutableMap.builder();
+      while (result.next()) {
+        lastModified = result.getString("r_modify_date_str");
+        objectId = result.getString("r_object_id");
+        addGroup(groups, principals, result);
+      }
+      pusher.pushGroupDefinitions(groups.build(), /* case sensitive */ true);
+      return new Checkpoint(lastModified, objectId);
+    } finally {
+      result.close();
+    }
+  }
+
+  private String makeUpdatedGroupsQuery(boolean localGroupsOnly,
+      Checkpoint checkpoint) {
+    StringBuilder query = new StringBuilder();
+    query.append("SELECT r_object_id, group_name, groups_names, users_names, ")
+        .append("r_modify_date, ")
+        .append("DATETOSTRING(r_modify_date, 'yyyy-mm-dd hh:mi:ss') ")
+        .append("AS r_modify_date_str FROM dm_group WHERE ")
+        .append(MessageFormat.format(
+            "((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') AND "
+            + "r_object_id > ''{1}'') OR (r_modify_date > DATE(''{0}'',"
+            + "''yyyy-mm-dd hh:mi:ss'')))",
+            checkpoint.getLastModified(), checkpoint.getObjectId()));
+    if (localGroupsOnly) {
+      query.append(" AND (group_source IS NULL OR group_source <> 'LDAP')");
+    }
     return query.toString();
   }
 
