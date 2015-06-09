@@ -1496,6 +1496,9 @@ public class DocumentumAdaptorTest {
       public CollectionMock(String query) throws DfException {
         try {
           stmt = jdbcFixture.getConnection().createStatement();
+          query = query.replace("DATETOSTRING", "FORMATDATETIME")
+              .replace("date(", "parseDateTime(")
+              .replace("yyyy-mm-dd hh:mi:ss", "yyyy-MM-dd HH:mm:ss");
           rs = stmt.executeQuery(query);
         } catch (SQLException e) {
           throw new DfException(e);
@@ -2214,6 +2217,175 @@ public class DocumentumAdaptorTest {
     }
   }
 
+  private void insertAclAudit(String id, String chronicleId, String auditObjId,
+      String eventName, String date) throws SQLException {
+    jdbcFixture.executeUpdate(String.format(
+        "insert into dm_audittrail_acl(r_object_id, chronicle_id, "
+            + "audited_obj_id, event_name, time_stamp_utc) "
+            + "values('%s', '%s', '%s', '%s', parseDateTime('%s', "
+            + "'yyyy-MM-dd HH:mm:ss'))",
+            id, chronicleId, auditObjId, eventName, date));
+  }
+
+  private DocumentumAcls getDocumentumAcls() throws DfException {
+    AclTestProxies proxyCls = new AclTestProxies();
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(proxyCls.getProxyClientX());
+    Config config = getTestAdaptorConfig();
+    IDfSession session = proxyCls.sessionManager.getSession("test");
+    DocumentumAcls dctmAcls =
+        new DocumentumAcls(proxyCls.getProxyClientX(), session, new Principals(
+            session, "localNS", config.getValue("adaptor.namespace"),
+            config.getValue("documentum.windowsDomain")));
+    return dctmAcls;
+  }
+
+  /**
+   * Returns date string for the given number of minutes into the future
+   * or past.
+   *
+   * @param minutes minutes to add.
+   * @return date in string format.
+   */
+  private String getNowPlusMinutes(int minutes) {
+    SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+    Calendar calendar = Calendar.getInstance();
+    calendar.add(Calendar.MINUTE, minutes);
+    return format.format(calendar.getTime());
+  }
+
+  @Test
+  public void testUpdateAcls() throws Exception {
+    DocumentumAcls dctmAcls = getDocumentumAcls();
+
+    createAcl("4501081f80000100");
+    createAcl("4501081f80000101");
+    createAcl("4501081f80000102");
+    String dateStr = getNowPlusMinutes(5);
+    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
+    insertAclAudit("125", "236", "4501081f80000102", "dm_destroy", dateStr);
+
+    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(new Checkpoint());
+    assertEquals(ImmutableSet.of(
+        new DocId("4501081f80000100"),
+        new DocId("4501081f80000101"),
+        new DocId("4501081f80000102")), aclMap.keySet());
+    assertEquals(new Checkpoint(dateStr, "125"),
+        dctmAcls.getUpdateAclsCheckpoint());
+
+    Acl acl = aclMap.get(new DocId("4501081f80000100"));
+    assertTrue(acl.getPermitUsers().isEmpty());
+  }
+
+  @Test
+  public void testUpdateAclsWithSameChronicleId() throws Exception {
+    DocumentumAcls dctmAcls = getDocumentumAcls();
+
+    createAcl("4501081f80000100");
+    createAcl("4501081f80000101");
+    createAcl("4501081f80000102");
+    String dateStr = getNowPlusMinutes(6);
+    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "234", "4501081f80000101", "dm_saveasnew", dateStr);
+    insertAclAudit("125", "234", "4501081f80000102", "dm_destroy", dateStr);
+
+    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(new Checkpoint());
+    assertEquals(ImmutableSet.of(new DocId("4501081f80000100")),
+        aclMap.keySet());
+    assertEquals(new Checkpoint(dateStr, "125"),
+        dctmAcls.getUpdateAclsCheckpoint());
+  }
+
+  @Test
+  public void testPreviouslyUpdatedAcls() throws Exception {
+    DocumentumAcls dctmAcls = getDocumentumAcls();
+
+    createAcl("4501081f80000100");
+    createAcl("4501081f80000101");
+    createAcl("4501081f80000102");
+    String dateStr = getNowPlusMinutes(-10);
+    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
+    insertAclAudit("125", "236", "4501081f80000102", "dm_destroy", dateStr);
+
+    Checkpoint checkpoint = new Checkpoint(getNowPlusMinutes(0), "0");
+    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(checkpoint);
+    assertEquals(ImmutableMap.of(), aclMap);
+    assertEquals(checkpoint, dctmAcls.getUpdateAclsCheckpoint());
+  }
+
+  @Test
+  public void testMultiUpdateAcls() throws Exception {
+    DocumentumAcls dctmAcls = getDocumentumAcls();
+
+    createAcl("4501081f80000100");
+    createAcl("4501081f80000101");
+    createAcl("4501081f80000102");
+    String dateStr = getNowPlusMinutes(10);
+    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
+    insertAclAudit("125", "236", "4501081f80000102", "dm_saveasnew", dateStr);
+
+    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(new Checkpoint());
+    assertEquals(ImmutableSet.of(
+        new DocId("4501081f80000100"),
+        new DocId("4501081f80000101"),
+        new DocId("4501081f80000102")), aclMap.keySet());
+    assertEquals(new Checkpoint(dateStr, "125"),
+        dctmAcls.getUpdateAclsCheckpoint());
+
+    dateStr = getNowPlusMinutes(15);
+    insertAclAudit("126", "237", "4501081f80000103", "dm_saveasnew", dateStr);
+    insertAclAudit("127", "238", "4501081f80000104", "dm_destroy", dateStr);
+
+    aclMap = dctmAcls.getUpdateAcls(dctmAcls.getUpdateAclsCheckpoint());
+    assertEquals(ImmutableSet.of(
+        new DocId("4501081f80000103"), 
+        new DocId("4501081f80000104")), aclMap.keySet());
+    assertEquals(new Checkpoint(dateStr, "127"),
+        dctmAcls.getUpdateAclsCheckpoint());
+  }
+
+  @Test
+  public void testMultiUpdateAclsWithNoResults() throws Exception {
+    DocumentumAcls dctmAcls = getDocumentumAcls();
+
+    createAcl("4501081f80000106");
+    createAcl("4501081f80000107");
+    String dateStr = getNowPlusMinutes(20);
+    insertAclAudit("128", "234", "4501081f80000106", "dm_saveasnew", dateStr);
+    insertAclAudit("129", "235", "4501081f80000107", "dm_saveasnew", dateStr);
+
+    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(new Checkpoint());
+    assertEquals(ImmutableSet.of(
+        new DocId("4501081f80000106"),
+        new DocId("4501081f80000107")), aclMap.keySet());
+    Checkpoint checkpoint = dctmAcls.getUpdateAclsCheckpoint();
+    assertEquals(new Checkpoint(dateStr, "129"), checkpoint);
+
+    aclMap = dctmAcls.getUpdateAcls(checkpoint);
+    assertEquals(ImmutableSet.of(), aclMap.keySet());
+    assertEquals(checkpoint, dctmAcls.getUpdateAclsCheckpoint());
+  }
+
+  @Test
+  public void testCheckpoint() throws Exception {
+    Checkpoint checkpoint = new Checkpoint();
+    assertEquals("0", checkpoint.getObjectId());
+    assertNotNull(checkpoint.getLastModified());
+    assertTrue(checkpoint.equals(checkpoint));
+
+    checkpoint = new Checkpoint("foo", "bar");
+    assertEquals("foo", checkpoint.getLastModified());
+    assertEquals("bar", checkpoint.getObjectId());
+    assertTrue(checkpoint.equals(checkpoint));
+    assertTrue(checkpoint.equals(new Checkpoint("foo", "bar")));
+    assertFalse(checkpoint.equals(null));
+    assertFalse(checkpoint.equals(new Checkpoint()));
+    assertFalse(checkpoint.equals(new Checkpoint("foo", "xyzzy")));
+  }
+
   /* Mock proxy classes for testing pushing Groups */
   private class GroupTestProxies {
     IDfSessionManager sessionManager = Proxies.newProxyInstance(
@@ -2816,431 +2988,6 @@ public class DocumentumAdaptorTest {
     }
     assertEquals(expectedGroups, pusher.getGroups());
     assertEquals(expectedCheckpoint, endCheckpoint);
-  }
-
-  /* Mock proxy classes for testing ACL Updates */
-  private class AclUpdateTestProxies {
-    IDfSessionManager sessionManager = Proxies.newProxyInstance(
-        IDfSessionManager.class, new SessionManagerMock());
-
-    public IDfClientX getProxyClientX() {
-      return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
-    }
-
-    private class ClientXMock {
-      public IDfQuery getQuery() {
-        return Proxies.newProxyInstance(IDfQuery.class, new QueryMock());
-      }
-    }
-
-    private class QueryMock {
-      private String query;
-
-      public void setDQL(String query) {
-        this.query = query;
-      }
-
-      public IDfCollection execute(IDfSession session, int arg1)
-          throws SQLException {
-        return Proxies.newProxyInstance(IDfCollection.class,
-            new CollectionMock(query));
-      }
-    }
-
-    private class CollectionMock {
-      Statement stmt;
-      ResultSet rs;
-
-      public CollectionMock(String query) throws SQLException {
-        stmt = jdbcFixture.getConnection().createStatement();
-        query = query.replace("DATETOSTRING", "FORMATDATETIME")
-            .replace("date(", "parseDateTime(")
-            .replace("yyyy-mm-dd hh:mi:ss", "yyyy-MM-dd HH:mm:ss");
-        rs = stmt.executeQuery(query);
-      }
-
-      public String getString(String colName) throws SQLException {
-        return rs.getString(colName);
-      }
-
-      public boolean next() throws SQLException {
-        return rs.next();
-      }
-
-      public int getState() {
-        return IDfCollection.DF_READY_STATE;
-      }
-
-      public void close() throws SQLException {
-        rs.close();
-        stmt.close();
-      }
-    }
-
-    private class SessionManagerMock {
-      public IDfSession getSession(String docbaseName) {
-        return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
-      }
-
-      public void release(IDfSession session) {
-      }
-    }
-
-    private class SessionMock {
-      public IDfACL getObject(IDfId id) {
-        return Proxies.newProxyInstance(IDfACL.class,
-            new ACLMock(id.toString()));
-      }
-
-      public Object getObjectByQualification(String query) throws DfException {
-        if (Strings.isNullOrEmpty(query)) {
-          return null;
-        }
-        try (Statement stmt = jdbcFixture.getConnection().createStatement();
-             ResultSet rs = stmt.executeQuery("SELECT * FROM " + query)) {
-          if (rs.first()) {
-            if (query.toLowerCase().startsWith("dm_user ")) {
-              return Proxies.newProxyInstance(IDfUser.class, new UserMock(rs));
-            } else if (query.toLowerCase().startsWith("dm_group ")) {
-              return
-                  Proxies.newProxyInstance(IDfGroup.class, new GroupMock(rs));
-            }
-          }
-          return null;
-        } catch (SQLException e) {
-          throw new DfException(e);
-        }
-      }
-    }
-
-    private class UserMock {
-      private String loginName;
-      private String source;
-      private String ldapDn;
-      private boolean isGroup;
-
-      public UserMock(ResultSet rs) throws SQLException {
-        loginName = rs.getString("user_login_name");
-        source = rs.getString("user_source");
-        ldapDn = rs.getString("user_ldap_dn");
-        isGroup = rs.getBoolean("r_is_group");
-      }
-
-      public String getUserLoginName() {
-        return loginName;
-      }
-
-      public String getUserSourceAsString() {
-        return source;
-      }
-
-      public String getUserDistinguishedLDAPName() {
-        return ldapDn;
-      }
-
-      public boolean isGroup() {
-        return isGroup;
-      }
-    }
-
-    private class GroupMock {
-      private String source;
-
-      public GroupMock(ResultSet rs) throws SQLException {
-        source = rs.getString("group_source");
-      }
-
-      public String getGroupSource() {
-        return source;
-      }
-    }
-
-    private class AccessorInfo {
-      String name;
-      int permitType;
-      int permit;
-      boolean isGroup;
-
-      AccessorInfo(String name, int permitType, int permit, boolean isGroup) {
-        this.name = name;
-        this.permitType = permitType;
-        this.permit = permit;
-        this.isGroup = isGroup;
-      }
-
-      String getName() {
-        return name;
-      }
-
-      int getPermitType() {
-        return permitType;
-      }
-
-      int getPermit() {
-        return permit;
-      }
-
-      boolean isGroup() {
-        return isGroup;
-      }
-    }
-
-    public class ACLMock {
-      private String id;
-      List<AccessorInfo> accessorList = new ArrayList<AccessorInfo>();
-
-      public ACLMock(String id) {
-        this.id = id;
-        try {
-          getAccessorInfo();
-        } catch (SQLException e) {
-          e.printStackTrace();
-        }
-      }
-
-      private void getAccessorInfo() throws SQLException {
-        Statement stmt = null;
-        ResultSet rs = null;
-        try {
-          stmt = jdbcFixture.getConnection().createStatement();
-          rs = stmt.executeQuery("select r_accessor_name,  r_accessor_permit, "
-              + "r_permit_type, r_is_group from dm_acl "
-              + "where r_object_id = '" + id + "'");
-          while (rs.next()) {
-            String accessorName = rs.getString("r_accessor_name");
-            int accessorPermit = rs.getInt("r_accessor_permit");
-            int accessorPermitType = rs.getInt("r_permit_type");
-            boolean isGroup = rs.getBoolean("r_is_group");
-
-            if (!Strings.isNullOrEmpty(accessorName)) {
-              accessorList.add(new AccessorInfo(accessorName,
-                  accessorPermitType, accessorPermit, isGroup));
-            }
-          }
-        } finally {
-          rs.close();
-          stmt.close();
-        }
-      }
-
-      public int getAccessorCount() {
-        return accessorList.size();
-      }
-
-      public String getAccessorName(int n) {
-        return accessorList.get(n).getName();
-      }
-
-      public int getAccessorPermitType(int n) {
-        return accessorList.get(n).getPermitType();
-      }
-
-      public int getAccessorPermit(int n) {
-        return accessorList.get(n).getPermit();
-      }
-
-      public boolean isGroup(int n) {
-        return accessorList.get(n).isGroup();
-      }
-
-      private boolean isAccessorGroup(String accessorName) throws SQLException {
-        Statement stmt = null;
-        ResultSet rs = null;
-        try {
-          stmt = jdbcFixture.getConnection().createStatement();
-          rs = stmt.executeQuery("select r_is_group from dm_user"
-              + " where user_name = '" + accessorName + "'");
-          if (rs.next()) {
-            return rs.getBoolean(1);
-          }
-        } finally {
-          rs.close();
-          stmt.close();
-        }
-        return false;
-      }
-
-      void grantPermit(IDfPermit permit) throws SQLException {
-        jdbcFixture.executeUpdate(String.format(
-            "insert into dm_acl(r_object_id, r_accessor_name, "
-                + "r_accessor_permit, r_permit_type, r_is_group) values("
-                + "'%s', '%s', '%s', '%s', '%s')",
-            id, permit.getAccessorName(), permit.getPermitValueInt(),
-            permit.getPermitType(), isAccessorGroup(permit.getAccessorName())));
-
-        accessorList.add(new AccessorInfo(permit.getAccessorName(),
-            permit.getPermitType(), permit.getPermitValueInt(),
-            isAccessorGroup(permit.getAccessorName())));
-      }
-    }
-  }
-
-  private void insertAclAudit(String id, String chronicleId, String auditObjId,
-      String eventName, String date) throws SQLException {
-    jdbcFixture.executeUpdate(String.format(
-        "insert into dm_audittrail_acl(r_object_id, chronicle_id, "
-            + "audited_obj_id, event_name, time_stamp_utc) "
-            + "values('%s', '%s', '%s', '%s', parseDateTime('%s', "
-            + "'yyyy-MM-dd HH:mm:ss'))",
-            id, chronicleId, auditObjId, eventName, date));
-  }
-
-  private DocumentumAcls getDocumentumAcls() throws DfException {
-    AclUpdateTestProxies proxyCls = new AclUpdateTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
-    Config config = getTestAdaptorConfig();
-    IDfSession session = proxyCls.sessionManager.getSession("test");
-    DocumentumAcls dctmAcls =
-        new DocumentumAcls(proxyCls.getProxyClientX(), session, new Principals(
-            session, "localNS", config.getValue("adaptor.namespace"),
-            config.getValue("documentum.windowsDomain")));
-    return dctmAcls;
-  }
-
-  @Test
-  public void testUpdateAcls() throws Exception {
-    DocumentumAcls dctmAcls = getDocumentumAcls();
-
-    createAcl("4501081f80000100");
-    createAcl("4501081f80000101");
-    createAcl("4501081f80000102");
-    String dateStr = getNowPlusMinutes(5);
-    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
-    insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
-    insertAclAudit("125", "236", "4501081f80000102", "dm_destroy", dateStr);
-
-    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(new Checkpoint());
-    assertEquals(ImmutableSet.of(
-        new DocId("4501081f80000100"),
-        new DocId("4501081f80000101"),
-        new DocId("4501081f80000102")), aclMap.keySet());
-    assertEquals(new Checkpoint(dateStr, "125"),
-        dctmAcls.getUpdateAclsCheckpoint());
-
-    Acl acl = aclMap.get(new DocId("4501081f80000100"));
-    assertTrue(acl.getPermitUsers().isEmpty());
-  }
-
-  @Test
-  public void testUpdateAclsWithSameChronicleId() throws Exception {
-    DocumentumAcls dctmAcls = getDocumentumAcls();
-
-    createAcl("4501081f80000100");
-    createAcl("4501081f80000101");
-    createAcl("4501081f80000102");
-    String dateStr = getNowPlusMinutes(6);
-    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
-    insertAclAudit("124", "234", "4501081f80000101", "dm_saveasnew", dateStr);
-    insertAclAudit("125", "234", "4501081f80000102", "dm_destroy", dateStr);
-
-    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(new Checkpoint());
-    assertEquals(ImmutableSet.of(new DocId("4501081f80000100")),
-        aclMap.keySet());
-    assertEquals(new Checkpoint(dateStr, "125"),
-        dctmAcls.getUpdateAclsCheckpoint());
-  }
-
-  @Test
-  public void testPreviouslyUpdatedAcls() throws Exception {
-    DocumentumAcls dctmAcls = getDocumentumAcls();
-
-    createAcl("4501081f80000100");
-    createAcl("4501081f80000101");
-    createAcl("4501081f80000102");
-    String dateStr = getNowPlusMinutes(-10);
-    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
-    insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
-    insertAclAudit("125", "236", "4501081f80000102", "dm_destroy", dateStr);
-
-    Checkpoint checkpoint = new Checkpoint(getNowPlusMinutes(0), "0");
-    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(checkpoint);
-    assertEquals(ImmutableMap.of(), aclMap);
-    assertEquals(checkpoint, dctmAcls.getUpdateAclsCheckpoint());
-  }
-
-  @Test
-  public void testMultiUpdateAcls() throws Exception {
-    DocumentumAcls dctmAcls = getDocumentumAcls();
-
-    createAcl("4501081f80000100");
-    createAcl("4501081f80000101");
-    createAcl("4501081f80000102");
-    String dateStr = getNowPlusMinutes(10);
-    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
-    insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
-    insertAclAudit("125", "236", "4501081f80000102", "dm_saveasnew", dateStr);
-
-    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(new Checkpoint());
-    assertEquals(ImmutableSet.of(
-        new DocId("4501081f80000100"),
-        new DocId("4501081f80000101"),
-        new DocId("4501081f80000102")), aclMap.keySet());
-    assertEquals(new Checkpoint(dateStr, "125"),
-        dctmAcls.getUpdateAclsCheckpoint());
-
-    dateStr = getNowPlusMinutes(15);
-    insertAclAudit("126", "237", "4501081f80000103", "dm_saveasnew", dateStr);
-    insertAclAudit("127", "238", "4501081f80000104", "dm_destroy", dateStr);
-
-    aclMap = dctmAcls.getUpdateAcls(dctmAcls.getUpdateAclsCheckpoint());
-    assertEquals(ImmutableSet.of(
-        new DocId("4501081f80000103"), 
-        new DocId("4501081f80000104")), aclMap.keySet());
-    assertEquals(new Checkpoint(dateStr, "127"),
-        dctmAcls.getUpdateAclsCheckpoint());
-  }
-
-  @Test
-  public void testMultiUpdateAclsWithNoResults() throws Exception {
-    DocumentumAcls dctmAcls = getDocumentumAcls();
-
-    createAcl("4501081f80000106");
-    createAcl("4501081f80000107");
-    String dateStr = getNowPlusMinutes(20);
-    insertAclAudit("128", "234", "4501081f80000106", "dm_saveasnew", dateStr);
-    insertAclAudit("129", "235", "4501081f80000107", "dm_saveasnew", dateStr);
-
-    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(new Checkpoint());
-    assertEquals(ImmutableSet.of(
-        new DocId("4501081f80000106"),
-        new DocId("4501081f80000107")), aclMap.keySet());
-    Checkpoint checkpoint = dctmAcls.getUpdateAclsCheckpoint();
-    assertEquals(new Checkpoint(dateStr, "129"), checkpoint);
-
-    aclMap = dctmAcls.getUpdateAcls(checkpoint);
-    assertEquals(ImmutableSet.of(), aclMap.keySet());
-    assertEquals(checkpoint, dctmAcls.getUpdateAclsCheckpoint());
-  }
-
-  /**
-   * Returns date string with minutes added to current time.
-   *
-   * @param minutes minutes to add.
-   * @return date in string format.
-   */
-  private String getNowPlusMinutes(int minutes) {
-    SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-    Calendar calendar = Calendar.getInstance();
-    calendar.add(Calendar.MINUTE, minutes);
-    return format.format(calendar.getTime());
-  }
-
-  @Test
-  public void testCheckpoint() throws Exception {
-    Checkpoint checkpoint = new Checkpoint();
-    assertEquals("0", checkpoint.getObjectId());
-    assertNotNull(checkpoint.getLastModified());
-    assertTrue(checkpoint.equals(checkpoint));
-
-    checkpoint = new Checkpoint("foo", "bar");
-    assertEquals("foo", checkpoint.getLastModified());
-    assertEquals("bar", checkpoint.getObjectId());
-    assertTrue(checkpoint.equals(checkpoint));
-    assertTrue(checkpoint.equals(new Checkpoint("foo", "bar")));
-    assertFalse(checkpoint.equals(null));
-    assertFalse(checkpoint.equals(new Checkpoint()));
-    assertFalse(checkpoint.equals(new Checkpoint("foo", "xyzzy")));
   }
 
   /* Mock proxy classes for testing pushing modified DocIds. */
