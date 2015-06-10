@@ -1547,7 +1547,7 @@ public class DocumentumAdaptorTest {
     private class SessionMock {
       public IDfACL getObject(IDfId id) {
         return Proxies.newProxyInstance(IDfACL.class,
-            new ACLMock(id.toString()));
+            new AclMock(id.toString()));
       }
 
       public Object getObjectByQualification(String query) throws DfException {
@@ -1643,11 +1643,11 @@ public class DocumentumAdaptorTest {
       }
     }
 
-    public class ACLMock {
+    public class AclMock {
       private String id;
       List<AccessorInfo> accessorList = new ArrayList<AccessorInfo>();
 
-      public ACLMock(String id) {
+      public AclMock(String id) {
         this.id = id;
         try {
           getAccessorInfo();
@@ -1696,29 +1696,6 @@ public class DocumentumAdaptorTest {
         return accessorList.get(n).isGroup();
       }
 
-      private boolean isAccessorGroup(String accessorName) throws SQLException {
-        try (Statement stmt = jdbcFixture.getConnection().createStatement();
-            ResultSet rs = stmt.executeQuery("select r_is_group from dm_user"
-                + " where user_name = '" + accessorName + "'")) {
-          if (rs.next()) {
-            return rs.getBoolean(1);
-          }
-        }
-        return false;
-      }
-
-      void grantPermit(IDfPermit permit) throws SQLException {
-        jdbcFixture.executeUpdate(String.format(
-            "insert into dm_acl(r_object_id, r_accessor_name, "
-                + "r_accessor_permit, r_permit_type, r_is_group) values("
-                + "'%s', '%s', '%s', '%s', '%s')",
-            id, permit.getAccessorName(), permit.getPermitValueInt(),
-            permit.getPermitType(), isAccessorGroup(permit.getAccessorName())));
-
-        accessorList.add(new AccessorInfo(permit.getAccessorName(),
-            permit.getPermitType(), permit.getPermitValueInt(),
-            isAccessorGroup(permit.getAccessorName())));
-      }
     }
   }
 
@@ -1764,24 +1741,44 @@ public class DocumentumAdaptorTest {
         "insert into dm_acl(r_object_id) values('%s')", id));
   }
 
-  private void addAllowPermitToAcl(AclTestProxies.ACLMock aclObj, String name,
-      int permit) throws SQLException {
+  private boolean isAccessorGroup(String accessorName) throws SQLException {
+    try (Statement stmt = jdbcFixture.getConnection().createStatement();
+         ResultSet rs = stmt.executeQuery("select r_is_group from dm_user"
+             + " where user_name = '" + accessorName + "'")) {
+        if (rs.next()) {
+          return rs.getBoolean(1);
+        }
+      }
+    return false;
+  }
+
+  private void grantPermit(String id, IDfPermit permit) throws SQLException {
+    jdbcFixture.executeUpdate(String.format(
+        "insert into dm_acl(r_object_id, r_accessor_name, "
+        + "r_accessor_permit, r_permit_type, r_is_group) values("
+        + "'%s', '%s', '%s', '%s', '%s')",
+        id, permit.getAccessorName(), permit.getPermitValueInt(),
+        permit.getPermitType(), isAccessorGroup(permit.getAccessorName())));
+  }
+
+  private void addAllowPermitToAcl(String id, String accessorName, int permit)
+      throws SQLException {
     IDfPermit permitobj = new DfPermit();
-    permitobj.setAccessorName(name);
+    permitobj.setAccessorName(accessorName);
     permitobj.setPermitType(IDfPermitType.ACCESS_PERMIT);
     permitobj.setPermitValue(Integer.toString(permit));
 
-    aclObj.grantPermit(permitobj);
+    grantPermit(id, permitobj);
   }
 
-  private void addDenyPermitToAcl(AclTestProxies.ACLMock aclObj, String name,
-      int permit) throws SQLException {
+  private void addDenyPermitToAcl(String id, String accessorName, int permit)
+      throws SQLException {
     IDfPermit permitobj = new DfPermit();
-    permitobj.setAccessorName(name);
+    permitobj.setAccessorName(accessorName);
     permitobj.setPermitType(IDfPermitType.ACCESS_RESTRICTION);
     permitobj.setPermitValue(Integer.toString(permit));
 
-    aclObj.grantPermit(permitobj);
+    grantPermit(id, permitobj);
   }
 
   // tests for ACLs
@@ -1789,32 +1786,31 @@ public class DocumentumAdaptorTest {
   //                     user and group names with quotes in them.
   @Test
   public void testAcls() throws Exception {
-    AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
+
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     createAcl("4501081f80000102");
-    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
+    Map<DocId, Acl> namedResources = getAllAcls(config);
 
     assertEquals(3, namedResources.size());
   }
 
   @Test
   public void testAllowAcls() throws Exception {
-    AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
 
     insertUsers("User1", "User2", "User3", "User4", "User5");
-    createAcl("4501081f80000100");
-    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000100");
-    addAllowPermitToAcl(aclObj, "User4", IDfACL.DF_PERMIT_WRITE);
-    addAllowPermitToAcl(aclObj, "User5", IDfACL.DF_PERMIT_READ);
-    addDenyPermitToAcl(aclObj, "User1", IDfACL.DF_PERMIT_DELETE);
-    addDenyPermitToAcl(aclObj, "User2", IDfACL.DF_PERMIT_BROWSE);
-    addDenyPermitToAcl(aclObj, "User3", IDfACL.DF_PERMIT_WRITE);
+    String id = "4501081f80000100";
+    createAcl(id);
+    addAllowPermitToAcl(id, "User4", IDfACL.DF_PERMIT_WRITE);
+    addAllowPermitToAcl(id, "User5", IDfACL.DF_PERMIT_READ);
+    addDenyPermitToAcl(id, "User1", IDfACL.DF_PERMIT_DELETE);
+    addDenyPermitToAcl(id, "User2", IDfACL.DF_PERMIT_BROWSE);
+    addDenyPermitToAcl(id, "User3", IDfACL.DF_PERMIT_WRITE);
 
-    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
-    Acl acl = namedResources.get(new DocId("4501081f80000100"));
+    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Acl acl = namedResources.get(new DocId(id));
     assertEquals(ImmutableSet.of(new UserPrincipal("User4", "globalNS"),
         new UserPrincipal("User5", "globalNS")),
         acl.getPermitUsers());
@@ -1826,20 +1822,19 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testBrowseAcls() throws Exception {
-    AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
 
     insertUsers("User1", "User2", "User3", "User4", "User5");
-    createAcl("4501081f80000100");
-    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000100");
-    addAllowPermitToAcl(aclObj, "User4", IDfACL.DF_PERMIT_WRITE);
-    addAllowPermitToAcl(aclObj, "User5", IDfACL.DF_PERMIT_READ);
-    addDenyPermitToAcl(aclObj, "User1", IDfACL.DF_PERMIT_DELETE);
-    addDenyPermitToAcl(aclObj, "User2", IDfACL.DF_PERMIT_BROWSE);
-    addDenyPermitToAcl(aclObj, "User3", IDfACL.DF_PERMIT_WRITE);
+    String id = "4501081f80000100";
+    createAcl(id);
+    addAllowPermitToAcl(id, "User4", IDfACL.DF_PERMIT_WRITE);
+    addAllowPermitToAcl(id, "User5", IDfACL.DF_PERMIT_READ);
+    addDenyPermitToAcl(id, "User1", IDfACL.DF_PERMIT_DELETE);
+    addDenyPermitToAcl(id, "User2", IDfACL.DF_PERMIT_BROWSE);
+    addDenyPermitToAcl(id, "User3", IDfACL.DF_PERMIT_WRITE);
 
-    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
-    Acl acl = namedResources.get(new DocId("4501081f80000100"));
+    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Acl acl = namedResources.get(new DocId(id));
     assertEquals(ImmutableSet.of(new UserPrincipal("User4", "globalNS"),
         new UserPrincipal("User5", "globalNS")),
         acl.getPermitUsers());
@@ -1851,23 +1846,22 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testGroupAcls() throws Exception {
-    AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
 
     insertUsers("User1", "User2");
     insertGroup("Group1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
     insertGroup("Group3", "User6", "User7");
-    createAcl("4501081f80000101");
-    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000101");
-    addAllowPermitToAcl(aclObj, "User1", IDfACL.DF_PERMIT_WRITE);
-    addAllowPermitToAcl(aclObj, "User2", IDfACL.DF_PERMIT_READ);
-    addAllowPermitToAcl(aclObj, "Group1", IDfACL.DF_PERMIT_READ);
-    addAllowPermitToAcl(aclObj, "Group2", IDfACL.DF_PERMIT_WRITE);
-    addDenyPermitToAcl(aclObj, "Group3", IDfACL.DF_PERMIT_READ);
+    String id = "4501081f80000101";
+    createAcl(id);
+    addAllowPermitToAcl(id, "User1", IDfACL.DF_PERMIT_WRITE);
+    addAllowPermitToAcl(id, "User2", IDfACL.DF_PERMIT_READ);
+    addAllowPermitToAcl(id, "Group1", IDfACL.DF_PERMIT_READ);
+    addAllowPermitToAcl(id, "Group2", IDfACL.DF_PERMIT_WRITE);
+    addDenyPermitToAcl(id, "Group3", IDfACL.DF_PERMIT_READ);
 
-    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
-    Acl acl = namedResources.get(new DocId("4501081f80000101"));
+    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Acl acl = namedResources.get(new DocId(id));
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
         new GroupPrincipal("Group2", "localNS")),
         acl.getPermitGroups());
@@ -1881,21 +1875,20 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testGroupDmWorldAcl() throws Exception {
-    AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
 
     insertUsers("User1", "User3");
     insertGroup("Group1", "User2", "User3");
     insertGroup("dm_world", "User1", "User2", "User3");
-    createAcl("4501081f80000102");
-    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000102");
-    addAllowPermitToAcl(aclObj, "Group1", IDfACL.DF_PERMIT_BROWSE);
-    addAllowPermitToAcl(aclObj, "dm_world", IDfACL.DF_PERMIT_READ);
-    addDenyPermitToAcl(aclObj, "User1", IDfACL.DF_PERMIT_READ);
-    addDenyPermitToAcl(aclObj, "User3", IDfACL.DF_PERMIT_WRITE);
+    String id = "4501081f80000102";
+    createAcl(id);
+    addAllowPermitToAcl(id, "Group1", IDfACL.DF_PERMIT_BROWSE);
+    addAllowPermitToAcl(id, "dm_world", IDfACL.DF_PERMIT_READ);
+    addDenyPermitToAcl(id, "User1", IDfACL.DF_PERMIT_READ);
+    addDenyPermitToAcl(id, "User3", IDfACL.DF_PERMIT_WRITE);
 
-    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
-    Acl acl = namedResources.get(new DocId("4501081f80000102"));
+    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Acl acl = namedResources.get(new DocId(id));
     assertEquals(ImmutableSet.of(new GroupPrincipal("dm_world", "localNS")),
         acl.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl.getDenyGroups());
@@ -1906,22 +1899,21 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testDomainForAclUser() throws Exception {
-    AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
     config.overrideKey("documentum.windowsDomain", "ajax");
 
     insertUsers("User1", "User2", "User3", "User4", "User5");
-    createAcl("4501081f80000100");
-    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000100");
-    addAllowPermitToAcl(aclObj, "User4", IDfACL.DF_PERMIT_WRITE);
-    addAllowPermitToAcl(aclObj, "User5", IDfACL.DF_PERMIT_READ);
-    addDenyPermitToAcl(aclObj, "User1", IDfACL.DF_PERMIT_DELETE);
-    addDenyPermitToAcl(aclObj, "User2", IDfACL.DF_PERMIT_BROWSE);
-    addDenyPermitToAcl(aclObj, "User3", IDfACL.DF_PERMIT_WRITE);
+    String id = "4501081f80000100";
+    createAcl(id);
+    addAllowPermitToAcl(id, "User4", IDfACL.DF_PERMIT_WRITE);
+    addAllowPermitToAcl(id, "User5", IDfACL.DF_PERMIT_READ);
+    addDenyPermitToAcl(id, "User1", IDfACL.DF_PERMIT_DELETE);
+    addDenyPermitToAcl(id, "User2", IDfACL.DF_PERMIT_BROWSE);
+    addDenyPermitToAcl(id, "User3", IDfACL.DF_PERMIT_WRITE);
 
-    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
+    Map<DocId, Acl> namedResources = getAllAcls(config);
 
-    Acl acl = namedResources.get(new DocId("4501081f80000100"));
+    Acl acl = namedResources.get(new DocId(id));
     assertEquals(ImmutableSet.of(new UserPrincipal("ajax\\User4", "globalNS"),
         new UserPrincipal("ajax\\User5", "globalNS")),
         acl.getPermitUsers());
@@ -1931,21 +1923,20 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testDnsDomainForAclUser() throws Exception {
-    AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
     config.overrideKey("documentum.windowsDomain", "ajax.example.com");
 
     insertUsers("User1", "User2", "User3", "User4", "User5");
-    createAcl("4501081f80000100");
-    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000100");
-    addAllowPermitToAcl(aclObj, "User4", IDfACL.DF_PERMIT_WRITE);
-    addAllowPermitToAcl(aclObj, "User5", IDfACL.DF_PERMIT_READ);
-    addDenyPermitToAcl(aclObj, "User1", IDfACL.DF_PERMIT_DELETE);
-    addDenyPermitToAcl(aclObj, "User2", IDfACL.DF_PERMIT_BROWSE);
-    addDenyPermitToAcl(aclObj, "User3", IDfACL.DF_PERMIT_WRITE);
+    String id = "4501081f80000100";
+    createAcl(id);
+    addAllowPermitToAcl(id, "User4", IDfACL.DF_PERMIT_WRITE);
+    addAllowPermitToAcl(id, "User5", IDfACL.DF_PERMIT_READ);
+    addDenyPermitToAcl(id, "User1", IDfACL.DF_PERMIT_DELETE);
+    addDenyPermitToAcl(id, "User2", IDfACL.DF_PERMIT_BROWSE);
+    addDenyPermitToAcl(id, "User3", IDfACL.DF_PERMIT_WRITE);
 
-    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
-    Acl acl = namedResources.get(new DocId("4501081f80000100"));
+    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Acl acl = namedResources.get(new DocId(id));
     assertEquals(ImmutableSet.of(
         new UserPrincipal("ajax.example.com\\User4", "globalNS"),
         new UserPrincipal("ajax.example.com\\User5", "globalNS")),
@@ -1957,7 +1948,6 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testDomainForAclGroup() throws Exception {
-    AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
     config.overrideKey("documentum.windowsDomain", "ajax");
 
@@ -1965,16 +1955,16 @@ public class DocumentumAdaptorTest {
     insertGroup("Group1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
     insertGroup("Group3", "User6", "User7");
-    createAcl("4501081f80000101");
-    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000101");
-    addAllowPermitToAcl(aclObj, "User1", IDfACL.DF_PERMIT_WRITE);
-    addAllowPermitToAcl(aclObj, "User2", IDfACL.DF_PERMIT_READ);
-    addAllowPermitToAcl(aclObj, "Group1", IDfACL.DF_PERMIT_READ);
-    addAllowPermitToAcl(aclObj, "Group2", IDfACL.DF_PERMIT_WRITE);
-    addDenyPermitToAcl(aclObj, "Group3", IDfACL.DF_PERMIT_READ);
+    String id = "4501081f80000101";
+    createAcl(id);
+    addAllowPermitToAcl(id, "User1", IDfACL.DF_PERMIT_WRITE);
+    addAllowPermitToAcl(id, "User2", IDfACL.DF_PERMIT_READ);
+    addAllowPermitToAcl(id, "Group1", IDfACL.DF_PERMIT_READ);
+    addAllowPermitToAcl(id, "Group2", IDfACL.DF_PERMIT_WRITE);
+    addDenyPermitToAcl(id, "Group3", IDfACL.DF_PERMIT_READ);
 
-    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
-    Acl acl = namedResources.get(new DocId("4501081f80000101"));
+    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Acl acl = namedResources.get(new DocId(id));
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
         new GroupPrincipal("Group2", "localNS")),
         acl.getPermitGroups());
@@ -1983,26 +1973,25 @@ public class DocumentumAdaptorTest {
   }
 
   // Tests for required groups and required group sets.
-  private void addRequiredGroupSetToAcl(AclTestProxies.ACLMock aclObj,
-      String name) throws SQLException {
-    IDfPermit permitobj = new DfPermit();
-    permitobj.setAccessorName(name);
-    permitobj.setPermitType(IDfPermitType.REQUIRED_GROUP_SET);
-    aclObj.grantPermit(permitobj);
-  }
-
-  private void addRequiredGroupToAcl(AclTestProxies.ACLMock aclObj, String name)
+  private void addRequiredGroupSetToAcl(String id, String accessorName)
       throws SQLException {
     IDfPermit permitobj = new DfPermit();
-    permitobj.setAccessorName(name);
+    permitobj.setAccessorName(accessorName);
+    permitobj.setPermitType(IDfPermitType.REQUIRED_GROUP_SET);
+    grantPermit(id, permitobj);
+  }
+
+  private void addRequiredGroupToAcl(String id, String accessorName)
+      throws SQLException {
+    IDfPermit permitobj = new DfPermit();
+    permitobj.setAccessorName(accessorName);
     permitobj.setPermitType(IDfPermitType.REQUIRED_GROUP);
-    aclObj.grantPermit(permitobj);
+    grantPermit(id, permitobj);
   }
 
   @Test
   public void testRequiredGroupSetAcl() throws DfException,
       InterruptedException, SQLException {
-    AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
 
     insertUsers("User1", "User2", "User3", "User4", "User5", "User6", "User7");
@@ -2012,26 +2001,26 @@ public class DocumentumAdaptorTest {
     insertGroup("GroupSet1", "Group1", "Group2");
     insertGroup("GroupSet2", "Group2", "Group3");
    
-    createAcl("4501081f80000103");
-    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000103");
-    addAllowPermitToAcl(aclObj, "Group1", IDfACL.DF_PERMIT_READ);
-    addAllowPermitToAcl(aclObj, "Group2", IDfACL.DF_PERMIT_WRITE);
-    addDenyPermitToAcl(aclObj, "Group3", IDfACL.DF_PERMIT_READ);
-    addRequiredGroupSetToAcl(aclObj, "GroupSet1");
-    addRequiredGroupSetToAcl(aclObj, "GroupSet2");
+    String id = "45Acl0";
+    createAcl(id);
+    addAllowPermitToAcl(id, "Group1", IDfACL.DF_PERMIT_READ);
+    addAllowPermitToAcl(id, "Group2", IDfACL.DF_PERMIT_WRITE);
+    addDenyPermitToAcl(id, "Group3", IDfACL.DF_PERMIT_READ);
+    addRequiredGroupSetToAcl(id, "GroupSet1");
+    addRequiredGroupSetToAcl(id, "GroupSet2");
 
-    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
+    Map<DocId, Acl> namedResources = getAllAcls(config);
     assertEquals(2, namedResources.size());
 
-    Acl acl1 = namedResources.get(new DocId("4501081f80000103_reqGroupSet"));
+    Acl acl1 = namedResources.get(new DocId("45Acl0_reqGroupSet"));
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("GroupSet1", "localNS"),
         new GroupPrincipal("GroupSet2", "localNS")),
         acl1.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl1.getDenyGroups());
 
-    Acl acl2 = namedResources.get(new DocId("4501081f80000103"));
-    assertEquals(new DocId("4501081f80000103_reqGroupSet"),
+    Acl acl2 = namedResources.get(new DocId(id));
+    assertEquals(new DocId("45Acl0_reqGroupSet"),
         acl2.getInheritFrom());
     assertEquals(InheritanceType.PARENT_OVERRIDES, acl2.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
@@ -2043,7 +2032,6 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testRequiredGroupsAcl() throws Exception {
-    AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
 
     insertUsers("User1", "User2", "User3", "User4", "User5", "User6", "User7");
@@ -2054,40 +2042,40 @@ public class DocumentumAdaptorTest {
     insertGroup("Group5", "User4", "User5");
     insertGroup("Group6", "User6", "User7");
 
-    createAcl("4501081f80000104");
-    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000104");
-    addAllowPermitToAcl(aclObj, "Group1", IDfACL.DF_PERMIT_READ);
-    addAllowPermitToAcl(aclObj, "Group2", IDfACL.DF_PERMIT_WRITE);
-    addDenyPermitToAcl(aclObj, "Group3", IDfACL.DF_PERMIT_READ);
-    addRequiredGroupToAcl(aclObj, "Group4");
-    addRequiredGroupToAcl(aclObj, "Group5");
-    addRequiredGroupToAcl(aclObj, "Group6");
+    String id = "45Acl0";
+    createAcl(id);
+    addAllowPermitToAcl(id, "Group1", IDfACL.DF_PERMIT_READ);
+    addAllowPermitToAcl(id, "Group2", IDfACL.DF_PERMIT_WRITE);
+    addDenyPermitToAcl(id, "Group3", IDfACL.DF_PERMIT_READ);
+    addRequiredGroupToAcl(id, "Group4");
+    addRequiredGroupToAcl(id, "Group5");
+    addRequiredGroupToAcl(id, "Group6");
 
-    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
+    Map<DocId, Acl> namedResources = getAllAcls(config);
     assertEquals(4, namedResources.size());
 
-    Acl acl1 = namedResources.get(new DocId("4501081f80000104_Group6"));
-    assertEquals(new DocId("4501081f80000104_Group5"), acl1.getInheritFrom());
+    Acl acl1 = namedResources.get(new DocId("45Acl0_Group6"));
+    assertEquals(new DocId("45Acl0_Group5"), acl1.getInheritFrom());
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group6", "localNS")),
         acl1.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl1.getDenyGroups());
 
-    Acl acl2 = namedResources.get(new DocId("4501081f80000104_Group5"));
-    assertEquals(new DocId("4501081f80000104_Group4"), acl2.getInheritFrom());
+    Acl acl2 = namedResources.get(new DocId("45Acl0_Group5"));
+    assertEquals(new DocId("45Acl0_Group4"), acl2.getInheritFrom());
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl2.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group5", "localNS")),
         acl2.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl2.getDenyGroups());
 
-    Acl acl3 = namedResources.get(new DocId("4501081f80000104_Group4"));
+    Acl acl3 = namedResources.get(new DocId("45Acl0_Group4"));
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl3.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group4", "localNS")),
         acl3.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl3.getDenyGroups());
 
-    Acl acl4 = namedResources.get(new DocId("4501081f80000104"));
-    assertEquals(new DocId("4501081f80000104_Group6"), acl4.getInheritFrom());
+    Acl acl4 = namedResources.get(new DocId(id));
+    assertEquals(new DocId("45Acl0_Group6"), acl4.getInheritFrom());
     assertEquals(InheritanceType.PARENT_OVERRIDES, acl4.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
         new GroupPrincipal("Group2", "localNS")),
@@ -2098,7 +2086,6 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testRequiredGroupsAndSetsAcl() throws Exception {
-    AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
 
     insertUsers("User1", "User2", "User3", "User4", "User5", "User6", "User7");
@@ -2111,50 +2098,50 @@ public class DocumentumAdaptorTest {
     insertGroup("GroupSet1", "Group1", "Group2");
     insertGroup("GroupSet2", "Group5", "Group6");
 
-    createAcl("4501081f80000105");
-    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000105");
-    addAllowPermitToAcl(aclObj, "Group1", IDfACL.DF_PERMIT_READ);
-    addAllowPermitToAcl(aclObj, "Group2", IDfACL.DF_PERMIT_WRITE);
-    addDenyPermitToAcl(aclObj, "Group3", IDfACL.DF_PERMIT_READ);
-    addRequiredGroupToAcl(aclObj, "Group4");
-    addRequiredGroupToAcl(aclObj, "Group5");
-    addRequiredGroupToAcl(aclObj, "Group6");
-    addRequiredGroupSetToAcl(aclObj, "GroupSet1");
-    addRequiredGroupSetToAcl(aclObj, "GroupSet2");
+    String id = "45Acl0";
+    createAcl(id);
+    addAllowPermitToAcl(id, "Group1", IDfACL.DF_PERMIT_READ);
+    addAllowPermitToAcl(id, "Group2", IDfACL.DF_PERMIT_WRITE);
+    addDenyPermitToAcl(id, "Group3", IDfACL.DF_PERMIT_READ);
+    addRequiredGroupToAcl(id, "Group4");
+    addRequiredGroupToAcl(id, "Group5");
+    addRequiredGroupToAcl(id, "Group6");
+    addRequiredGroupSetToAcl(id, "GroupSet1");
+    addRequiredGroupSetToAcl(id, "GroupSet2");
 
-    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
+    Map<DocId, Acl> namedResources = getAllAcls(config);
     assertEquals(5, namedResources.size());
 
-    Acl acl1 = namedResources.get(new DocId("4501081f80000105_Group6"));
-    assertEquals(new DocId("4501081f80000105_Group5"), acl1.getInheritFrom());
+    Acl acl1 = namedResources.get(new DocId("45Acl0_Group6"));
+    assertEquals(new DocId("45Acl0_Group5"), acl1.getInheritFrom());
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group6", "localNS")),
         acl1.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl1.getDenyGroups());
 
-    Acl acl2 = namedResources.get(new DocId("4501081f80000105_Group5"));
-    assertEquals(new DocId("4501081f80000105_Group4"), acl2.getInheritFrom());
+    Acl acl2 = namedResources.get(new DocId("45Acl0_Group5"));
+    assertEquals(new DocId("45Acl0_Group4"), acl2.getInheritFrom());
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl2.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group5", "localNS")),
         acl2.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl2.getDenyGroups());
 
-    Acl acl3 = namedResources.get(new DocId("4501081f80000105_Group4"));
+    Acl acl3 = namedResources.get(new DocId("45Acl0_Group4"));
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl3.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group4", "localNS")),
         acl3.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl3.getDenyGroups());
 
-    Acl acl4 = namedResources.get(new DocId("4501081f80000105_reqGroupSet"));
-    assertEquals(new DocId("4501081f80000105_Group6"), acl4.getInheritFrom());
+    Acl acl4 = namedResources.get(new DocId("45Acl0_reqGroupSet"));
+    assertEquals(new DocId("45Acl0_Group6"), acl4.getInheritFrom());
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl4.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("GroupSet1", "localNS"),
         new GroupPrincipal("GroupSet2", "localNS")),
         acl4.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl4.getDenyGroups());
 
-    Acl acl5 = namedResources.get(new DocId("4501081f80000105"));
-    assertEquals(new DocId("4501081f80000105_reqGroupSet"),
+    Acl acl5 = namedResources.get(new DocId(id));
+    assertEquals(new DocId("45Acl0_reqGroupSet"),
         acl5.getInheritFrom());
     assertEquals(InheritanceType.PARENT_OVERRIDES, acl5.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
@@ -2168,30 +2155,29 @@ public class DocumentumAdaptorTest {
   // users and groups in permits and denies.
   @Test
   public void testMissingRequiredGroup() throws Exception {
-    AclTestProxies proxyCls = new AclTestProxies();
     Config config = getTestAdaptorConfig();
 
     insertUsers("User1", "User2", "User3");
     insertGroup("Group1", "User2", "User3");
 
-    createAcl("4501081f80000104");
-    AclTestProxies.ACLMock aclObj = proxyCls.new ACLMock("4501081f80000104");
-    addAllowPermitToAcl(aclObj, "Group1", IDfACL.DF_PERMIT_READ);
-    addRequiredGroupToAcl(aclObj, "GroupNotExists");
+    String id = "45Acl0";
+    createAcl(id);
+    addAllowPermitToAcl(id, "Group1", IDfACL.DF_PERMIT_READ);
+    addRequiredGroupToAcl(id, "GroupNotExists");
 
-    Map<DocId, Acl> namedResources = getAllAcls(proxyCls, config);
+    Map<DocId, Acl> namedResources = getAllAcls(config);
     assertEquals(2, namedResources.size());
 
     // TODO(srinivas): non-existent groups should be dropped from the ACL?
-    Acl acl1 = namedResources.get(new DocId("4501081f80000104_GroupNotExists"));
+    Acl acl1 = namedResources.get(new DocId("45Acl0_GroupNotExists"));
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
     assertEquals(
         ImmutableSet.of(new GroupPrincipal("GroupNotExists", "localNS")),
         acl1.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl1.getDenyGroups());
 
-    Acl acl2 = namedResources.get(new DocId("4501081f80000104"));
-    assertEquals(new DocId("4501081f80000104_GroupNotExists"),
+    Acl acl2 = namedResources.get(new DocId(id));
+    assertEquals(new DocId("45Acl0_GroupNotExists"),
         acl2.getInheritFrom());
     assertEquals(InheritanceType.PARENT_OVERRIDES, acl2.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS")),
@@ -2202,8 +2188,8 @@ public class DocumentumAdaptorTest {
   /* TODO(bmj): This should create the adaptor, init it with config, then call
    * its getDocIds method with a recording pusher and return the pushed acls.
    */
-  private Map<DocId, Acl> getAllAcls(AclTestProxies proxyCls, Config config)
-      throws DfException {
+  private Map<DocId, Acl> getAllAcls(Config config) throws DfException {
+    AclTestProxies proxyCls = new AclTestProxies();
     IDfSession session = proxyCls.sessionManager
         .getSession(config.getValue("documentum.docbaseName"));
     try {
