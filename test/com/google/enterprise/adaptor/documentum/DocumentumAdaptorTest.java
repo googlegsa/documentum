@@ -1463,8 +1463,8 @@ public class DocumentumAdaptorTest {
     assertTrue(proxyCls.respNotFound);
   }
 
-  /* Mock proxy classes for testing ACLs and Groups */
-  private class AclAndGroupTestProxies {
+  /* Mock proxy classes backed by the H2 database tables. */
+  private class H2BackedTestProxies {
     IDfSessionManager sessionManager = Proxies.newProxyInstance(
         IDfSessionManager.class, new SessionManagerMock());
 
@@ -1501,7 +1501,11 @@ public class DocumentumAdaptorTest {
           stmt = jdbcFixture.getConnection().createStatement();
           query = query.replace("DATETOSTRING", "FORMATDATETIME")
               .replace("DATE(", "PARSEDATETIME(")
-              .replace("yyyy-mm-dd hh:mi:ss", "yyyy-MM-dd HH:mm:ss");
+              .replace("yyyy-mm-dd hh:mi:ss", "yyyy-MM-dd HH:mm:ss")
+              .replace("TYPE(dm_document)", "r_object_type LIKE 'dm_document%'")
+              .replace("TYPE(dm_folder)", "r_object_type LIKE 'dm_folder%'")
+              .replace("FOLDER(", "(mock_object_path LIKE ")
+              .replace("',descend", "%'");
           rs = stmt.executeQuery(query);
         } catch (SQLException e) {
           throw new DfException(e);
@@ -1588,6 +1592,57 @@ public class DocumentumAdaptorTest {
         } catch (SQLException e) {
           throw new DfException(e);
         }
+      }
+
+      public IDfFolder getFolderBySpecification(String spec)
+          throws DfException {
+        if (Strings.isNullOrEmpty(spec)) {
+          return null;
+        }
+        String query = String.format(
+            "SELECT * FROM dm_folder WHERE r_object_id = '%s'", spec);
+        try (Statement stmt = jdbcFixture.getConnection().createStatement();
+             ResultSet rs = stmt.executeQuery(query)) {
+          if (rs.first()) {
+            return
+                Proxies.newProxyInstance(IDfFolder.class, new FolderMock(rs));
+          }
+          return null;
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+
+      public IDfType getType(String type) {
+        return Proxies.newProxyInstance(IDfType.class, new TypeMock(type));
+      }
+    }
+
+    private class FolderMock {
+      private String[] folderPaths;
+
+      public FolderMock(ResultSet rs) throws SQLException {
+        this.folderPaths = rs.getString("r_folder_path").split(",");
+      }
+       
+      public int getFolderPathCount() {
+        return folderPaths.length;
+      }
+
+      public String getFolderPath(int index) {
+        return folderPaths[index];
+      }
+    }
+
+    private class TypeMock {
+      private final String type;
+
+      public TypeMock(String type) {
+        this.type = type;
+      }
+
+      public boolean isTypeOf(String otherType) {
+        return type.startsWith(otherType);
       }
     }
 
@@ -2209,7 +2264,7 @@ public class DocumentumAdaptorTest {
    * its getDocIds method with a recording pusher and return the pushed acls.
    */
   private Map<DocId, Acl> getAllAcls(Config config) throws DfException {
-    AclAndGroupTestProxies proxyCls = new AclAndGroupTestProxies();
+    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
     IDfSession session = proxyCls.sessionManager
         .getSession(config.getValue("documentum.docbaseName"));
     try {
@@ -2234,7 +2289,7 @@ public class DocumentumAdaptorTest {
   }
 
   private DocumentumAcls getDocumentumAcls() throws DfException {
-    AclAndGroupTestProxies proxyCls = new AclAndGroupTestProxies();
+    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(proxyCls.getProxyClientX());
     Config config = getTestAdaptorConfig();
@@ -2682,7 +2737,7 @@ public class DocumentumAdaptorTest {
    */
   private Map<GroupPrincipal, Collection<Principal>> getGroups(Config config)
        throws DfException {
-    AclAndGroupTestProxies proxyCls = new AclAndGroupTestProxies();
+    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
     IDfSession session = proxyCls.sessionManager
@@ -2808,7 +2863,7 @@ public class DocumentumAdaptorTest {
       Map<GroupPrincipal, ? extends Collection<? extends Principal>>
       expectedGroups, Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
-    AclAndGroupTestProxies proxyCls = new AclAndGroupTestProxies();
+    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
@@ -2828,165 +2883,6 @@ public class DocumentumAdaptorTest {
     }
     assertEquals(expectedGroups, pusher.getGroups());
     assertEquals(expectedCheckpoint, endCheckpoint);
-  }
-
-  /* Mock proxy classes for testing pushing modified DocIds. */
-  private class ModifiedDocIdTestProxies {
-    IDfSessionManager sessionManager = Proxies.newProxyInstance(
-        IDfSessionManager.class, new SessionManagerMock());
-
-    public IDfClientX getProxyClientX() {
-      return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
-    }
-
-    private class ClientXMock {
-      public IDfQuery getQuery() {
-        return Proxies.newProxyInstance(IDfQuery.class, new QueryMock());
-      }
-    }
-
-    private class QueryMock {
-      private String query;
-
-      public void setDQL(String query) {
-        this.query = query;
-      }
-
-      public IDfCollection execute(IDfSession session, int arg1)
-          throws DfException {
-        return Proxies.newProxyInstance(IDfCollection.class,
-            new CollectionMock(query));
-      }
-    }
-
-    private class CollectionMock {
-      final Statement stmt;
-      final ResultSet rs;
-
-      public CollectionMock(String query) throws DfException {
-        try {
-          stmt = jdbcFixture.getConnection().createStatement();
-          query = query.replace("DATETOSTRING", "FORMATDATETIME")
-              .replace("DATE(", "PARSEDATETIME(")
-              .replace("yyyy-mm-dd hh:mi:ss", "yyyy-MM-dd HH:mm:ss")
-              .replace("TYPE(dm_document)", "r_object_type LIKE 'dm_document%'")
-              .replace("TYPE(dm_folder)", "r_object_type LIKE 'dm_folder%'")
-              .replace("FOLDER(", "(mock_object_path LIKE ")
-              .replace("',descend", "%'");
-          rs = stmt.executeQuery(query);
-        } catch (SQLException e) {
-          throw new DfException(e);
-        }
-      }
-
-      private String[] getRepeatingValue(String colName) throws DfException {
-        String value = getString(colName);
-        if (Strings.isNullOrEmpty(value)) {
-          return new String[0];
-        }
-        return value.split(",");
-      }
-
-      public int getValueCount(String colName) throws DfException {
-        return getRepeatingValue(colName).length;
-      }
-
-      public String getRepeatingString(String colName, int index)
-          throws DfException {
-        return getRepeatingValue(colName)[index];
-      }
-
-      public String getString(String colName) throws DfException {
-        try {
-          return rs.getString(colName);
-        } catch (SQLException e) {
-          throw new DfException(e);
-        }
-      }
-
-      public boolean next() throws DfException {
-        try {
-          return rs.next();
-        } catch (SQLException e) {
-          throw new DfException(e);
-        }
-      }
-
-      public int getState() {
-        return IDfCollection.DF_READY_STATE;
-      }
-
-      public void close() throws DfException {
-        try {
-          rs.close();
-          stmt.close();
-        } catch (SQLException e) {
-          throw new DfException(e);
-        }
-      }
-    }
-
-    private class SessionManagerMock {
-      public IDfSession getSession(String docbaseName) {
-        return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
-      }
-
-      public void release(IDfSession session) {
-      }
-    }
-
-    private class SessionMock {
-      public IDfFolder getFolderBySpecification(String spec)
-          throws DfException {
-        if (Strings.isNullOrEmpty(spec)) {
-          return null;
-        }
-        String query = String.format(
-            "SELECT * FROM dm_folder WHERE r_object_id = '%s'", spec);
-        try (Statement stmt = jdbcFixture.getConnection().createStatement();
-             ResultSet rs = stmt.executeQuery(query)) {
-          if (rs.first()) {
-            return
-                Proxies.newProxyInstance(IDfFolder.class, new FolderMock(rs));
-          }
-          return null;
-        } catch (SQLException e) {
-          throw new DfException(e);
-        }
-      }
-
-      public IDfType getType(String type) {
-        return Proxies.newProxyInstance(IDfType.class, new TypeMock(type));
-      }
-    }
-
-    private class FolderMock {
-      private String[] folderPaths;
-
-      public FolderMock(ResultSet rs) throws SQLException {
-        this.folderPaths = rs.getString("r_folder_path").split(",");
-      }
-       
-      public int getFolderPathCount() {
-        return folderPaths.length;
-      }
-
-      public String getFolderPath(int index) {
-        return folderPaths[index];
-      }
-    }
-
-    private class TypeMock {
-      private final String type;
-
-      public TypeMock(String type) {
-        this.type = type;
-      }
-
-      public boolean isTypeOf(String otherType) {
-        return type.startsWith(otherType);
-      }
-    }
   }
 
   private void insertSysObject(String lastModified, String id, String name,
@@ -3293,7 +3189,7 @@ public class DocumentumAdaptorTest {
       Checkpoint checkpoint, List<Record> expectedDocIds,
       Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
-    ModifiedDocIdTestProxies proxyCls = new ModifiedDocIdTestProxies();
+    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
