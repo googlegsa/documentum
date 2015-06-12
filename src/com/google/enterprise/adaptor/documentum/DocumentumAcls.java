@@ -75,29 +75,29 @@ class DocumentumAcls {
   private IDfQuery makeAclQuery() {
     // TODO(jlacey): We don't need the ORDER BY clause.
     IDfQuery query = dmClientX.getQuery();
-    query.setDQL("select r_object_id from dm_acl order by r_object_id");
+    query.setDQL("SELECT r_object_id FROM dm_acl ORDER BY r_object_id");
     return query;
   }
 
   private IDfQuery makeUpdateAclQuery(Checkpoint checkpoint) {
     StringBuilder queryStr = new StringBuilder(
-        "select r_object_id, chronicle_id, audited_obj_id, event_name, "
+        "SELECT r_object_id, chronicle_id, audited_obj_id, event_name, "
         + "time_stamp_utc, "
         + "DATETOSTRING(time_stamp_utc, 'yyyy-mm-dd hh:mi:ss') "
-        + "as time_stamp_utc_str "
-        + "from dm_audittrail_acl "
-        + "where (event_name='dm_save' or event_name='dm_saveasnew' "
-        + "or event_name='dm_destroy')");
+        + "AS time_stamp_utc_str "
+        + "FROM dm_audittrail_acl "
+        + "WHERE (event_name='dm_save' OR event_name='dm_saveasnew' "
+        + "OR event_name='dm_destroy')");
 
     String whereBoundedClause = " and ((time_stamp_utc = "
-        + "date(''{0}'',''yyyy-mm-dd hh:mi:ss'') and (r_object_id > ''{1}'')) "
-        + "OR (time_stamp_utc > date(''{0}'',''yyyy-mm-dd hh:mi:ss'')))";
+        + "DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') AND (r_object_id > ''{1}'')) "
+        + "OR (time_stamp_utc > DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'')))";
 
     // TODO (Srinivas): Adjust modified date to server TZ offset
     Object[] arguments =
         { checkpoint.getLastModified(), checkpoint.getObjectId() };
     queryStr.append(MessageFormat.format(whereBoundedClause, arguments));
-    queryStr.append(" order by time_stamp_utc, r_object_id, event_name");
+    queryStr.append(" ORDER BY time_stamp_utc, r_object_id, event_name");
     logger.log(Level.FINE, "Modify date: {0} ; Modify ID: {1}", arguments);
     logger.log(Level.FINER, "Update ACL query: {0}", queryStr);
 

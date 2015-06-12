@@ -1460,8 +1460,8 @@ public class DocumentumAdaptorTest {
     assertTrue(proxyCls.respNotFound);
   }
 
-  /* Mock proxy classes for testing ACLs */
-  private class AclTestProxies {
+  /* Mock proxy classes for testing ACLs and Groups */
+  private class AclAndGroupTestProxies {
     IDfSessionManager sessionManager = Proxies.newProxyInstance(
         IDfSessionManager.class, new SessionManagerMock());
 
@@ -1497,12 +1497,29 @@ public class DocumentumAdaptorTest {
         try {
           stmt = jdbcFixture.getConnection().createStatement();
           query = query.replace("DATETOSTRING", "FORMATDATETIME")
-              .replace("date(", "parseDateTime(")
+              .replace("DATE(", "PARSEDATETIME(")
               .replace("yyyy-mm-dd hh:mi:ss", "yyyy-MM-dd HH:mm:ss");
           rs = stmt.executeQuery(query);
         } catch (SQLException e) {
           throw new DfException(e);
         }
+      }
+
+      private String[] getRepeatingValue(String colName) throws DfException {
+        String value = getString(colName);
+        if (Strings.isNullOrEmpty(value)) {
+          return new String[0];
+        }
+        return value.split(",");
+      }
+
+      public int getValueCount(String colName) throws DfException {
+        return getRepeatingValue(colName).length;
+      }
+
+      public String getRepeatingString(String colName, int index)
+          throws DfException {
+        return getRepeatingValue(colName)[index];
       }
 
       public String getString(String colName) throws DfException {
@@ -2189,7 +2206,7 @@ public class DocumentumAdaptorTest {
    * its getDocIds method with a recording pusher and return the pushed acls.
    */
   private Map<DocId, Acl> getAllAcls(Config config) throws DfException {
-    AclTestProxies proxyCls = new AclTestProxies();
+    AclAndGroupTestProxies proxyCls = new AclAndGroupTestProxies();
     IDfSession session = proxyCls.sessionManager
         .getSession(config.getValue("documentum.docbaseName"));
     try {
@@ -2214,7 +2231,7 @@ public class DocumentumAdaptorTest {
   }
 
   private DocumentumAcls getDocumentumAcls() throws DfException {
-    AclTestProxies proxyCls = new AclTestProxies();
+    AclAndGroupTestProxies proxyCls = new AclAndGroupTestProxies();
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(proxyCls.getProxyClientX());
     Config config = getTestAdaptorConfig();
@@ -2370,172 +2387,6 @@ public class DocumentumAdaptorTest {
     assertFalse(checkpoint.equals(null));
     assertFalse(checkpoint.equals(new Checkpoint()));
     assertFalse(checkpoint.equals(new Checkpoint("foo", "xyzzy")));
-  }
-
-  /* Mock proxy classes for testing pushing Groups */
-  private class GroupTestProxies {
-    IDfSessionManager sessionManager = Proxies.newProxyInstance(
-        IDfSessionManager.class, new SessionManagerMock());
-
-    public IDfClientX getProxyClientX() {
-      return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
-    }
-
-    private class ClientXMock {
-      public IDfQuery getQuery() {
-        return Proxies.newProxyInstance(IDfQuery.class, new QueryMock());
-      }
-    }
-
-    private class QueryMock {
-      private String query;
-
-      public void setDQL(String query) {
-        this.query = query;
-      }
-
-      public IDfCollection execute(IDfSession session, int arg1)
-          throws DfException {
-        return Proxies.newProxyInstance(IDfCollection.class,
-            new CollectionMock(query));
-      }
-    }
-
-    private class CollectionMock {
-      final Statement stmt;
-      final ResultSet rs;
-
-      public CollectionMock(String query) throws DfException {
-        try {
-          stmt = jdbcFixture.getConnection().createStatement();
-          query = query.replace("DATETOSTRING", "FORMATDATETIME")
-              .replace("DATE(", "PARSEDATETIME(")
-              .replace("yyyy-mm-dd hh:mi:ss", "yyyy-MM-dd HH:mm:ss");
-          rs = stmt.executeQuery(query);
-        } catch (SQLException e) {
-          throw new DfException(e);
-        }
-      }
-
-      private String[] getRepeatingValue(String colName) throws DfException {
-        String value = getString(colName);
-        if (Strings.isNullOrEmpty(value)) {
-          return new String[0];
-        }
-        return value.split(",");
-      }
-
-      public int getValueCount(String colName) throws DfException {
-        return getRepeatingValue(colName).length;
-      }
-
-      public String getRepeatingString(String colName, int index)
-          throws DfException {
-        return getRepeatingValue(colName)[index];
-      }
-
-      public String getString(String colName) throws DfException {
-        try {
-          return rs.getString(colName);
-        } catch (SQLException e) {
-          throw new DfException(e);
-        }
-      }
-
-      public boolean next() throws DfException {
-        try {
-          return rs.next();
-        } catch (SQLException e) {
-          throw new DfException(e);
-        }
-      }
-
-      public int getState() {
-        return IDfCollection.DF_READY_STATE;
-      }
-
-      public void close() throws DfException {
-        try {
-          rs.close();
-          stmt.close();
-        } catch (SQLException e) {
-          throw new DfException(e);
-        }
-      }
-    }
-
-    private class SessionManagerMock {
-      public IDfSession getSession(String docbaseName) {
-        return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
-      }
-
-      public void release(IDfSession session) {
-      }
-    }
-
-    private class SessionMock {
-      public Object getObjectByQualification(String query) throws DfException {
-        if (Strings.isNullOrEmpty(query)) {
-          return null;
-        }
-        try (Statement stmt = jdbcFixture.getConnection().createStatement();
-             ResultSet rs = stmt.executeQuery("SELECT * FROM " + query)) {
-          if (rs.first()) {
-            if (query.toLowerCase().startsWith("dm_user ")) {
-              return Proxies.newProxyInstance(IDfUser.class, new UserMock(rs));
-            } else if (query.toLowerCase().startsWith("dm_group ")) {
-              return
-                  Proxies.newProxyInstance(IDfGroup.class, new GroupMock(rs));
-            }
-          }
-          return null;
-        } catch (SQLException e) {
-          throw new DfException(e);
-        }
-      }
-    }
-
-    private class UserMock {
-      private String loginName;
-      private String source;
-      private String ldapDn;
-      private boolean isGroup;
-
-      public UserMock(ResultSet rs) throws SQLException {
-        loginName = rs.getString("user_login_name");
-        source = rs.getString("user_source");
-        ldapDn = rs.getString("user_ldap_dn");
-        isGroup = rs.getBoolean("r_is_group");
-      }
-
-      public String getUserLoginName() {
-        return loginName;
-      }
-
-      public String getUserSourceAsString() {
-        return source;
-      }
-
-      public String getUserDistinguishedLDAPName() {
-        return ldapDn;
-      }
-
-      public boolean isGroup() {
-        return isGroup;
-      }
-    }
-
-    private class GroupMock {
-      private String source;
-
-      public GroupMock(ResultSet rs) throws SQLException {
-        source = rs.getString("group_source");
-      }
-
-      public String getGroupSource() {
-        return source;
-      }
-    }
   }
 
   @Test
@@ -2828,7 +2679,7 @@ public class DocumentumAdaptorTest {
    */
   private Map<GroupPrincipal, Collection<Principal>> getGroups(Config config)
        throws DfException {
-    GroupTestProxies proxyCls = new GroupTestProxies();
+    AclAndGroupTestProxies proxyCls = new AclAndGroupTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
     IDfSession session = proxyCls.sessionManager
@@ -2954,7 +2805,7 @@ public class DocumentumAdaptorTest {
       Map<GroupPrincipal, ? extends Collection<? extends Principal>>
       expectedGroups, Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
-    GroupTestProxies proxyCls = new GroupTestProxies();
+    AclAndGroupTestProxies proxyCls = new AclAndGroupTestProxies();
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
