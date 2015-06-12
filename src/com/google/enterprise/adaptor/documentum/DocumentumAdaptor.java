@@ -54,6 +54,8 @@ import com.documentum.fc.common.IDfAttr;
 import com.documentum.fc.common.IDfId;
 import com.documentum.fc.common.IDfLoginInfo;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStreamWriter;
@@ -177,11 +179,53 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
   }
 
+  /**
+   * This implementation adds a {@link #getInputStream} method that
+   * shares the buffer with this output stream. The input stream
+   * cannot be obtained until the output stream is closed.
+   */
+  private static class SharedByteArrayOutputStream
+      extends ByteArrayOutputStream {
+    public SharedByteArrayOutputStream() {
+      super();
+    }
+
+    public SharedByteArrayOutputStream(int size) {
+      super(size);
+    }
+
+    /** Is this output stream open? */
+    private boolean isOpen = true;
+
+    /** Marks this output stream as closed. */
+    @Override
+    public void close() throws IOException {
+      isOpen = false;
+      super.close();
+    }
+
+    /**
+     * Gets a <code>ByteArrayInputStream</code> that shares the
+     * output buffer, without copying it.
+     *
+     * @return a <code>ByteArrayInputStream</code>
+     * @throws IOException if the output stream is open
+     */
+    public ByteArrayInputStream getInputStream() throws IOException {
+      if (isOpen) {
+        throw new IOException("Output stream is open.");
+      }
+      return new ByteArrayInputStream(buf, 0, count);
+    }
+  }
+
   // Returns a DocId of a path with optional name to append.
   @VisibleForTesting
   static DocId docIdFromPath(String path, String name) {
     if (Strings.isNullOrEmpty(name)) {
       return docIdFromPath(path);
+    } else if (path.endsWith("/")) {
+      return docIdFromPath(path + name);
     } else {
       return docIdFromPath(path + "/" + name);
     }
@@ -191,12 +235,19 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   // as children of the baseDocUrl.
   @VisibleForTesting
   static DocId docIdFromPath(String path) {
-    return new DocId(path.substring(path.startsWith("/") ? 1 : 0,
-        path.endsWith("/") ? path.length() - 1 : path.length()));
+    // Split checks to handle root, "/", which both starts and ends with '/'.
+    if (path.startsWith("/")) {
+      path = path.substring(1);
+    }
+    if (path.endsWith("/")) {
+      path = path.substring(0, path.length() - 1);
+    }
+    return new DocId(path);
   }
 
   // Restore the leading slash, so we have a valid Documentum path.
-  private static String docIdToPath(DocId docId) {
+  @VisibleForTesting
+  static String docIdToPath(DocId docId) {
     return "/" + docId.getUniqueId();
   }
 
@@ -323,6 +374,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     for (String startPath : startPaths) {
       String documentumFolderPath = normalizePath(startPath);
       logger.log(Level.INFO, "Validating path {0}", documentumFolderPath);
+      if (documentumFolderPath.equals("/")) {
+        validStartPaths.add(documentumFolderPath);
+        continue;
+      }
       try {
         IDfSysObject obj =
             (IDfSysObject) dmSession.getObjectByPath(documentumFolderPath);
@@ -691,18 +746,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    */
   @Override
   public void getDocContent(Request req, Response resp) throws IOException {
-    // TODO: (sveldurthi) support "/" as start path, to process all cabinets.
-    // TODO: (sveldurthi) validate the requested doc id is in start paths,
-    //       if not send a 404.
-    getDocContentHelper(req, resp, dmSessionManager, docIdEncoder,
-        validatedStartPaths, excludedAttributes);
+    getDocContentHelper(req, resp, dmClientX, dmSessionManager, docIdEncoder,
+        validatedStartPaths, excludedAttributes, /* maxHtmlLinks */ 1000);
   }
 
   @VisibleForTesting
-  void getDocContentHelper(Request req, Response resp,
+  void getDocContentHelper(Request req, Response resp, IDfClientX dmClientX,
       IDfSessionManager dmSessionManager, DocIdEncoder docIdEncoder,
-      List<String> validatedStartPaths, Set<String> excludedAttributes)
-      throws IOException {
+      List<String> validatedStartPaths, Set<String> excludedAttributes,
+      int maxHtmlLinks) throws IOException {
     DocId id = req.getDocId();
     logger.log(Level.FINER, "Get content for id: {0}", id);
 
@@ -715,6 +767,13 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     IDfSession dmSession;
     try {
       dmSession = dmSessionManager.getSession(docbase);
+
+      // Special root path "/" means return all cabinets.
+      if (path.equals("/")) {
+        getRootContent(resp, dmClientX, dmSession, id, docIdEncoder,
+            maxHtmlLinks);
+        return;
+      }
 
       IDfPersistentObject dmPersObj = dmSession.getObjectByPath(path);
       if (dmPersObj == null) {
@@ -732,6 +791,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         getDocumentContent(resp, (IDfSysObject) dmPersObj, id, docIdEncoder,
             excludedAttributes);
       } else if (type.isTypeOf("dm_folder")) {
+        // TODO(bmj): Pass maxHtmlLinks to getFolderContent.
         getFolderContent(resp, (IDfFolder) dmPersObj, id, docIdEncoder,
             excludedAttributes);
       } else {
@@ -751,11 +811,65 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    */
   private boolean isUnderStartPath(String path, List<String> startPaths) {
     for (String startPath : startPaths) {
+      if (startPath.equals("/")) {
+        return true;
+      }
       if (startPath.equals(path) || path.startsWith(startPath + "/")) {
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * Returns all the docbase's cabinets as links in a generated HTML document
+   * and as external links.
+   */
+  private void getRootContent(Response resp, IDfClientX dmClientX, 
+      IDfSession session, DocId id, DocIdEncoder docIdEncoder,
+      int maxHtmlLinks) throws DfException, IOException {
+    // TODO(bmj): Add a config param that provides an additional WHERE clause
+    // to the cabinets query.
+    String queryStr = "SELECT r_folder_path FROM dm_cabinet";
+    logger.log(Level.FINER, "Get All Cabinets Query: {0}", queryStr);
+    IDfQuery query = dmClientX.getQuery();
+    query.setDQL(queryStr);
+    IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
+    try {
+      // Large Documentum deployments can have tens or hundreds of thousands
+      // of cabinets. The GSA truncates large HTML documents at 2.5MB, so return
+      // the first maxHtmlLinks worth as HTML content and the rest as external
+      // anchors. But we cannot start writing the HTML content to the response
+      // until after we add all the external anchor metadata. So spool the HTML
+      // for now and copy it to the response later.
+      SharedByteArrayOutputStream htmlOut = new SharedByteArrayOutputStream();
+      Writer writer = new OutputStreamWriter(htmlOut, CHARSET);
+      try (HtmlResponseWriter htmlWriter =
+          new HtmlResponseWriter(writer, docIdEncoder, Locale.ENGLISH)) {
+        htmlWriter.start(id, "/");
+        for (int i = 0; i < maxHtmlLinks && result.next(); i++) {
+          String cabinet = result.getString("r_folder_path");
+          logger.log(Level.FINER, "Cabinet: {0}", cabinet);
+          DocId docid = docIdFromPath(cabinet);
+          htmlWriter.addLink(docid, docid.getUniqueId());
+        }
+        htmlWriter.finish();
+      }
+
+      // Add the remaining cabinets as external anchors.
+      while (result.next()) {
+        String cabinet = result.getString("r_folder_path");
+        logger.log(Level.FINER, "Cabinet: {0}", cabinet);
+        DocId docid = docIdFromPath(cabinet);
+        resp.addAnchor(docIdEncoder.encodeDocId(docid), docid.getUniqueId());
+      }
+
+      // Finally, write out the generated HTML links as content.
+      resp.setContentType("text/html; charset=" + CHARSET.name());
+      IOHelper.copyStream(htmlOut.getInputStream(), resp.getOutputStream());
+    } finally {
+      result.close();
+    }
   }
 
   /** Copies the Documentum document content into the response. */

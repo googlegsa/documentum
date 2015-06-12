@@ -32,7 +32,7 @@ import com.google.enterprise.adaptor.Acl.InheritanceType;
 import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
-import com.google.enterprise.adaptor.DocIdPusher;
+import com.google.enterprise.adaptor.DocIdEncoder;
 import com.google.enterprise.adaptor.DocIdPusher.Record;
 import com.google.enterprise.adaptor.GroupPrincipal;
 import com.google.enterprise.adaptor.Principal;
@@ -107,6 +107,9 @@ public class DocumentumAdaptorTest {
       + "(r_object_id varchar, chronicle_id varchar, audited_obj_id varchar, "
       + "event_name varchar, time_stamp_utc timestamp)";
 
+  private static final String CREATE_TABLE_CABINET = "create table dm_cabinet "
+      + "(r_object_id varchar, r_folder_path varchar)";
+
   private static final String CREATE_TABLE_FOLDER = "create table dm_folder "
       + "(r_object_id varchar, r_folder_path varchar)";
 
@@ -129,8 +132,8 @@ public class DocumentumAdaptorTest {
   @Before
   public void setUp() throws Exception {
     jdbcFixture.executeUpdate(CREATE_TABLE_ACL, CREATE_TABLE_AUDITTRAIL_ACL,
-        CREATE_TABLE_FOLDER, CREATE_TABLE_GROUP, CREATE_TABLE_USER,
-        CREATE_TABLE_SYSOBJECT);
+        CREATE_TABLE_CABINET, CREATE_TABLE_FOLDER, CREATE_TABLE_GROUP,
+        CREATE_TABLE_SYSOBJECT, CREATE_TABLE_USER);
   }
 
   @After
@@ -437,6 +440,16 @@ public class DocumentumAdaptorTest {
         paths);
   }
 
+  @Test
+  public void testSlashAsStartPath() throws Exception {
+    String root = "/";
+    DocId docid = DocumentumAdaptor.docIdFromPath(root);
+    assertEquals(root, DocumentumAdaptor.docIdToPath(docid));
+    assertEquals("/foo", DocumentumAdaptor.docIdToPath(
+        DocumentumAdaptor.docIdFromPath(root, "foo")));
+    
+  }
+
   private void initializeAdaptor(DocumentumAdaptor adaptor, String src,
       String separator) throws DfException {
     AdaptorContext context = ProxyAdaptorContext.getInstance();
@@ -516,6 +529,17 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
+  public void testValidateStartPathsRootPath() throws DfException {
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
+
+    String path1 = "/";
+
+    initValidStartPaths(adaptor, path1);
+    assertEquals(ImmutableList.of(path1), adaptor.getValidatedStartPaths());
+  }
+
+  @Test
   public void testValidateStartPathsAllValid() throws DfException {
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
@@ -584,6 +608,80 @@ public class DocumentumAdaptorTest {
     String path3 = "/Folder3/path6";
 
     initValidStartPaths(adaptor, path1, path2, path3);
+  }
+
+  private void insertCabinet(String cabinet)
+      throws SQLException {
+    jdbcFixture.executeUpdate(String.format("INSERT INTO dm_cabinet "
+        + "(r_object_id, r_folder_path) VALUES('%s', '%s')",
+        "0c" + cabinet, "/" + cabinet));
+  }
+
+  private void checkGetRootContent(int maxHtmlLinks, String... expectedCabinets)
+      throws Exception {
+    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
+    DocIdEncoder docidEncoder =
+        ProxyAdaptorContext.getInstance().getDocIdEncoder();
+    MockRequest request = new MockRequest(adaptor.docIdFromPath("/"));
+    MockResponse response = new MockResponse();
+
+    adaptor.getDocContentHelper(request, response, dmClientX, 
+        proxyCls.sessionManager, docidEncoder, ImmutableList.of("/"),
+        null, maxHtmlLinks);
+
+    assertEquals("text/html; charset=UTF-8", response.contentType);
+    String content = response.content.toString(UTF_8.name());
+
+    assertEquals(content, maxHtmlLinks == 0 || expectedCabinets.length == 0,
+                 content.indexOf("href") < 0);
+    assertEquals(response.anchors.toString(),
+                 maxHtmlLinks >= expectedCabinets.length,
+                 response.anchors.isEmpty());
+
+    for (String cabinet : expectedCabinets) {
+      // First look in the HTML links for the cabinet. If not there,
+      // look in the external anchors.
+      String link = "<a href=\"" + cabinet + "\">" + cabinet + "</a>";
+      if (content.indexOf(link) < 0) {
+        URI uri = docidEncoder.encodeDocId(new DocId(cabinet));
+        URI anchor = response.anchors.get(cabinet);
+        assertNotNull("Cabinet " + cabinet + " with URI " + uri + " is missing"
+            + " from response:/n" + content + "/n" + response.anchors, anchor);
+        assertEquals(uri, anchor);
+      }
+    }
+  }
+
+  @Test
+  public void testGetRootContentNoCabinets() throws Exception {
+    checkGetRootContent(100);
+  }
+
+  @Test
+  public void testGetRootContentHtmlResponseOnly() throws Exception {
+    insertCabinet("Cabinet1");
+    insertCabinet("Cabinet2");
+    insertCabinet("Cabinet3");
+    checkGetRootContent(100, "Cabinet1", "Cabinet2", "Cabinet3");
+  }
+
+  @Test
+  public void testGetRootContentAnchorResponseOnly() throws Exception {
+    insertCabinet("Cabinet1");
+    insertCabinet("Cabinet2");
+    insertCabinet("Cabinet3");
+    checkGetRootContent(0, "Cabinet1", "Cabinet2", "Cabinet3");
+  }
+
+  @Test
+  public void testGetRootContentHtmlAndAnchorResponse() throws Exception {
+    insertCabinet("Cabinet1");
+    insertCabinet("Cabinet2");
+    insertCabinet("Cabinet3");
+    insertCabinet("Cabinet4");
+    checkGetRootContent(2, "Cabinet1", "Cabinet2", "Cabinet3", "Cabinet4");
   }
 
   /* Mock proxy classes for testing file content */
@@ -686,6 +784,8 @@ public class DocumentumAdaptorTest {
     private class IdMock {
     }
 
+    // TODO(bmj): Replace the proxied Request and Response mocks with
+    // MockRequest and MockResponse.
     public Request getProxyRequest(DocId docId) {
       return Proxies.newProxyInstance(Request.class, new RequestMock(docId));
     }
@@ -721,8 +821,8 @@ public class DocumentumAdaptorTest {
   @Test
   public void testDocContent() throws Exception {
     DocContentTestProxies proxyCls = new DocContentTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
     String objectContentType = "crtext/html";
     String objectContent = "<html><body>Hello</body></html>";
@@ -733,9 +833,9 @@ public class DocumentumAdaptorTest {
     Response resp = proxyCls.getProxyResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
-    adaptor.getDocContentHelper(req, resp, sessionManager,
+    adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"), null);
+        ImmutableList.of("/Folder1"), null, 1000);
 
     assertEquals(objectContentType, proxyCls.respContentType);
     assertEquals(objectContent,
@@ -839,6 +939,8 @@ public class DocumentumAdaptorTest {
       }
     }
 
+    // TODO(bmj): Replace the proxied Request and Response mocks with
+    // MockRequest and MockResponse.
     public Request getProxyRequest(DocId docId) {
       return Proxies.newProxyInstance(Request.class, new RequestMock(docId));
     }
@@ -920,8 +1022,8 @@ public class DocumentumAdaptorTest {
   private void testMetadata(TreeMultimap<String, String> attrs,
       TreeMultimap<String, String> expected) throws Exception {
     MetadataTestProxies proxyCls = new MetadataTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
     proxyCls.setAttributes(Multimaps.unmodifiableMultimap(attrs));
     String path = "/Folder1/path1/object1";
@@ -929,9 +1031,9 @@ public class DocumentumAdaptorTest {
     Response resp = proxyCls.getProxyResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
-    adaptor.getDocContentHelper(req, resp, sessionManager,
+    adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"), ImmutableSet.of("foo", "bar"));
+        ImmutableList.of("/Folder1"), ImmutableSet.of("foo", "bar"), 1000);
 
     assertEquals(expected, proxyCls.respMetadata);
   }
@@ -1098,6 +1200,8 @@ public class DocumentumAdaptorTest {
     private class IdMock {
     }
 
+    // TODO(bmj): Replace the proxied Request and Response mocks with
+    // MockRequest and MockResponse.
     public Request getProxyRequest(DocId docId) {
       return Proxies.newProxyInstance(Request.class, new RequestMock(docId));
     }
@@ -1137,8 +1241,8 @@ public class DocumentumAdaptorTest {
   @Test
   public void testVirtualDocContentNoChildren() throws Exception {
     VirtualDocContentTestProxies proxyCls = new VirtualDocContentTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
     String objectContentType = "crtext/html";
     String objectContent = "<html><body>Hello</body></html>";
@@ -1149,9 +1253,9 @@ public class DocumentumAdaptorTest {
     Response resp = proxyCls.getProxyResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
-    adaptor.getDocContentHelper(req, resp, sessionManager,
+    adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"), null);
+        ImmutableList.of("/Folder1"), null, 1000);
 
     assertEquals(objectContentType, proxyCls.respContentType);
     assertEquals(objectContent,
@@ -1162,8 +1266,8 @@ public class DocumentumAdaptorTest {
   @Test
   public void testVirtualDocContentWithChildren() throws Exception {
     VirtualDocContentTestProxies proxyCls = new VirtualDocContentTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
     String objectContentType = "crtext/html";
     String objectContent = "<html><body>Hello</body></html>";
@@ -1181,9 +1285,9 @@ public class DocumentumAdaptorTest {
     Response resp = proxyCls.getProxyResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
-    adaptor.getDocContentHelper(req, resp, sessionManager,
+    adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"), null);
+        ImmutableList.of("/Folder1"), null, 1000);
 
     assertEquals(objectContentType, proxyCls.respContentType);
     assertEquals(objectContent,
@@ -1332,6 +1436,8 @@ public class DocumentumAdaptorTest {
       }
     }
 
+    // TODO(bmj): Replace the proxied Request and Response mocks with
+    // MockRequest and MockResponse.
     public Request getProxyRequest(DocId docId) {
       return Proxies.newProxyInstance(Request.class, new RequestMock(docId));
     }
@@ -1382,8 +1488,8 @@ public class DocumentumAdaptorTest {
   @Test
   public void testFolderDocContent() throws Exception {
     FolderDocContentTestProxies proxyCls = new FolderDocContentTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
     String folder = "/Folder2/subfolder/path2";
 
@@ -1411,9 +1517,9 @@ public class DocumentumAdaptorTest {
 
     expected.append("</body></html>");
 
-    adaptor.getDocContentHelper(req, resp, sessionManager, 
+    adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder2"), null);
+        ImmutableList.of("/Folder2"), null, 1000);
 
     assertFalse(proxyCls.respNotFound);
     assertEquals("text/html; charset=UTF-8", proxyCls.respContentType);
@@ -1424,8 +1530,8 @@ public class DocumentumAdaptorTest {
   @Test
   public void testGetDocContentNotFound() throws Exception {
     FolderDocContentTestProxies proxyCls = new FolderDocContentTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
     String folder = "/Folder2/doesNotExist";
 
@@ -1433,9 +1539,9 @@ public class DocumentumAdaptorTest {
     Response resp = proxyCls.getProxyResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
-    adaptor.getDocContentHelper(req, resp, sessionManager,
+    adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder2"), null);
+        ImmutableList.of("/Folder2"), null, 1000);
 
     assertTrue(proxyCls.respNotFound);
   }
@@ -1443,8 +1549,8 @@ public class DocumentumAdaptorTest {
   @Test
   public void testGetDocContentNotUnderStartPath() throws Exception {
     FolderDocContentTestProxies proxyCls = new FolderDocContentTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
     String path1 = "/Folder1/path1";
     String path2 = "/Folder2/path2";
@@ -1456,9 +1562,9 @@ public class DocumentumAdaptorTest {
     Response resp = proxyCls.getProxyResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
-    adaptor.getDocContentHelper(req, resp, sessionManager,
+    adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"), null); // Folder2 not included.
+        ImmutableList.of("/Folder1"), null, 1000); // Folder2 not included.
 
     assertTrue(proxyCls.respNotFound);
   }
