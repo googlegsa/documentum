@@ -273,8 +273,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     logger.log(Level.CONFIG, "documentum.excludedAttributes: {0}",
         excludedAttrs);
 
-    initDfc(config);
-    dmSessionManager = getDfcSessionManager(config);
+    dmSessionManager = initDfc(config);
     IDfSession dmSession = dmSessionManager.getSession(docbase);
     try {
       validateStartPaths(dmSession);
@@ -876,52 +875,41 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    * Establishes connection DFC.
    * 
    * @param config Adaptor config object
+   * @return a new DFC session manager for the configured username and
+   *         docbaseName
    * @throws DfException if error in getting local client or error in setting 
    *         repository identity, or error in getting session, or error in 
    *         getting server version.
    */
-  private void initDfc(Config config) throws DfException {
-    IDfSessionManager dmSessionManager = getDfcSessionManager(config);
-
-    String username = config.getValue("documentum.username");
-    String docbaseName = config.getValue("documentum.docbaseName");
-    logger.log(Level.CONFIG, "documentum.username: {0}", username);
-    logger.log(Level.CONFIG, "documentum.docbaseName: {0}", docbaseName);
-
-    IDfSession dmSession = dmSessionManager.getSession(docbaseName);
-    logger.log(Level.FINE, "Session Manager set the identity for {0}",
-        username);
-    logger.log(Level.INFO, "DFC {0} connected to Content Server {1}",
-        new Object[] {dmClientX.getDFCVersion(), dmSession.getServerVersion()});
-    logger.log(Level.INFO, "Created a new session for the docbase {0}",
-        docbaseName);
-
-    logger.log(Level.INFO, "Releasing dfc session for {0}", docbaseName);
-    dmSessionManager.release(dmSession);
-  }
-
-  /**
-   * Gets DFC Session manager.
-   * 
-   * @param config Adaptor config object
-   * @return IDfSessionManager returns a new session manager for the configured 
-   *         username and docbaseName
-   * @throws DfException if error in getting local client or error in setting 
-   *         repository identity.
-   */
-  private IDfSessionManager getDfcSessionManager(Config config)
-      throws DfException {
+  private IDfSessionManager initDfc(Config config) throws DfException {
     IDfSessionManager dmSessionManager =
         dmClientX.getLocalClient().newSessionManager();
-    IDfLoginInfo dmLoginInfo = dmClientX.getLoginInfo();
 
     String username = config.getValue("documentum.username");
     String password = config.getValue("documentum.password");
     String docbaseName = config.getValue("documentum.docbaseName");
 
+    IDfLoginInfo dmLoginInfo = dmClientX.getLoginInfo();
     dmLoginInfo.setUser(username);
     dmLoginInfo.setPassword(password);
     dmSessionManager.setIdentity(docbaseName, dmLoginInfo);
+
+    logger.log(Level.CONFIG, "documentum.username: {0}", username);
+    logger.log(Level.CONFIG, "documentum.docbaseName: {0}", docbaseName);
+
+    IDfSession dmSession = dmSessionManager.getSession(docbaseName);
+    try {
+      logger.log(Level.FINE, "Session Manager set the identity for {0}",
+          username);
+      logger.log(Level.INFO, "DFC {0} connected to Content Server {1}",
+          new Object[]
+              { dmClientX.getDFCVersion(), dmSession.getServerVersion() });
+      logger.log(Level.INFO, "Created a new session for the docbase {0}",
+          docbaseName);
+      logger.log(Level.INFO, "Releasing dfc session for {0}", docbaseName);
+    } finally {
+      dmSessionManager.release(dmSession);
+    }
 
     return dmSessionManager;
   }

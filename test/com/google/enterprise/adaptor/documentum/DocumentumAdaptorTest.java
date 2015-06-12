@@ -182,8 +182,6 @@ public class DocumentumAdaptorTest {
         "getLocalClient", "newSessionManager",
         "getLoginInfo", "setIdentity",
         "getSession", "release",
-        "getLocalClient", "newSessionManager",
-        "getLoginInfo", "setIdentity",
         "getSession", "release"
     );
     assertEquals(expectedMethodCallSequence, proxyCls.methodCallSequence);
