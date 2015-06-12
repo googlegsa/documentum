@@ -73,7 +73,6 @@ import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import java.util.regex.Pattern;
 
 /** Adaptor to feed Documentum repository content into a 
  *  Google Search Appliance.
@@ -220,7 +219,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     config.addKey("documentum.password", null);
     config.addKey("documentum.docbaseName", null);
     config.addKey("documentum.src", null);
-    config.addKey("documentum.separatorRegex", ",");
+    config.addKey("documentum.src.separator", ",");
     config.addKey("adaptor.namespace", Principal.DEFAULT_NAMESPACE);
     config.addKey("documentum.windowsDomain", "");
     config.addKey("documentum.pushLocalGroupsOnly", "false");
@@ -264,9 +263,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         pushLocalGroupsOnly);
     String src = config.getValue("documentum.src");
     logger.log(Level.CONFIG, "documentum.src: {0}", src);
-    String separatorRegex = config.getValue("documentum.separatorRegex");
-    logger.log(Level.CONFIG, "documentum.separatorRegex: {0}", separatorRegex);
-    startPaths = parseStartPaths(src, separatorRegex);
+    String separator = config.getValue("documentum.src.separator");
+    logger.log(Level.CONFIG, "documentum.src.separator: {0}", separator);
+    startPaths = parseStartPaths(src, separator);
     logger.log(Level.CONFIG, "start paths: {0}", startPaths);
     String excludedAttrs = config.getValue("documentum.excludedAttributes");
     excludedAttributes = ImmutableSet.copyOf(Splitter.on(",")
@@ -308,11 +307,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   }
 
   @VisibleForTesting
-  static List<String> parseStartPaths(String paths, String separatorRegex) {
-    if (separatorRegex.isEmpty()) {
+  static List<String> parseStartPaths(String paths, String separator) {
+    if (separator.isEmpty()) {
       return ImmutableList.of(paths);
     } else {
-      return ImmutableList.copyOf(Splitter.on(Pattern.compile(separatorRegex))
+      return ImmutableList.copyOf(Splitter.on(separator)
           .trimResults().omitEmptyStrings().split(paths));
     }
   }

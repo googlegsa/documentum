@@ -5,5 +5,5 @@ gsa.hostname=<GSA hostname>
 documentum.username=<Documentum username>
 documentum.password=<Password for above user>
 documentum.docbaseName=<Repository name>
-documentum.src=<Comma separated list of folder paths>
-documentum.separatorRegex=<Regular expression to be used to separate list of sources in documentum.src property>
+documentum.src=<List of folder paths>
+documentum.src.separator=<Delimiter used to separate paths in documentum.src>

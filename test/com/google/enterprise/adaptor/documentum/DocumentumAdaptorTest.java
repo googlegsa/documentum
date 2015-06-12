@@ -148,7 +148,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.password", "testpwd");
     config.addKey("documentum.docbaseName", "testdocbase");
     config.addKey("documentum.src", "/Folder1/path1");
-    config.addKey("documentum.separatorRegex", ",");
+    config.addKey("documentum.src.separator", ",");
     config.addKey("documentum.excludedAttributes", "foo, bar");
     config.addKey("adaptor.namespace", "globalNS");
     config.addKey("documentum.windowsDomain", "");
@@ -381,13 +381,17 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
-  public void testParseStartPathsMultiSeperator() {
+  public void testParseStartPathsNotUsingRegExSeparator() {
     String path1 = "Folder1/path1";
     String path2 = "Folder2/path2";
     String path3 = "Folder3/path3";
-    String startPaths = path1 + ";" + path2 + ":" + path3 + ",";
 
+    String startPaths = path1 + ";" + path2 + ":" + path3 + ",";
     List<String> paths = DocumentumAdaptor.parseStartPaths(startPaths, "[:;,]");
+    assertEquals(ImmutableList.of(startPaths), paths);
+
+    startPaths = path1 + "[:;,]" + path2 + "[:;,]" + path3 + "[:;,]";
+    paths = DocumentumAdaptor.parseStartPaths(startPaths, "[:;,]");
     assertEquals(ImmutableList.of(path1, path2, path3), paths);
   }
 
@@ -435,7 +439,7 @@ public class DocumentumAdaptorTest {
   }
 
   private void initializeAdaptor(DocumentumAdaptor adaptor, String src,
-      String separatorRegex) throws DfException {
+      String separator) throws DfException {
     AdaptorContext context = ProxyAdaptorContext.getInstance();
     Config config = context.getConfig();
 
@@ -445,31 +449,31 @@ public class DocumentumAdaptorTest {
     config.overrideKey("documentum.password", "testpwd");
     config.overrideKey("documentum.docbaseName", "testdocbase");
     config.overrideKey("documentum.src", src);
-    if (separatorRegex != null) {
-      config.overrideKey("documentum.separatorRegex", separatorRegex);
+    if (separator != null) {
+      config.overrideKey("documentum.src.separator", separator);
     }
 
     adaptor.init(context);
   }
 
   @Test
-  public void testConfigSeparatorRegex() throws DfException {
+  public void testConfigSeparator() throws DfException {
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
     String path1 = "/Folder1/path1";
     String path2 = "/Folder2/path2";
     String path3 = "/Folder3/path3";
     String path4 = "/Folder4/path4";
-    String startPaths = path1 + ";" + path2 + ":" + path3 + "," + path4;
+    String startPaths = path1 + ";" + path2 + ";" + path3 + ";" + path4;
 
-    initializeAdaptor(adaptor, startPaths, "[;:,]");
+    initializeAdaptor(adaptor, startPaths, ";");
 
     assertEquals(ImmutableList.of(path1, path2, path3, path4),
         adaptor.getStartPaths());
   }
 
   @Test
-  public void testConfigBlankSeparatorRegexValue() throws DfException {
+  public void testConfigBlankSeparatorValue() throws DfException {
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
     String path1 = "/Folder1/path1";
@@ -484,7 +488,7 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
-  public void testConfigNoSeparatorRegexEntry() throws DfException {
+  public void testConfigNoSeparatorEntry() throws DfException {
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
     String path1 = "/Folder1/path1";
