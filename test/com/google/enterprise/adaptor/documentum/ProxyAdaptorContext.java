@@ -18,6 +18,7 @@ import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
 import com.google.enterprise.adaptor.DocIdEncoder;
+import com.google.enterprise.adaptor.SensitiveValueDecoder;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -31,6 +32,8 @@ class ProxyAdaptorContext {
   private static class AdaptorContextMock {
     private final Config config = new Config();
     private final DocIdEncoder docIdEncoder = new MockDocIdCodec();
+    private final SensitiveValueDecoder sensitiveValueDecoder = 
+        new MockSensitiveValueDecoder();
 
     public Config getConfig() {
       return config;
@@ -38,6 +41,10 @@ class ProxyAdaptorContext {
 
     public DocIdEncoder getDocIdEncoder() {
       return docIdEncoder;
+    }
+
+    public SensitiveValueDecoder getSensitiveValueDecoder() {
+      return sensitiveValueDecoder;
     }
   }
 
@@ -68,6 +75,19 @@ class ProxyAdaptorContext {
         throw new IllegalStateException(ex);
       }
       return baseDocUri.resolve(resource);
+    }
+  }
+
+  /**
+   * Provides parsing of sensitive values that can be plain text, obfuscated, or
+   * encrypted.
+   */
+  private static class MockSensitiveValueDecoder
+      implements SensitiveValueDecoder {
+
+    @Override
+    public String decodeValue(String value) {
+      return value.toUpperCase();
     }
   }
 }

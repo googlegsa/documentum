@@ -173,7 +173,8 @@ public class DocumentumAdaptorTest {
     adaptor.init(context);
 
     assertEquals("testuser", proxyCls.username);
-    assertEquals("testpwd", proxyCls.password);
+    // MockSensitiveValueDecoder just uppercases the input.
+    assertEquals("TESTPWD", proxyCls.password);
     assertEquals("testdocbase", proxyCls.docbaseName);
     assertEquals(1, proxyCls.docbaseLoginInfoMap.size());
     assertEquals(1, proxyCls.docbaseSessionMap.size());
