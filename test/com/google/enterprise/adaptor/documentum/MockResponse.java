@@ -124,10 +124,8 @@ class MockResponse implements Response {
     throw new UnsupportedOperationException();
   }
 
-  /* TODO(bmj): Uncomment when updating library.
   @Override
   public void respondNoContent() {
     throw new UnsupportedOperationException();
   }
-  */
 }

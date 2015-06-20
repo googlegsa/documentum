@@ -48,10 +48,8 @@ class MockRequest implements Request {
     return docid;
   }
 
-  /* TODO(bmj): Uncomment when updating library.
   @Override
   public boolean canRespondWithNoContent(Date d) {
     throw new UnsupportedOperationException();
   }
-  */
 }
