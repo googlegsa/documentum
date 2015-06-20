@@ -108,7 +108,7 @@ public class DocumentumAdaptorTest {
       + "event_name varchar, time_stamp_utc timestamp)";
 
   private static final String CREATE_TABLE_CABINET = "create table dm_cabinet "
-      + "(r_object_id varchar, r_folder_path varchar)";
+      + "(r_object_id varchar, r_folder_path varchar, object_name varchar)";
 
   private static final String CREATE_TABLE_FOLDER = "create table dm_folder "
       + "(r_object_id varchar, r_folder_path varchar)";
@@ -156,6 +156,7 @@ public class DocumentumAdaptorTest {
     config.addKey("adaptor.namespace", "globalNS");
     config.addKey("documentum.windowsDomain", "");
     config.addKey("documentum.pushLocalGroupsOnly", "false");
+    config.addKey("documentum.cabinetWhereCondition", "");
     return config;
   }
 
@@ -610,15 +611,16 @@ public class DocumentumAdaptorTest {
     initValidStartPaths(adaptor, path1, path2, path3);
   }
 
-  private void insertCabinet(String cabinet)
-      throws SQLException {
-    jdbcFixture.executeUpdate(String.format("INSERT INTO dm_cabinet "
-        + "(r_object_id, r_folder_path) VALUES('%s', '%s')",
-        "0c" + cabinet, "/" + cabinet));
+  private void insertCabinets(String... cabinets) throws SQLException {
+    for (String cabinet : cabinets) {
+      jdbcFixture.executeUpdate(String.format("INSERT INTO dm_cabinet "
+          + "(r_object_id, r_folder_path, object_name) VALUES('%s','%s','%s')",
+          "0c" + cabinet, "/" + cabinet, cabinet));
+    }
   }
 
-  private void checkGetRootContent(int maxHtmlLinks, String... expectedCabinets)
-      throws Exception {
+  private void checkGetRootContent(String whereClause, int maxHtmlLinks,
+      String... expectedCabinets) throws Exception {
     H2BackedTestProxies proxyCls = new H2BackedTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
@@ -627,9 +629,21 @@ public class DocumentumAdaptorTest {
     MockRequest request = new MockRequest(adaptor.docIdFromPath("/"));
     MockResponse response = new MockResponse();
 
+    List<String> queries = new ArrayList<>();
+    Logging.captureLogMessages(DocumentumAdaptor.class,
+        "Get All Cabinets Query", queries);
+
     adaptor.getDocContentHelper(request, response, dmClientX, 
         proxyCls.sessionManager, docidEncoder, ImmutableList.of("/"),
-        null, maxHtmlLinks);
+        null, whereClause, maxHtmlLinks);
+
+    assertEquals(queries.toString(), 1, queries.size());
+    String query = queries.get(0); 
+    if (whereClause.isEmpty()) {
+      assertFalse(query, query.contains(" WHERE "));
+    } else {
+      assertTrue(query, query.contains(" WHERE " + whereClause));
+    }
 
     assertEquals("text/html; charset=UTF-8", response.contentType);
     String content = response.content.toString(UTF_8.name());
@@ -656,32 +670,68 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testGetRootContentNoCabinets() throws Exception {
-    checkGetRootContent(100);
+    checkGetRootContent("1=1", 100);
+  }
+
+  @Test
+  public void testGetRootContentEmptyWhereClause() throws Exception {
+    insertCabinets("System", "Cabinet1", "Cabinet2");
+    checkGetRootContent("", 100, "System", "Cabinet1", "Cabinet2");
   }
 
   @Test
   public void testGetRootContentHtmlResponseOnly() throws Exception {
-    insertCabinet("Cabinet1");
-    insertCabinet("Cabinet2");
-    insertCabinet("Cabinet3");
-    checkGetRootContent(100, "Cabinet1", "Cabinet2", "Cabinet3");
+    insertCabinets("Cabinet1", "Cabinet2", "Cabinet3");
+    checkGetRootContent("", 100, "Cabinet1", "Cabinet2", "Cabinet3");
   }
 
   @Test
   public void testGetRootContentAnchorResponseOnly() throws Exception {
-    insertCabinet("Cabinet1");
-    insertCabinet("Cabinet2");
-    insertCabinet("Cabinet3");
-    checkGetRootContent(0, "Cabinet1", "Cabinet2", "Cabinet3");
+    insertCabinets("Cabinet1", "Cabinet2", "Cabinet3");
+    checkGetRootContent("", 0, "Cabinet1", "Cabinet2", "Cabinet3");
   }
 
   @Test
   public void testGetRootContentHtmlAndAnchorResponse() throws Exception {
-    insertCabinet("Cabinet1");
-    insertCabinet("Cabinet2");
-    insertCabinet("Cabinet3");
-    insertCabinet("Cabinet4");
-    checkGetRootContent(2, "Cabinet1", "Cabinet2", "Cabinet3", "Cabinet4");
+    insertCabinets("Cabinet1", "Cabinet2", "Cabinet3", "Cabinet4");
+    checkGetRootContent("", 2, "Cabinet1", "Cabinet2", "Cabinet3",
+       "Cabinet4");
+  }
+
+  @Test
+  public void testGetRootContentAddedWhereClause() throws Exception {
+    insertCabinets("System", "Temp", "Cabinet1", "Cabinet2");
+    checkGetRootContent("object_name NOT IN ('System', 'Temp')",
+        100, "Cabinet1", "Cabinet2");
+  }
+
+  @Test
+  public void testGetRootContentDefaultWhereClause() throws Exception {
+    jdbcFixture.executeUpdate(
+        "CREATE TABLE dm_docbase_config (owner_name varchar)",
+        "INSERT INTO dm_docbase_config (owner_name) VALUES('Owner')",
+        "CREATE TABLE dm_server_config (r_install_owner varchar)",
+        "INSERT INTO dm_server_config (r_install_owner) VALUES('Installer')");
+    insertCabinets("Integration", "Resources", "System");
+    insertCabinets("Temp", "Templates", "Owner", "Installer");
+    insertCabinets("Cabinet1", "Cabinet2");
+
+    Config config = ProxyAdaptorContext.getInstance().getConfig();
+    new DocumentumAdaptor(null).initConfig(config);
+
+    checkGetRootContent(config.getValue("documentum.cabinetWhereCondition"),
+        100, "Cabinet1", "Cabinet2");
+  }
+
+  @Test
+  public void testGetRootContentInvalidWhereClause() throws Exception {
+    insertCabinets("Cabinet1", "Cabinet2");
+    try {
+      checkGetRootContent("( xyzzy", 100);
+      fail("Expected exception not thrown.");
+    } catch (IOException expected) {
+      assertTrue(expected.getCause() instanceof DfException);
+    }
   }
 
   /* Mock proxy classes for testing file content */
@@ -835,7 +885,7 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"), null, 1000);
+        ImmutableList.of("/Folder1"), null, null, 1000);
 
     assertEquals(objectContentType, proxyCls.respContentType);
     assertEquals(objectContent,
@@ -1033,7 +1083,8 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"), ImmutableSet.of("foo", "bar"), 1000);
+        ImmutableList.of("/Folder1"), ImmutableSet.of("foo", "bar"),
+        null, 1000);
 
     assertEquals(expected, proxyCls.respMetadata);
   }
@@ -1255,7 +1306,7 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"), null, 1000);
+        ImmutableList.of("/Folder1"), null, null, 1000);
 
     assertEquals(objectContentType, proxyCls.respContentType);
     assertEquals(objectContent,
@@ -1287,7 +1338,7 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"), null, 1000);
+        ImmutableList.of("/Folder1"), null, null, 1000);
 
     assertEquals(objectContentType, proxyCls.respContentType);
     assertEquals(objectContent,
@@ -1519,7 +1570,7 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder2"), null, 1000);
+        ImmutableList.of("/Folder2"), null, null, 1000);
 
     assertFalse(proxyCls.respNotFound);
     assertEquals("text/html; charset=UTF-8", proxyCls.respContentType);
@@ -1541,7 +1592,7 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder2"), null, 1000);
+        ImmutableList.of("/Folder2"), null, null, 1000);
 
     assertTrue(proxyCls.respNotFound);
   }
@@ -1564,7 +1615,8 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"), null, 1000); // Folder2 not included.
+        ImmutableList.of("/Folder1"),  // Folder2 not included.
+        null, null, 1000);
 
     assertTrue(proxyCls.respNotFound);
   }

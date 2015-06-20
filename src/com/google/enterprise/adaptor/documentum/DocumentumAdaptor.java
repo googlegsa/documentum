@@ -125,6 +125,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private String localNamespace;
   private String windowsDomain;
   private boolean pushLocalGroupsOnly;
+  private String cabinetWhereCondition;
 
   private Checkpoint modifiedAclsCheckpoint = new Checkpoint();
   private Checkpoint modifiedDocumentsCheckpoint = new Checkpoint();
@@ -274,6 +275,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     config.addKey("adaptor.namespace", Principal.DEFAULT_NAMESPACE);
     config.addKey("documentum.windowsDomain", "");
     config.addKey("documentum.pushLocalGroupsOnly", "false");
+    // TODO(bmj): Do the system cabinet names need to be localizable?
+    config.addKey("documentum.cabinetWhereCondition", "object_name NOT IN "
+        + "('Integration', 'Resources', 'System', 'Temp', 'Templates') AND "
+        + "object_name NOT IN (SELECT r_install_owner FROM dm_server_config) "
+        + "AND object_name NOT IN (SELECT owner_name FROM dm_docbase_config)");
     config.addKey("documentum.excludedAttributes", "a_application_type, "
         + "a_archive, a_category, a_compound_architecture, a_controlling_app, "
         + "a_effective_date, a_effective_flag, a_effective_label, "
@@ -318,6 +324,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     logger.log(Level.CONFIG, "documentum.src.separator: {0}", separator);
     startPaths = parseStartPaths(src, separator);
     logger.log(Level.CONFIG, "start paths: {0}", startPaths);
+    cabinetWhereCondition =
+        config.getValue("documentum.cabinetWhereCondition");
+    logger.log(Level.CONFIG, "documentum.cabinetWhereCondition: {0}", 
+        cabinetWhereCondition);
     String excludedAttrs = config.getValue("documentum.excludedAttributes");
     excludedAttributes = ImmutableSet.copyOf(Splitter.on(",")
         .trimResults().omitEmptyStrings().split(excludedAttrs));
@@ -747,14 +757,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   @Override
   public void getDocContent(Request req, Response resp) throws IOException {
     getDocContentHelper(req, resp, dmClientX, dmSessionManager, docIdEncoder,
-        validatedStartPaths, excludedAttributes, /* maxHtmlLinks */ 1000);
+        validatedStartPaths, excludedAttributes, cabinetWhereCondition,
+        /* maxHtmlLinks */ 1000);
   }
 
   @VisibleForTesting
   void getDocContentHelper(Request req, Response resp, IDfClientX dmClientX,
       IDfSessionManager dmSessionManager, DocIdEncoder docIdEncoder,
       List<String> validatedStartPaths, Set<String> excludedAttributes,
-      int maxHtmlLinks) throws IOException {
+      String cabinetWhereCondition, int maxHtmlLinks) throws IOException {
     DocId id = req.getDocId();
     logger.log(Level.FINER, "Get content for id: {0}", id);
 
@@ -771,7 +782,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       // Special root path "/" means return all cabinets.
       if (path.equals("/")) {
         getRootContent(resp, dmClientX, dmSession, id, docIdEncoder,
-            maxHtmlLinks);
+            cabinetWhereCondition, maxHtmlLinks);
         return;
       }
 
@@ -827,11 +838,13 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    */
   private void getRootContent(Response resp, IDfClientX dmClientX, 
       IDfSession session, DocId id, DocIdEncoder docIdEncoder,
-      int maxHtmlLinks) throws DfException, IOException {
-    // TODO(bmj): Add a config param that provides an additional WHERE clause
-    // to the cabinets query.
-    String queryStr = "SELECT r_folder_path FROM dm_cabinet";
-    logger.log(Level.FINER, "Get All Cabinets Query: {0}", queryStr);
+      String whereCondition, int maxHtmlLinks)
+      throws DfException, IOException {
+    String queryStr = MessageFormat.format(
+       "SELECT r_folder_path FROM dm_cabinet{0,choice,0#|0< WHERE {1}}",
+        whereCondition.length(), whereCondition);
+    // Don't use MessageFormat syntax for this log message for testing purposes.
+    logger.log(Level.FINER, "Get All Cabinets Query: " + queryStr);
     IDfQuery query = dmClientX.getQuery();
     query.setDQL(queryStr);
     IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
