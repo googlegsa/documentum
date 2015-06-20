@@ -14,6 +14,8 @@
 
 package com.google.enterprise.adaptor.documentum;
 
+import com.google.common.collect.Multimap;
+import com.google.common.collect.TreeMultimap;
 import com.google.enterprise.adaptor.Acl;
 import com.google.enterprise.adaptor.Response;
 
@@ -29,6 +31,8 @@ import java.util.Map;
  * An implementation of {@link Response} that implements only those items that
  * the adaptor uses.
  */
+// Copied from the Filesystem Adaptor, enhanced to support anchors and
+// multivalued metadata.
 class MockResponse implements Response {
 
   boolean notModified = false;
@@ -38,7 +42,7 @@ class MockResponse implements Response {
   Date lastModified;
   URI displayUrl;
   Acl acl;
-  Map<String, String> metadata = new HashMap<String, String>();
+  Multimap<String, String> metadata = TreeMultimap.create();
   Map<String, Acl> namedResources = new HashMap<String, Acl>();
   Map<String, URI> anchors = new HashMap<String, URI>();
   ByteArrayOutputStream content;

@@ -20,6 +20,7 @@ import com.google.enterprise.adaptor.Request;
 import java.util.Date;
 
 /** A trivial implemenation of {@link Request} */
+// Copied from the Filesystem Adaptor
 class MockRequest implements Request {
   private final DocId docid;
   private final Date lastAccess;

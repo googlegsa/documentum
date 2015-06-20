@@ -37,7 +37,6 @@ import com.google.enterprise.adaptor.DocIdPusher.Record;
 import com.google.enterprise.adaptor.GroupPrincipal;
 import com.google.enterprise.adaptor.Principal;
 import com.google.enterprise.adaptor.Request;
-import com.google.enterprise.adaptor.Response;
 import com.google.enterprise.adaptor.UserPrincipal;
 import com.google.enterprise.adaptor.documentum.DocumentumAdaptor.Checkpoint;
 
@@ -69,10 +68,8 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.URI;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -748,10 +745,6 @@ public class DocumentumAdaptorTest {
     String objContent;
     Date objLastModified;
 
-    String respContentType;
-    ByteArrayOutputStream respContentBaos;
-    boolean respNotModified = false;
-
     public void setObjectContentType(String objContentType) {
       this.objContentType = objContentType;
     }
@@ -862,50 +855,6 @@ public class DocumentumAdaptorTest {
 
     private class IdMock {
     }
-
-    // TODO(bmj): Replace the proxied Request and Response mocks with
-    // MockRequest and MockResponse.
-    public Request getProxyRequest(DocId docId, Date lastAccess) {
-      return Proxies.newProxyInstance(Request.class,
-          new RequestMock(docId, lastAccess));
-    }
-
-    private class RequestMock {
-      DocId docId;
-      Date lastAccess;
-
-      public RequestMock(DocId docId, Date lastAccess) {
-        this.docId = docId;
-        this.lastAccess = lastAccess;
-      }
-
-      public DocId getDocId() {
-        return docId;
-      }
-
-      public Date getLastAccessTime() {
-        return lastAccess;
-      }
-    }
-
-    public Response getProxyResponse() {
-      return Proxies.newProxyInstance(Response.class, new ResponseMock());
-    }
-
-    private class ResponseMock {
-      public void setContentType(String contentType) {
-        DocContentTestProxies.this.respContentType = contentType;
-      }
-
-      public OutputStream getOutputStream() {
-        respContentBaos = new ByteArrayOutputStream();
-        return respContentBaos;
-      }
-
-      public void respondNotModified() {
-        respNotModified = true;
-      }
-    }
   }
 
   @Test
@@ -962,9 +911,8 @@ public class DocumentumAdaptorTest {
     proxyCls.setObjectContent(objectContent);
     proxyCls.setObjectLastModified(lastModified);
     String path = "/Folder1/path1/object1";
-    Request req =
-        proxyCls.getProxyRequest(adaptor.docIdFromPath(path), lastCrawled);
-    Response resp = proxyCls.getProxyResponse();
+    Request req = new MockRequest(adaptor.docIdFromPath(path), lastCrawled);
+    MockResponse resp = new MockResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
@@ -972,21 +920,19 @@ public class DocumentumAdaptorTest {
         ImmutableList.of("/Folder1"), null, null, 1000);
 
     if (expectNotModified) {
-      assertTrue(proxyCls.respNotModified);
-      assertNull(proxyCls.respContentType);
-      assertNull(proxyCls.respContentBaos);
+      assertTrue(resp.notModified);
+      assertNull(resp.contentType);
+      assertNull(resp.content);
     } else {
-      assertFalse(proxyCls.respNotModified);
-      assertEquals(objectContentType, proxyCls.respContentType);
-      assertEquals(objectContent,
-          proxyCls.respContentBaos.toString(UTF_8.name()));
+      assertFalse(resp.notModified);
+      assertEquals(objectContentType, resp.contentType);
+      assertEquals(objectContent, resp.content.toString(UTF_8.name()));
     }
   }
 
   /* Mock proxy classes for testing file metadata */
   private class MetadataTestProxies {
     Multimap<String, String> attributes;
-    Multimap<String, String> respMetadata = TreeMultimap.create();
 
     public void setAttributes(Multimap<String, String> attributes) {
       this.attributes = attributes;
@@ -1079,45 +1025,6 @@ public class DocumentumAdaptorTest {
         return name;
       }
     }
-
-    // TODO(bmj): Replace the proxied Request and Response mocks with
-    // MockRequest and MockResponse.
-    public Request getProxyRequest(DocId docId) {
-      return Proxies.newProxyInstance(Request.class, new RequestMock(docId));
-    }
-
-    private class RequestMock {
-      DocId docId;
-
-      public RequestMock(DocId docId) {
-        this.docId = docId;
-      }
-
-      public DocId getDocId() {
-        return docId;
-      }
-
-      public Date getLastAccessTime() {
-        return null;
-      }
-    }
-
-    public Response getProxyResponse() {
-      return Proxies.newProxyInstance(Response.class, new ResponseMock());
-    }
-
-    private class ResponseMock {
-      public void setContentType(String contentType) {
-      }
-
-      public OutputStream getOutputStream() {
-        return new ByteArrayOutputStream();
-      }
-
-      public void addMetadata(String name, String value) {
-        respMetadata.put(name, value);
-      }
-    }
   }
 
   @Test
@@ -1172,8 +1079,8 @@ public class DocumentumAdaptorTest {
 
     proxyCls.setAttributes(Multimaps.unmodifiableMultimap(attrs));
     String path = "/Folder1/path1/object1";
-    Request req = proxyCls.getProxyRequest(adaptor.docIdFromPath(path));
-    Response resp = proxyCls.getProxyResponse();
+    Request req = new MockRequest(adaptor.docIdFromPath(path));
+    MockResponse resp = new MockResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
@@ -1181,7 +1088,7 @@ public class DocumentumAdaptorTest {
         ImmutableList.of("/Folder1"), ImmutableSet.of("foo", "bar"),
         null, 1000);
 
-    assertEquals(expected, proxyCls.respMetadata);
+    assertEquals(expected, resp.metadata);
   }
 
   /* Mock proxy classes for testing virtual document content */
@@ -1195,10 +1102,6 @@ public class DocumentumAdaptorTest {
 
     String objContentType;
     String objContent;
-
-    String respContentType;
-    ByteArrayOutputStream respContentBaos;
-    Map<String, URI>respAnchors = new HashMap<String, URI>();
 
     public void setObjectContentType(String objContentType) {
       this.objContentType = objContentType;
@@ -1345,47 +1248,6 @@ public class DocumentumAdaptorTest {
 
     private class IdMock {
     }
-
-    // TODO(bmj): Replace the proxied Request and Response mocks with
-    // MockRequest and MockResponse.
-    public Request getProxyRequest(DocId docId) {
-      return Proxies.newProxyInstance(Request.class, new RequestMock(docId));
-    }
-
-    private class RequestMock {
-      DocId docId;
-
-      public RequestMock(DocId docId) {
-        this.docId = docId;
-      }
-
-      public DocId getDocId() {
-        return docId;
-      }
-
-      public Date getLastAccessTime() {
-        return null;
-      }
-    }
-
-    public Response getProxyResponse() {
-      return Proxies.newProxyInstance(Response.class, new ResponseMock());
-    }
-
-    private class ResponseMock {
-      public void setContentType(String contentType) {
-        VirtualDocContentTestProxies.this.respContentType = contentType;
-      }
-
-      public OutputStream getOutputStream() {
-        respContentBaos = new ByteArrayOutputStream();
-        return respContentBaos;
-      }
-
-      public void addAnchor(URI uri, String text) {
-        respAnchors.put(text, uri);
-      }
-    }
   }
 
   @Test
@@ -1399,18 +1261,17 @@ public class DocumentumAdaptorTest {
     proxyCls.setObjectContentType(objectContentType);
     proxyCls.setObjectContent(objectContent);
     String path = "/Folder1/path1/vdoc";
-    Request req = proxyCls.getProxyRequest(adaptor.docIdFromPath(path));
-    Response resp = proxyCls.getProxyResponse();
+    Request req = new MockRequest(adaptor.docIdFromPath(path));
+    MockResponse resp = new MockResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
         ImmutableList.of("/Folder1"), null, null, 1000);
 
-    assertEquals(objectContentType, proxyCls.respContentType);
-    assertEquals(objectContent,
-        proxyCls.respContentBaos.toString(UTF_8.name()));
-    assertTrue(proxyCls.respAnchors.isEmpty());
+    assertEquals(objectContentType, resp.contentType);
+    assertEquals(objectContent, resp.content.toString(UTF_8.name()));
+    assertTrue(resp.anchors.isEmpty());
   }
 
   @Test
@@ -1431,22 +1292,21 @@ public class DocumentumAdaptorTest {
     proxyCls.vdocChildren.add(
         proxyCls.getProxyVdocChildObject("0901081f80079f5f", "object3"));
 
-    Request req = proxyCls.getProxyRequest(adaptor.docIdFromPath(path));
-    Response resp = proxyCls.getProxyResponse();
+    Request req = new MockRequest(adaptor.docIdFromPath(path));
+    MockResponse resp = new MockResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
         ImmutableList.of("/Folder1"), null, null, 1000);
 
-    assertEquals(objectContentType, proxyCls.respContentType);
-    assertEquals(objectContent,
-        proxyCls.respContentBaos.toString(UTF_8.name()));
+    assertEquals(objectContentType, resp.contentType);
+    assertEquals(objectContent, resp.content.toString(UTF_8.name()));
 
     // Verify child links.
-    assertEquals(proxyCls.vdocChildren.size(), proxyCls.respAnchors.size());
+    assertEquals(proxyCls.vdocChildren.size(), resp.anchors.size());
     for (String name : ImmutableList.of("object1", "object2", "object3")) {
-      URI uri = proxyCls.respAnchors.get(name);
+      URI uri = resp.anchors.get(name);
       assertNotNull(uri);
       assertTrue(uri.toString().endsWith(path + "/" + name));
     }
@@ -1457,10 +1317,6 @@ public class DocumentumAdaptorTest {
     Map<String, String> folderPathIdsMap = new HashMap<String, String>();
     List<String> folderListingIds = new ArrayList<String>();
     List<String> folderListingNames = new ArrayList<String>();
-
-    boolean respNotFound = false;
-    String respContentType;
-    ByteArrayOutputStream respContentBaos;
 
     public IDfClientX getProxyClientX() {
       return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
@@ -1565,47 +1421,6 @@ public class DocumentumAdaptorTest {
       public IdMock(String objectId) {
       }
     }
-
-    // TODO(bmj): Replace the proxied Request and Response mocks with
-    // MockRequest and MockResponse.
-    public Request getProxyRequest(DocId docId) {
-      return Proxies.newProxyInstance(Request.class, new RequestMock(docId));
-    }
-
-    private class RequestMock {
-      DocId docId;
-
-      public RequestMock(DocId docId) {
-        this.docId = docId;
-      }
-
-      public DocId getDocId() {
-        return docId;
-      }
-
-      public Date getLastAccessTime() {
-        return null;
-      }
-    }
-
-    public Response getProxyResponse() {
-      return Proxies.newProxyInstance(Response.class, new ResponseMock());
-    }
-
-    private class ResponseMock {
-      public void respondNotFound() {
-        respNotFound = true;
-      }
-
-      public void setContentType(String contentType) {
-        FolderDocContentTestProxies.this.respContentType = contentType;
-      }
-
-      public OutputStream getOutputStream() {
-        respContentBaos = new ByteArrayOutputStream();
-        return respContentBaos;
-      }
-    }
   }
 
   private void addFolder(FolderDocContentTestProxies proxyCls, String id,
@@ -1627,8 +1442,8 @@ public class DocumentumAdaptorTest {
 
     String folder = "/Folder2/subfolder/path2";
 
-    Request req = proxyCls.getProxyRequest(adaptor.docIdFromPath(folder));
-    Response resp = proxyCls.getProxyResponse();
+    Request req = new MockRequest(adaptor.docIdFromPath(folder));
+    MockResponse resp = new MockResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
     addFolder(proxyCls, "0b01081f80078d29", folder);
@@ -1655,10 +1470,9 @@ public class DocumentumAdaptorTest {
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
         ImmutableList.of("/Folder2"), null, null, 1000);
 
-    assertFalse(proxyCls.respNotFound);
-    assertEquals("text/html; charset=UTF-8", proxyCls.respContentType);
-    assertEquals(expected.toString(),
-        proxyCls.respContentBaos.toString(UTF_8.name()));
+    assertFalse(resp.notFound);
+    assertEquals("text/html; charset=UTF-8", resp.contentType);
+    assertEquals(expected.toString(), resp.content.toString(UTF_8.name()));
   }
 
   @Test
@@ -1669,15 +1483,15 @@ public class DocumentumAdaptorTest {
 
     String folder = "/Folder2/doesNotExist";
 
-    Request req = proxyCls.getProxyRequest(new DocId(folder));
-    Response resp = proxyCls.getProxyResponse();
+    Request req = new MockRequest(new DocId(folder));
+    MockResponse resp = new MockResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
         ImmutableList.of("/Folder2"), null, null, 1000);
 
-    assertTrue(proxyCls.respNotFound);
+    assertTrue(resp.notFound);
   }
 
   @Test
@@ -1692,8 +1506,8 @@ public class DocumentumAdaptorTest {
     addFolder(proxyCls, "0b01081f80078d29", path1);
     addFolder(proxyCls, "0b01081f80078d30", path2);
 
-    Request req = proxyCls.getProxyRequest(new DocId(path2));
-    Response resp = proxyCls.getProxyResponse();
+    Request req = new MockRequest(new DocId(path2));
+    MockResponse resp = new MockResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
@@ -1701,7 +1515,7 @@ public class DocumentumAdaptorTest {
         ImmutableList.of("/Folder1"),  // Folder2 not included.
         null, null, 1000);
 
-    assertTrue(proxyCls.respNotFound);
+    assertTrue(resp.notFound);
   }
 
   /* Mock proxy classes backed by the H2 database tables. */
