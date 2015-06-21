@@ -104,10 +104,12 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private static final SimpleDateFormat dateFormat =
       new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
 
+  private static final long ONE_DAY_MILLIS = 24 * 60 * 60 * 1000L;
+
   // Initial checkpoints will have timestamps 24 hours in the past,
   // because Documentum timestamps are local server time.
   private static final String YESTERDAY = dateFormat.format(
-      new Date(System.currentTimeMillis() - (24 * 60 * 60 * 1000L)));
+      new Date(System.currentTimeMillis() - ONE_DAY_MILLIS));
 
   private final IDfClientX dmClientX;
   private List<String> startPaths;
@@ -797,6 +799,22 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       IDfType type = dmPersObj.getType();
       logger.log(Level.FINER, "Object Id: {0}; Type: {1}",
           new Object[] {dmObjId, type.getName()});
+
+      Date lastCrawled = req.getLastAccessTime();
+      if (lastCrawled != null) {
+        Date lastModified = dmPersObj.getTime("r_modify_date").getDate();
+        if (lastModified != null) {
+          // To avoid issues with time zones, we only count an object as
+          // unmodified if its last modified time is more than a day before
+          // the last crawl time.
+          if (lastModified.before(
+              new Date(lastCrawled.getTime() - ONE_DAY_MILLIS))) {
+            logger.log(Level.FINER, "Not Modified: {0}", dmObjId);
+            resp.respondNotModified();
+            return;
+          }
+        }
+      }
 
       if (type.isTypeOf("dm_document")) {
         getDocumentContent(resp, (IDfSysObject) dmPersObj, id, docIdEncoder,

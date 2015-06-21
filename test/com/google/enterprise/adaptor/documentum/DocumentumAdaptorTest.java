@@ -62,6 +62,7 @@ import com.documentum.fc.common.DfException;
 import com.documentum.fc.common.IDfAttr;
 import com.documentum.fc.common.IDfId;
 import com.documentum.fc.common.IDfLoginInfo;
+import com.documentum.fc.common.IDfTime;
 
 import org.junit.After;
 import org.junit.Before;
@@ -81,6 +82,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collection;
+import java.util.Date;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -744,9 +746,11 @@ public class DocumentumAdaptorTest {
 
     String objContentType;
     String objContent;
+    Date objLastModified;
 
     String respContentType;
     ByteArrayOutputStream respContentBaos;
+    boolean respNotModified = false;
 
     public void setObjectContentType(String objContentType) {
       this.objContentType = objContentType;
@@ -754,6 +758,10 @@ public class DocumentumAdaptorTest {
 
     public void setObjectContent(String objContent) {
       this.objContent = objContent;
+    }
+
+    public void setObjectLastModified(Date objLastModified) {
+      this.objLastModified = objLastModified;
     }
 
     public IDfClientX getProxyClientX() {
@@ -812,6 +820,15 @@ public class DocumentumAdaptorTest {
         return objContentType;
       }
 
+      public IDfTime getTime(String attr) {
+        if (attr.equals("r_modify_date")) {
+          return Proxies.newProxyInstance(IDfTime.class,
+              new TimeMock(objLastModified));
+        } else {
+          return null;
+        }
+      }
+
       public boolean isVirtualDocument() {
         return false;
       }
@@ -831,24 +848,43 @@ public class DocumentumAdaptorTest {
       }
     }
 
+    private class TimeMock {
+      private Date date;
+
+      public TimeMock(Date date) {
+        this.date = date;
+      }
+
+      public Date getDate() {
+        return date;
+      }
+    }
+
     private class IdMock {
     }
 
     // TODO(bmj): Replace the proxied Request and Response mocks with
     // MockRequest and MockResponse.
-    public Request getProxyRequest(DocId docId) {
-      return Proxies.newProxyInstance(Request.class, new RequestMock(docId));
+    public Request getProxyRequest(DocId docId, Date lastAccess) {
+      return Proxies.newProxyInstance(Request.class,
+          new RequestMock(docId, lastAccess));
     }
 
     private class RequestMock {
       DocId docId;
+      Date lastAccess;
 
-      public RequestMock(DocId docId) {
+      public RequestMock(DocId docId, Date lastAccess) {
         this.docId = docId;
+        this.lastAccess = lastAccess;
       }
 
       public DocId getDocId() {
         return docId;
+      }
+
+      public Date getLastAccessTime() {
+        return lastAccess;
       }
     }
 
@@ -865,11 +901,57 @@ public class DocumentumAdaptorTest {
         respContentBaos = new ByteArrayOutputStream();
         return respContentBaos;
       }
+
+      public void respondNotModified() {
+        respNotModified = true;
+      }
     }
   }
 
   @Test
-  public void testDocContent() throws Exception {
+  public void testDocContentInitialCrawl() throws Exception {
+    testDocContent(null, null, false);
+  }
+
+  @Test
+  public void testDocContentModifiedSinceLastCrawl() throws Exception {
+    Date lastCrawled = new Date();
+    Date lastModified = new Date(lastCrawled.getTime() + (120 * 1000L));
+    testDocContent(lastCrawled, lastModified, false);
+  }
+
+  @Test
+  public void testDocContentOneDayBeforeWindow() throws Exception {
+    Date lastCrawled = new Date();
+    Date lastModified = new Date( // One second short of a full day.
+        lastCrawled.getTime() - (24 * 60 * 60 * 1000L - 1000L));
+    testDocContent(lastCrawled, lastModified, false);
+
+    lastModified = new Date( // One second more than a full day.
+        lastCrawled.getTime() - (24 * 60 * 60 * 1000L + 1000L));
+    testDocContent(lastCrawled, lastModified, true);
+  }
+
+  @Test
+  public void testDocContentRecentlyModified() throws Exception {
+    // Even though content was crawled after it was recently
+    // modified, don't trust Documentum dates to be UTC, so
+    // content should be returned anyway.
+    Date lastCrawled = new Date();
+    Date lastModified = new Date(lastCrawled.getTime() - (8 * 60 * 60 * 1000L));
+    testDocContent(lastModified, lastCrawled, false);
+  }
+
+  @Test
+  public void testDocContentNotRecentlyModified() throws Exception {
+    Date lastCrawled = new Date();
+    Date lastModified =
+        new Date(lastCrawled.getTime() - (72 * 60 * 60 * 1000L));
+    testDocContent(lastCrawled, lastModified, true);
+  }
+
+  private void testDocContent(Date lastCrawled, Date lastModified,
+      boolean expectNotModified) throws Exception {
     DocContentTestProxies proxyCls = new DocContentTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
@@ -878,8 +960,10 @@ public class DocumentumAdaptorTest {
     String objectContent = "<html><body>Hello</body></html>";
     proxyCls.setObjectContentType(objectContentType);
     proxyCls.setObjectContent(objectContent);
+    proxyCls.setObjectLastModified(lastModified);
     String path = "/Folder1/path1/object1";
-    Request req = proxyCls.getProxyRequest(adaptor.docIdFromPath(path));
+    Request req =
+        proxyCls.getProxyRequest(adaptor.docIdFromPath(path), lastCrawled);
     Response resp = proxyCls.getProxyResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
 
@@ -887,9 +971,16 @@ public class DocumentumAdaptorTest {
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
         ImmutableList.of("/Folder1"), null, null, 1000);
 
-    assertEquals(objectContentType, proxyCls.respContentType);
-    assertEquals(objectContent,
-        proxyCls.respContentBaos.toString(UTF_8.name()));
+    if (expectNotModified) {
+      assertTrue(proxyCls.respNotModified);
+      assertNull(proxyCls.respContentType);
+      assertNull(proxyCls.respContentBaos);
+    } else {
+      assertFalse(proxyCls.respNotModified);
+      assertEquals(objectContentType, proxyCls.respContentType);
+      assertEquals(objectContent,
+          proxyCls.respContentBaos.toString(UTF_8.name()));
+    }
   }
 
   /* Mock proxy classes for testing file metadata */
@@ -1004,6 +1095,10 @@ public class DocumentumAdaptorTest {
 
       public DocId getDocId() {
         return docId;
+      }
+
+      public Date getLastAccessTime() {
+        return null;
       }
     }
 
@@ -1267,6 +1362,10 @@ public class DocumentumAdaptorTest {
       public DocId getDocId() {
         return docId;
       }
+
+      public Date getLastAccessTime() {
+        return null;
+      }
     }
 
     public Response getProxyResponse() {
@@ -1502,6 +1601,10 @@ public class DocumentumAdaptorTest {
 
       public DocId getDocId() {
         return docId;
+      }
+
+      public Date getLastAccessTime() {
+        return null;
       }
     }
 
