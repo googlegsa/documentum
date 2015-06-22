@@ -1476,27 +1476,19 @@ public class DocumentumAdaptorTest {
 
     private class SessionManagerMock {
       public IDfSession getSession(String docbaseName) {
-        return getProxySession();
+        return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
       }
-    }
-
-    public IDfSession getProxySession() {
-      return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
     }
 
     private class SessionMock {
       public IDfFolder getObjectByPath(String path) {
         if (folderPathIdsMap.containsKey(path)) {
-          return getProxyFolderObject(path);
+          return Proxies.newProxyInstance(IDfFolder.class,
+              new FolderMock(path));
         } else {
           return null;
         }
       }
-    }
-
-    public IDfFolder getProxyFolderObject(String objectPath) {
-      return Proxies.newProxyInstance(IDfFolder.class,
-          new FolderMock(objectPath));
     }
 
     private class FolderMock {
@@ -1508,7 +1500,7 @@ public class DocumentumAdaptorTest {
 
       public IDfId getObjectId() {
         String objId = folderPathIdsMap.get(objectPath);
-        return getProxyId(objId);
+        return Proxies.newProxyInstance(IDfId.class, new IdMock(objId));
       }
 
       public String getObjectName() {
@@ -1517,23 +1509,19 @@ public class DocumentumAdaptorTest {
       }
 
       public IDfCollection getContents(String colNames) {
-        return getProxyCollection(colNames);
+        return Proxies.newProxyInstance(IDfCollection.class,
+            new CollectionMock(colNames));
       }
 
       public IDfType getType() {
-        return getProxyType();
+        return Proxies.newProxyInstance(IDfType.class, new TypeMock());
       }
 
       public Enumeration<IDfAttr> enumAttrs() {
         return new Vector<IDfAttr>().elements();  // No attrs.
       }
     }
-
-    public IDfCollection getProxyCollection(String colNames) {
-      return Proxies
-          .newProxyInstance(IDfCollection.class, new CollectionMock(colNames));
-    }
-
+      
     private class CollectionMock {
       private String colNames;
       Iterator<String> iterIds;
@@ -1563,10 +1551,6 @@ public class DocumentumAdaptorTest {
       }
     }
 
-    public IDfType getProxyType() {
-      return Proxies.newProxyInstance(IDfType.class, new TypeMock());
-    }
-
     private class TypeMock {
       public boolean isTypeOf(String type) {
         return type.equals("dm_folder");
@@ -1575,10 +1559,6 @@ public class DocumentumAdaptorTest {
       public String getName() {
         return "dm_folder";
       }
-    }
-
-    public IDfId getProxyId(String id) {
-      return Proxies.newProxyInstance(IDfId.class, new IdMock(id));
     }
 
     private class IdMock {
