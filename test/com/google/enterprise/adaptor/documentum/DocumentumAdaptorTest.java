@@ -92,6 +92,9 @@ import java.util.Vector;
 /** Unit tests for DocumentAdaptor class. */
 public class DocumentumAdaptorTest {
 
+  private static final SimpleDateFormat dateFormat =
+      new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+
   private static final String EPOCH_1970 = "1970-01-01 00:00:00";
   private static final String JAN_1970 = "1970-01-01 02:03:04";
   private static final String FEB_1970 = "1970-02-01 02:03:04";
@@ -123,8 +126,11 @@ public class DocumentumAdaptorTest {
   private static final String CREATE_TABLE_SYSOBJECT =
       "create table dm_sysobject "
       + "(r_object_id varchar, r_modify_date timestamp, r_object_type varchar, "
-      // Note: mock_object_path is an artifact used to emulate FOLDER predicate.
-      + "object_name varchar, i_folder_id varchar, mock_object_path varchar)";
+      + "object_name varchar, a_content_type varchar, i_folder_id varchar,"
+      // Note: mock_content ia an artifact that stores the content as a string,
+      // and mock_object_path is an artifact used to emulate FOLDER predicate,
+      // and to assist getObjectByPath.
+      + "mock_content varchar, mock_object_path varchar)";
 
   private JdbcFixture jdbcFixture = new JdbcFixture();
 
@@ -735,27 +741,6 @@ public class DocumentumAdaptorTest {
 
   /* Mock proxy classes for testing file content */
   private class DocContentTestProxies {
-    Map<String, String> objectPathIdsMap = new HashMap<String, String>() {
-      {
-        put("/Folder1/path1/object1", "0901081f80079f5c");
-      }
-    };
-
-    String objContentType;
-    String objContent;
-    Date objLastModified;
-
-    public void setObjectContentType(String objContentType) {
-      this.objContentType = objContentType;
-    }
-
-    public void setObjectContent(String objContent) {
-      this.objContent = objContent;
-    }
-
-    public void setObjectLastModified(Date objLastModified) {
-      this.objLastModified = objLastModified;
-    }
 
     public IDfClientX getProxyClientX() {
       return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
@@ -776,47 +761,60 @@ public class DocumentumAdaptorTest {
     }
 
     private class SessionMock {
-      public IDfSysObject getObjectByPath(String path) {
-        if (objectPathIdsMap.containsKey(path)) {
-          return Proxies.newProxyInstance(IDfSysObject.class,
-              new SysObjectMock(path));
-        } else {
+      public IDfSysObject getObjectByPath(String path) throws DfException {
+        String query = String.format("SELECT * FROM dm_sysobject "
+            + "WHERE mock_object_path = '%s'", path);
+        try (Statement stmt = jdbcFixture.getConnection().createStatement();
+             ResultSet rs = stmt.executeQuery(query)) {
+          if (rs.first()) {
+            return Proxies.newProxyInstance(IDfSysObject.class,
+                new SysObjectMock(rs));
+          }
           return null;
+        } catch (SQLException e) {
+          throw new DfException(e);
         }
       }
     }
 
     private class SysObjectMock {
-      private String objectPath;
+      String id;
+      String type;
+      String contentType;
+      String content;
+      Date lastModified;
 
-      public SysObjectMock(String objectPath) {
-        this.objectPath = objectPath;
+      public SysObjectMock(ResultSet rs) throws SQLException {
+        id = rs.getString("r_object_id");
+        type = rs.getString("r_object_type");
+        contentType = rs.getString("a_content_type");
+        content = rs.getString("mock_content");
+        lastModified = new Date(rs.getTimestamp("r_modify_date").getTime());
       }
 
       public IDfId getObjectId() {
-        return Proxies.newProxyInstance(IDfId.class, new IdMock());
+        return Proxies.newProxyInstance(IDfId.class, new IdMock(id));
       }
 
       public InputStream getContent() {
-        if (objectPathIdsMap.containsKey(objectPath) && (objContent != null)) {
-          return new ByteArrayInputStream(objContent.getBytes(UTF_8));
-        } else {
+        if (content == null) {
           return null;
         }
+        return new ByteArrayInputStream(content.getBytes(UTF_8));
       }
 
       public IDfType getType() {
-        return Proxies.newProxyInstance(IDfType.class, new TypeMock());
+        return Proxies.newProxyInstance(IDfType.class, new TypeMock(type));
       }
 
       public String getContentType() {
-        return objContentType;
+        return contentType;
       }
 
       public IDfTime getTime(String attr) {
         if (attr.equals("r_modify_date")) {
           return Proxies.newProxyInstance(IDfTime.class,
-              new TimeMock(objLastModified));
+              new TimeMock(lastModified));
         } else {
           return null;
         }
@@ -832,12 +830,18 @@ public class DocumentumAdaptorTest {
     }
 
     private class TypeMock {
-      public boolean isTypeOf(String type) {
-        return type.equals("dm_document");
+      private final String type;
+
+      public TypeMock(String type) {
+        this.type = type;
+      }
+
+      public boolean isTypeOf(String otherType) {
+        return type.startsWith(otherType);
       }
 
       public String getName() {
-        return "dm_document";
+        return type;
       }
     }
 
@@ -854,12 +858,22 @@ public class DocumentumAdaptorTest {
     }
 
     private class IdMock {
+      private String objectId;
+
+      public IdMock(String objectId) {
+        this.objectId = objectId;
+      }
+
+      public String toString() {
+        return objectId;
+      }
     }
   }
 
   @Test
   public void testDocContentInitialCrawl() throws Exception {
-    testDocContent(null, null, false);
+    Date lastModified = new Date();
+    testDocContent(null, lastModified, false);
   }
 
   @Test
@@ -870,14 +884,18 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
-  public void testDocContentOneDayBeforeWindow() throws Exception {
+  public void testDocContentOneDayBeforeWindowJustShort() throws Exception {
     Date lastCrawled = new Date();
-    Date lastModified = new Date( // One second short of a full day.
-        lastCrawled.getTime() - (24 * 60 * 60 * 1000L - 1000L));
+    Date lastModified = new Date( // Two seconds short of a full day.
+        lastCrawled.getTime() - (24 * 60 * 60 * 1000L - 2000L));
     testDocContent(lastCrawled, lastModified, false);
+  }
 
-    lastModified = new Date( // One second more than a full day.
-        lastCrawled.getTime() - (24 * 60 * 60 * 1000L + 1000L));
+  @Test
+  public void testDocContentOneDayBeforeWindowJustOver() throws Exception {
+    Date lastCrawled = new Date();
+    Date lastModified = new Date( // Two seconds more than a full day.
+        lastCrawled.getTime() - (24 * 60 * 60 * 1000L + 2000L));
     testDocContent(lastCrawled, lastModified, true);
   }
 
@@ -905,12 +923,17 @@ public class DocumentumAdaptorTest {
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
-    String objectContentType = "crtext/html";
-    String objectContent = "<html><body>Hello</body></html>";
-    proxyCls.setObjectContentType(objectContentType);
-    proxyCls.setObjectContent(objectContent);
-    proxyCls.setObjectLastModified(lastModified);
     String path = "/Folder1/path1/object1";
+    String name = "object1";
+    String contentType = "crtext/html";
+    String content = "<html><body>Hello</body></html>";
+    jdbcFixture.executeUpdate(String.format(
+        "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
+        + "r_object_type, a_content_type, mock_content, r_modify_date) "
+        + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'})",
+        "09" + name, name, path, "dm_document", contentType, content,
+        dateFormat.format(lastModified)));
+
     Request req = new MockRequest(adaptor.docIdFromPath(path), lastCrawled);
     MockResponse resp = new MockResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
@@ -925,8 +948,8 @@ public class DocumentumAdaptorTest {
       assertNull(resp.content);
     } else {
       assertFalse(resp.notModified);
-      assertEquals(objectContentType, resp.contentType);
-      assertEquals(objectContent, resp.content.toString(UTF_8.name()));
+      assertEquals(contentType, resp.contentType);
+      assertEquals(content, resp.content.toString(UTF_8.name()));
     }
   }
 
@@ -1860,9 +1883,8 @@ public class DocumentumAdaptorTest {
     Joiner joiner = Joiner.on(',');
     jdbcFixture.executeUpdate(String.format("INSERT INTO dm_group"
         + "(r_object_id, group_name, group_source, users_names, groups_names, "
-        + "r_modify_date) VALUES('%s', '%s', '%s', '%s', '%s', "
-        + "PARSEDATETIME('%s', 'yyyy-MM-dd HH:mm:ss'))",
-        "12" + groupName, groupName, source, joiner.join(users),
+        + "r_modify_date) VALUES('%s', '%s', '%s', '%s', '%s', {ts '%s'})",
+         "12" + groupName, groupName, source, joiner.join(users),
         joiner.join(groups), lastModified));
   }
 
@@ -2338,8 +2360,7 @@ public class DocumentumAdaptorTest {
     jdbcFixture.executeUpdate(String.format(
         "insert into dm_audittrail_acl(r_object_id, chronicle_id, "
             + "audited_obj_id, event_name, time_stamp_utc) "
-            + "values('%s', '%s', '%s', '%s', parseDateTime('%s', "
-            + "'yyyy-MM-dd HH:mm:ss'))",
+            + "values('%s', '%s', '%s', '%s', {ts '%s'})",
             id, chronicleId, auditObjId, eventName, date));
   }
 
@@ -2364,10 +2385,9 @@ public class DocumentumAdaptorTest {
    * @return date in string format.
    */
   private String getNowPlusMinutes(int minutes) {
-    SimpleDateFormat format = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
     Calendar calendar = Calendar.getInstance();
     calendar.add(Calendar.MINUTE, minutes);
-    return format.format(calendar.getTime());
+    return dateFormat.format(calendar.getTime());
   }
 
   @Test
@@ -2945,8 +2965,7 @@ public class DocumentumAdaptorTest {
     jdbcFixture.executeUpdate(String.format(
         "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
         + "r_object_type, i_folder_id, r_modify_date) "
-        + "values('%s', '%s', '%s', '%s', '%s', "
-        + "parseDateTime('%s', 'yyyy-MM-dd hh:mm:ss'))",
+        + "values('%s', '%s', '%s', '%s', '%s', {ts '%s'})",
         id, name, path, type, Joiner.on(",").join(folderIds), lastModified));
   }
 
