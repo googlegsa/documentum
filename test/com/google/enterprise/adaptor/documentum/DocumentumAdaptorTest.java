@@ -769,8 +769,13 @@ public class DocumentumAdaptorTest {
         try (Statement stmt = jdbcFixture.getConnection().createStatement();
              ResultSet rs = stmt.executeQuery(query)) {
           if (rs.first()) {
-            return Proxies.newProxyInstance(IDfSysObject.class,
-                new SysObjectMock(rs));
+            if (rs.getString("r_object_type").startsWith("dm_folder")) {
+              return Proxies.newProxyInstance(IDfFolder.class,
+                  new FolderMock(rs));
+            } else {
+              return Proxies.newProxyInstance(IDfSysObject.class,
+                  new SysObjectMock(rs));
+            }
           }
           return null;
         } catch (SQLException e) {
@@ -781,6 +786,7 @@ public class DocumentumAdaptorTest {
 
     private class SysObjectMock {
       String id;
+      String name;
       String type;
       String contentType;
       String content;
@@ -788,6 +794,7 @@ public class DocumentumAdaptorTest {
 
       public SysObjectMock(ResultSet rs) throws SQLException {
         id = rs.getString("r_object_id");
+        name = rs.getString("object_name");
         type = rs.getString("r_object_type");
         contentType = rs.getString("a_content_type");
         content = rs.getString("mock_content");
@@ -796,6 +803,10 @@ public class DocumentumAdaptorTest {
 
       public IDfId getObjectId() {
         return Proxies.newProxyInstance(IDfId.class, new IdMock(id));
+      }
+
+      public String getObjectName() {
+        return name;
       }
 
       public InputStream getContent() {
@@ -828,6 +839,59 @@ public class DocumentumAdaptorTest {
 
       public Enumeration<IDfAttr> enumAttrs() {
         return new Vector<IDfAttr>().elements();  // No attrs.
+      }
+    }
+
+    private class FolderMock extends SysObjectMock {
+      public FolderMock(ResultSet rs) throws SQLException {
+        super(rs);
+      }
+
+      public IDfCollection getContents(String colNames) throws DfException {
+        String query = String.format(
+            "SELECT %s FROM dm_sysobject WHERE i_folder_id = '%s'",
+            colNames, getObjectId());
+        return Proxies.newProxyInstance(IDfCollection.class,
+            new CollectionMock(query));
+      }
+    }
+      
+    private class CollectionMock {
+      final Statement stmt;
+      final ResultSet rs;
+
+      public CollectionMock(String query) throws DfException {
+        try {
+          stmt = jdbcFixture.getConnection().createStatement();
+          rs = stmt.executeQuery(query);
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+
+      public String getString(String colName) throws DfException {
+        try {
+          return rs.getString(colName);
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+
+      public boolean next() throws DfException {
+        try {
+          return rs.next();
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+
+      public void close() throws DfException {
+        try {
+          rs.close();
+          stmt.close();
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
       }
     }
 
@@ -1398,160 +1462,36 @@ public class DocumentumAdaptorTest {
     }
   }
 
-  /* Mock proxy classes for testing folder listing */
-  private class FolderDocContentTestProxies {
-    Map<String, String> folderPathIdsMap = new HashMap<String, String>();
-    List<String> folderListingIds = new ArrayList<String>();
-    List<String> folderListingNames = new ArrayList<String>();
-
-    public IDfClientX getProxyClientX() {
-      return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
-    }
-
-    private class ClientXMock {
-    }
-
-    public IDfSessionManager getProxySessionManager() {
-      return Proxies.newProxyInstance(IDfSessionManager.class,
-          new SessionManagerMock());
-    }
-
-    private class SessionManagerMock {
-      public IDfSession getSession(String docbaseName) {
-        return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
-      }
-    }
-
-    private class SessionMock {
-      public IDfFolder getObjectByPath(String path) {
-        if (folderPathIdsMap.containsKey(path)) {
-          return Proxies.newProxyInstance(IDfFolder.class,
-              new FolderMock(path));
-        } else {
-          return null;
-        }
-      }
-    }
-
-    private class FolderMock {
-      private String objectPath;
-
-      public FolderMock(String objectPath) {
-        this.objectPath = objectPath;
-      }
-
-      public IDfId getObjectId() {
-        String objId = folderPathIdsMap.get(objectPath);
-        return Proxies.newProxyInstance(IDfId.class, new IdMock(objId));
-      }
-
-      public String getObjectName() {
-        String[] parts = objectPath.split("/", 0);
-        return parts[parts.length - 1];
-      }
-
-      public IDfCollection getContents(String colNames) {
-        return Proxies.newProxyInstance(IDfCollection.class,
-            new CollectionMock(colNames));
-      }
-
-      public IDfType getType() {
-        return Proxies.newProxyInstance(IDfType.class, new TypeMock());
-      }
-
-      public Enumeration<IDfAttr> enumAttrs() {
-        return new Vector<IDfAttr>().elements();  // No attrs.
-      }
-    }
-      
-    private class CollectionMock {
-      private String colNames;
-      Iterator<String> iterIds;
-      Iterator<String> iterNames;
-
-      public  CollectionMock(String colNames) {
-        this.colNames = colNames;
-        iterIds = folderListingIds.iterator();
-        iterNames =  folderListingNames.iterator();
-      }
-
-      public String getString(String colName) {
-        if ("r_object_id".equals(colName)) {
-          return iterIds.next();
-        } else if ("object_name".equals(colName)) {
-          return iterNames.next();
-        } else {
-          return null;
-        }
-      }
-
-      public boolean next() {
-        return iterIds.hasNext() && iterNames.hasNext();
-      }
-
-      public void close() {
-      }
-    }
-
-    private class TypeMock {
-      public boolean isTypeOf(String type) {
-        return type.equals("dm_folder");
-      }
-
-      public String getName() {
-        return "dm_folder";
-      }
-    }
-
-    private class IdMock {
-      public IdMock(String objectId) {
-      }
-    }
-  }
-
-  private void addFolder(FolderDocContentTestProxies proxyCls, String id,
-      String path) {
-    proxyCls.folderPathIdsMap.put(path, id);
-  }
-
-  private void addFolderChild(FolderDocContentTestProxies proxyCls, String id,
-      String name) {
-    proxyCls.folderListingIds.add(id);
-    proxyCls.folderListingNames.add(name);
-  }
-
   @Test
   public void testFolderDocContent() throws Exception {
-    FolderDocContentTestProxies proxyCls = new FolderDocContentTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-
+    String now = getNowPlusMinutes(0);
+    String folderId = "0b01081f80078d29";
     String folder = "/Folder2/subfolder/path2";
+    insertFolder(now, folderId, folder);
+    insertDocument(now, "0901081f80079263", folder + "/file1", folderId);
+    insertDocument(now, "0901081f8007926d", folder + "/file2 evil<chars?",
+        folderId);
+    insertDocument(now, "0901081f80079278", folder + "/file3", folderId);
 
-    Request req = new MockRequest(adaptor.docIdFromPath(folder));
-    MockResponse resp = new MockResponse();
-    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
-
-    addFolder(proxyCls, "0b01081f80078d29", folder);
     StringBuilder expected = new StringBuilder();
     expected.append("<!DOCTYPE html>\n<html><head><title>");
     expected.append("Folder path2");
     expected.append("</title></head><body><h1>");
     expected.append("Folder path2");
     expected.append("</h1>");
-
-    addFolderChild(proxyCls, "0901081f80079263", "file1");
     expected.append("<li><a href=\"path2/file1\">file1</a></li>");
-
-    addFolderChild(proxyCls, "0901081f8007926d", "file2 evil<chars?");
     expected.append("<li><a href=\"path2/file2%20evil%3Cchars%3F\">"
         + "file2 evil&lt;chars?</a></li>");
-
-    addFolderChild(proxyCls, "0901081f80079278", "file3");
     expected.append("<li><a href=\"path2/file3\">file3</a></li>");
-
     expected.append("</body></html>");
 
+    // TODO(bmj): Use getDocContentResponse() once it is merged in.
+    DocContentTestProxies proxyCls = new DocContentTestProxies();
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
+    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
+    Request req = new MockRequest(adaptor.docIdFromPath(folder));
+    MockResponse resp = new MockResponse();
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
         ImmutableList.of("/Folder2"), null, null, 1000, "");
@@ -1563,12 +1503,13 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testGetDocContentNotFound() throws Exception {
-    FolderDocContentTestProxies proxyCls = new FolderDocContentTestProxies();
+    DocContentTestProxies proxyCls = new DocContentTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
     String folder = "/Folder2/doesNotExist";
 
+    // TODO(bmj): Use getDocContentResponse() once it is merged in.
     Request req = new MockRequest(new DocId(folder));
     MockResponse resp = new MockResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
@@ -1582,16 +1523,18 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testGetDocContentNotUnderStartPath() throws Exception {
-    FolderDocContentTestProxies proxyCls = new FolderDocContentTestProxies();
+    DocContentTestProxies proxyCls = new DocContentTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
+    String now = getNowPlusMinutes(0);
     String path1 = "/Folder1/path1";
     String path2 = "/Folder2/path2";
 
-    addFolder(proxyCls, "0b01081f80078d29", path1);
-    addFolder(proxyCls, "0b01081f80078d30", path2);
+    insertFolder(now, "0b01081f80078d29", path1);
+    insertFolder(now, "0b01081f80078d30", path2);
 
+    // TODO(bmj): Use getDocContentResponse() once it is merged in.
     Request req = new MockRequest(new DocId(path2));
     MockResponse resp = new MockResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
