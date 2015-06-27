@@ -125,7 +125,8 @@ public class DocumentumAdaptorTest {
   private static final String CREATE_TABLE_SYSOBJECT =
       "create table dm_sysobject "
       + "(r_object_id varchar, r_modify_date timestamp, r_object_type varchar, "
-      + "object_name varchar, a_content_type varchar, i_folder_id varchar,"
+      + "object_name varchar, a_content_type varchar, i_folder_id varchar, "
+      + "r_is_virtual_doc boolean, "
       // Note: mock_content ia an artifact that stores the content as a string,
       // and mock_object_path is an artifact used to emulate FOLDER predicate,
       // and to assist getObjectByPath.
@@ -791,6 +792,7 @@ public class DocumentumAdaptorTest {
       String contentType;
       String content;
       Date lastModified;
+      boolean isVirtualDocument;
 
       public SysObjectMock(ResultSet rs) throws SQLException {
         id = rs.getString("r_object_id");
@@ -799,6 +801,7 @@ public class DocumentumAdaptorTest {
         contentType = rs.getString("a_content_type");
         content = rs.getString("mock_content");
         lastModified = new Date(rs.getTimestamp("r_modify_date").getTime());
+        isVirtualDocument = rs.getBoolean("r_is_virtual_doc");
       }
 
       public IDfId getObjectId() {
@@ -807,6 +810,14 @@ public class DocumentumAdaptorTest {
 
       public String getObjectName() {
         return name;
+      }
+
+      public String getString(String attrName) {
+        switch (attrName) {
+          case "object_name": return name;
+          case "r_object_id": return id;
+          default: return null;
+        }
       }
 
       public InputStream getContent() {
@@ -834,11 +845,70 @@ public class DocumentumAdaptorTest {
       }
 
       public boolean isVirtualDocument() {
-        return false;
+        return isVirtualDocument;
+      }
+
+      public IDfVirtualDocument asVirtualDocument(String lateBinding,
+          boolean followRootAssembly) {
+        return Proxies.newProxyInstance(IDfVirtualDocument.class,
+            new VirtualDocumentMock(id));
       }
 
       public Enumeration<IDfAttr> enumAttrs() {
         return new Vector<IDfAttr>().elements();  // No attrs.
+      }
+    }
+
+    private class VirtualDocumentMock {
+      private final String vdocId;
+      
+      public VirtualDocumentMock(String vdocId) {
+        this.vdocId = vdocId;
+      }
+
+      public IDfVirtualDocumentNode getRootNode() throws DfException {
+        return Proxies.newProxyInstance(IDfVirtualDocumentNode.class,
+            new VdocRootNodeMock(vdocId));
+      }
+    }
+
+    private class VdocRootNodeMock {
+      private final ArrayList<String> vdocChildren = new ArrayList<>();
+
+      public VdocRootNodeMock(String vdocId) throws DfException {
+        String query = String.format("SELECT mock_object_path "
+            + "FROM dm_sysobject WHERE i_folder_id = '%s'", vdocId);
+        try (Statement stmt = jdbcFixture.getConnection().createStatement();
+             ResultSet rs = stmt.executeQuery(query)) {
+          while (rs.next()) {
+            vdocChildren.add(rs.getString("mock_object_path"));
+          }
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+
+      public int getChildCount() {
+        return vdocChildren.size();
+      }
+
+      public IDfVirtualDocumentNode getChild(int index) {
+        return Proxies.newProxyInstance(IDfVirtualDocumentNode.class,
+            new VdocChildNodeMock(vdocChildren.get(index)));
+      }
+    }
+
+    private class VdocChildNodeMock {
+      private final String childPath;
+
+      public VdocChildNodeMock(String childPath) {
+        this.childPath = childPath;
+      }
+
+      public IDfSysObject getSelectedObject() throws DfException {
+        IDfSession session = DocContentTestProxies.this
+            .getProxySessionManager().getSession("foo");
+        return (IDfSysObject) session.getObjectByPath(childPath);
       }
     }
 
@@ -1241,176 +1311,35 @@ public class DocumentumAdaptorTest {
     assertEquals(expected, resp.metadata);
   }
 
-  /* Mock proxy classes for testing virtual document content */
-  private class VirtualDocContentTestProxies {
-    Map<String, String> objectPathIdsMap = new HashMap<String, String>() {
-      {
-        put("/Folder1/path1/vdoc", "0901081f80079f5c");
-      }
-    };
-    List<IDfSysObject>vdocChildren = new ArrayList<IDfSysObject>();
-
-    String objContentType;
-    String objContent;
-
-    public void setObjectContentType(String objContentType) {
-      this.objContentType = objContentType;
-    }
-
-    public void setObjectContent(String objContent) {
-      this.objContent = objContent;
-    }
-
-    public IDfClientX getProxyClientX() {
-      return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
-    }
-
-    private class ClientXMock {
-    }
-
-    public IDfSessionManager getProxySessionManager() {
-      return Proxies.newProxyInstance(IDfSessionManager.class,
-          new SessionManagerMock());
-    }
-
-    private class SessionManagerMock {
-      public IDfSession getSession(String docbaseName) {
-        return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
-      }
-    }
-
-    private class SessionMock {
-      public IDfSysObject getObjectByPath(String path) {
-        if (objectPathIdsMap.containsKey(path)) {
-          return Proxies.newProxyInstance(IDfSysObject.class,
-              new SysObjectMock(path));
-        } else {
-          return null;
-        }
-      }
-    }
-
-    private class SysObjectMock {
-      private String objectPath;
-
-      public SysObjectMock(String objectPath) {
-        this.objectPath = objectPath;
-      }
-
-      public IDfId getObjectId() {
-        return Proxies.newProxyInstance(IDfId.class, new IdMock());
-      }
-
-      public InputStream getContent() {
-        if (objectPathIdsMap.containsKey(objectPath) && (objContent != null)) {
-          return new ByteArrayInputStream(objContent.getBytes(UTF_8));
-        } else {
-          return null;
-        }
-      }
-
-      public IDfType getType() {
-        return Proxies.newProxyInstance(IDfType.class, new TypeMock());
-      }
-
-      public String getContentType() {
-        return objContentType;
-      }
-
-      public Enumeration<IDfAttr> enumAttrs() {
-        return new Vector<IDfAttr>().elements();  // No attrs.
-      }
-
-      public boolean isVirtualDocument() {
-        return true;
-      }
-
-      public IDfVirtualDocument asVirtualDocument(String lateBinding,
-          boolean followRootAssembly) {
-        return Proxies.newProxyInstance(IDfVirtualDocument.class,
-            new VirtualDocumentMock());
-      }
-    }
-
-    private class VirtualDocumentMock {
-      public IDfVirtualDocumentNode getRootNode() {
-        return Proxies.newProxyInstance(IDfVirtualDocumentNode.class,
-            new VdocRootNodeMock());
-      }
-    }
-
-    private class VdocRootNodeMock {
-      public int getChildCount() {
-        return vdocChildren.size();
-      }
-
-      public IDfVirtualDocumentNode getChild(int index) {
-        return Proxies.newProxyInstance(IDfVirtualDocumentNode.class,
-            new VdocChildNodeMock(vdocChildren.get(index)));
-      }
-    }
-
-    private class VdocChildNodeMock {
-      private final IDfSysObject childObject;
-      public VdocChildNodeMock(IDfSysObject childObject) {
-        this.childObject = childObject;
-      }
-
-      public IDfSysObject getSelectedObject() {
-        return childObject;
-      }
-    }
-
-    public IDfSysObject getProxyVdocChildObject(String id, String name) {
-      return Proxies.newProxyInstance(IDfSysObject.class, 
-          new VdocChildObjectMock(id, name));
-    }
-
-    private class VdocChildObjectMock {
-      private final String id;
-      private final String name;
-
-      public VdocChildObjectMock(String id, String name) {
-        this.id = id;
-        this.name = name;
-      }
-
-      public String getString(String colName) {
-        if ("r_object_id".equals(colName)) {
-          return id;
-        } else if ("object_name".equals(colName)) {
-          return name;
-        } else {
-          return null;
-        }
-      }
-    }
-
-    private class TypeMock {
-      public boolean isTypeOf(String type) {
-        return type.equals("dm_document");
-      }
-
-      public String getName() {
-        return "dm_document";
-      }
-    }
-
-    private class IdMock {
+  private void insertVirtualDocument(String vdocPath, String contentType,
+      String content, String... children) throws SQLException {
+    String name = vdocPath.substring(vdocPath.lastIndexOf("/") + 1);
+    String vdocId = "09" + name;
+    String now = getNowPlusMinutes(0);
+    jdbcFixture.executeUpdate(String.format(
+        "INSERT INTO dm_sysobject(r_object_id, object_name, mock_object_path, "
+        + "r_object_type, r_is_virtual_doc, a_content_type, mock_content, "
+        + "r_modify_date) "
+        + "VALUES('%s', '%s', '%s', '%s', TRUE, '%s', '%s', {ts '%s'})",
+        vdocId, name, vdocPath, "dm_document_virtual", contentType, content,
+        now));
+    for (String child : children) {
+      insertDocument(now, "09" + child, vdocPath + "/" + child, vdocId);
     }
   }
 
   @Test
   public void testVirtualDocContentNoChildren() throws Exception {
-    VirtualDocContentTestProxies proxyCls = new VirtualDocContentTestProxies();
+    DocContentTestProxies proxyCls = new DocContentTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
     String objectContentType = "crtext/html";
     String objectContent = "<html><body>Hello</body></html>";
-    proxyCls.setObjectContentType(objectContentType);
-    proxyCls.setObjectContent(objectContent);
     String path = "/Folder1/path1/vdoc";
+    insertVirtualDocument(path, objectContentType, objectContent);
+
+    // TODO(bmj): Use getDocContentResponse() once it is merged in.
     Request req = new MockRequest(adaptor.docIdFromPath(path));
     MockResponse resp = new MockResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
@@ -1426,22 +1355,17 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testVirtualDocContentWithChildren() throws Exception {
-    VirtualDocContentTestProxies proxyCls = new VirtualDocContentTestProxies();
+    DocContentTestProxies proxyCls = new DocContentTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
     String objectContentType = "crtext/html";
     String objectContent = "<html><body>Hello</body></html>";
-    proxyCls.setObjectContentType(objectContentType);
-    proxyCls.setObjectContent(objectContent);
     String path = "/Folder1/path1/vdoc";
-    proxyCls.vdocChildren.add(
-        proxyCls.getProxyVdocChildObject("0901081f80079f5d", "object1"));
-    proxyCls.vdocChildren.add(
-        proxyCls.getProxyVdocChildObject("0901081f80079f5e", "object2"));
-    proxyCls.vdocChildren.add(
-        proxyCls.getProxyVdocChildObject("0901081f80079f5f", "object3"));
+    insertVirtualDocument(path, objectContentType, objectContent,
+        "object1", "object2", "object3");
 
+    // TODO(bmj): Use getDocContentResponse() once it is merged in.
     Request req = new MockRequest(adaptor.docIdFromPath(path));
     MockResponse resp = new MockResponse();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
@@ -1454,7 +1378,7 @@ public class DocumentumAdaptorTest {
     assertEquals(objectContent, resp.content.toString(UTF_8.name()));
 
     // Verify child links.
-    assertEquals(proxyCls.vdocChildren.size(), resp.anchors.size());
+    assertEquals(3, resp.anchors.size());
     for (String name : ImmutableList.of("object1", "object2", "object3")) {
       URI uri = resp.anchors.get(name);
       assertNotNull(uri);
