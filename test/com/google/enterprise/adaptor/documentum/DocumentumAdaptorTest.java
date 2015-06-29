@@ -39,7 +39,6 @@ import com.google.enterprise.adaptor.Principal;
 import com.google.enterprise.adaptor.Request;
 import com.google.enterprise.adaptor.UserPrincipal;
 import com.google.enterprise.adaptor.documentum.DocumentumAdaptor.Checkpoint;
-
 import com.documentum.com.IDfClientX;
 import com.documentum.fc.client.DfPermit;
 import com.documentum.fc.client.IDfACL;
@@ -155,6 +154,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.username", "testuser");
     config.addKey("documentum.password", "testpwd");
     config.addKey("documentum.docbaseName", "testdocbase");
+    config.addKey("documentum.displayUrlPattern", "http://webtop/drl/{0}");
     config.addKey("documentum.src", "/Folder1/path1");
     config.addKey("documentum.src.separator", ",");
     config.addKey("documentum.excludedAttributes", "foo, bar");
@@ -466,6 +466,8 @@ public class DocumentumAdaptorTest {
     config.overrideKey("documentum.username", "testuser");
     config.overrideKey("documentum.password", "testpwd");
     config.overrideKey("documentum.docbaseName", "testdocbase");
+    config.overrideKey("documentum.displayUrlPattern",
+        "http://webtopurl/drl/{0}");
     config.overrideKey("documentum.src", src);
     if (separator != null) {
       config.overrideKey("documentum.src.separator", separator);
@@ -640,7 +642,7 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(request, response, dmClientX, 
         proxyCls.sessionManager, docidEncoder, ImmutableList.of("/"),
-        null, whereClause, maxHtmlLinks);
+        null, whereClause, maxHtmlLinks, "");
 
     assertEquals(queries.toString(), 1, queries.size());
     String query = queries.get(0); 
@@ -940,7 +942,7 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"), null, null, 1000);
+        ImmutableList.of("/Folder1"), null, null, 1000, "");
 
     if (expectNotModified) {
       assertTrue(resp.notModified);
@@ -951,6 +953,67 @@ public class DocumentumAdaptorTest {
       assertEquals(contentType, resp.contentType);
       assertEquals(content, resp.content.toString(UTF_8.name()));
     }
+  }
+
+  @Test
+  public void testDisplayUrlWithId() throws Exception {
+    assertEquals("http://webtopurl/drl/09object1",
+        getDisplayUrl("http://webtopurl/drl/{0}"));
+  }
+
+  @Test
+  public void testDisplayUrlWithPath() throws Exception {
+    assertEquals("http://webtopurl/drl//Folder1/path1/object1",
+        getDisplayUrl("http://webtopurl/drl/{1}"));
+  }
+
+  @Test
+  public void testDisplayUrlWithIdAndPath() throws Exception {
+    assertEquals("/Folder1/path1/object1-http://webtopurl/09object1/drl/",
+        getDisplayUrl("{1}-http://webtopurl/{0}/drl/"));
+  }
+
+  @Test
+  public void testDisplayUrlNoIdOrPath() throws Exception {
+    assertEquals("http://webtopurl/drl",
+        getDisplayUrl("http://webtopurl/drl"));
+  }
+
+  private String getDisplayUrl(String displayUrl) throws Exception {
+    String id = "09object1";
+    String path = "/Folder1/path1/object1";
+    String name = "object1";
+    String contentType = "crtext/html";
+    String content = "<html><body>Hello</body></html>";
+    List<String> startPaths = ImmutableList.of("/Folder1");
+    MockResponse resp = new MockResponse();
+
+    handleDocContent(resp, id, name, path, new Date(), contentType, content,
+        startPaths, displayUrl);
+
+    return resp.displayUrl.toString();
+  }
+
+  private void handleDocContent(MockResponse resp, String id, String name,
+      String path, Date lastModified, String contentType, String content,
+      List<String> validatedStartPaths, String displayUrl) throws Exception {
+    DocContentTestProxies proxyCls = new DocContentTestProxies();
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
+
+    jdbcFixture.executeUpdate(String.format(
+        "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
+        + "r_object_type, a_content_type, mock_content, r_modify_date) "
+        + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'})",
+        id, name, path, "dm_document", contentType, content,
+        dateFormat.format(lastModified)));
+
+    Request req = new MockRequest(adaptor.docIdFromPath(path));
+    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
+
+    adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
+        ProxyAdaptorContext.getInstance().getDocIdEncoder(),
+        validatedStartPaths, null, null, 1000, displayUrl);
   }
 
   /* Mock proxy classes for testing file metadata */
@@ -1109,7 +1172,7 @@ public class DocumentumAdaptorTest {
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
         ImmutableList.of("/Folder1"), ImmutableSet.of("foo", "bar"),
-        null, 1000);
+        null, 1000, "");
 
     assertEquals(expected, resp.metadata);
   }
@@ -1290,7 +1353,7 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"), null, null, 1000);
+        ImmutableList.of("/Folder1"), null, null, 1000, "");
 
     assertEquals(objectContentType, resp.contentType);
     assertEquals(objectContent, resp.content.toString(UTF_8.name()));
@@ -1321,7 +1384,7 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"), null, null, 1000);
+        ImmutableList.of("/Folder1"), null, null, 1000, "");
 
     assertEquals(objectContentType, resp.contentType);
     assertEquals(objectContent, resp.content.toString(UTF_8.name()));
@@ -1491,7 +1554,7 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder2"), null, null, 1000);
+        ImmutableList.of("/Folder2"), null, null, 1000, "");
 
     assertFalse(resp.notFound);
     assertEquals("text/html; charset=UTF-8", resp.contentType);
@@ -1512,7 +1575,7 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder2"), null, null, 1000);
+        ImmutableList.of("/Folder2"), null, null, 1000, "");
 
     assertTrue(resp.notFound);
   }
@@ -1536,7 +1599,7 @@ public class DocumentumAdaptorTest {
     adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
         ImmutableList.of("/Folder1"),  // Folder2 not included.
-        null, null, 1000);
+        null, null, 1000, "");
 
     assertTrue(resp.notFound);
   }

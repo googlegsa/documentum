@@ -60,6 +60,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.charset.Charset;
 import java.text.MessageFormat;
 import java.text.SimpleDateFormat;
@@ -123,6 +125,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private Config config;
   private IDfSessionManager dmSessionManager;
   private String docbase;
+  private String displayUrl;
   private String globalNamespace;
   private String localNamespace;
   private String windowsDomain;
@@ -272,6 +275,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     config.addKey("documentum.username", null);
     config.addKey("documentum.password", null);
     config.addKey("documentum.docbaseName", null);
+    config.addKey("documentum.displayUrlPattern", null);
     config.addKey("documentum.src", null);
     config.addKey("documentum.src.separator", ",");
     config.addKey("adaptor.namespace", Principal.DEFAULT_NAMESPACE);
@@ -310,6 +314,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     config = context.getConfig();
     validateConfig(config);
     docbase = config.getValue("documentum.docbaseName").trim();
+    displayUrl = config.getValue("documentum.displayUrlPattern");
     globalNamespace = config.getValue("adaptor.namespace").trim();
     logger.log(Level.CONFIG, "adaptor.namespace: {0}", globalNamespace);
     localNamespace = globalNamespace + "_" + docbase;
@@ -361,6 +366,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     if (Strings.isNullOrEmpty(config.getValue("documentum.docbaseName"))) {
       throw new InvalidConfigurationException(
           "documentum.docbaseName is required");
+    }
+    if (Strings.isNullOrEmpty(config
+        .getValue("documentum.displayUrlPattern"))) {
+      throw new InvalidConfigurationException(
+          "documentum.displayUrlPattern is required");
     }
     if (Strings.isNullOrEmpty(config.getValue("documentum.src"))) {
       throw new InvalidConfigurationException(
@@ -760,14 +770,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   public void getDocContent(Request req, Response resp) throws IOException {
     getDocContentHelper(req, resp, dmClientX, dmSessionManager, docIdEncoder,
         validatedStartPaths, excludedAttributes, cabinetWhereCondition,
-        /* maxHtmlLinks */ 1000);
+        /* maxHtmlLinks */ 1000, displayUrl);
   }
 
   @VisibleForTesting
   void getDocContentHelper(Request req, Response resp, IDfClientX dmClientX,
       IDfSessionManager dmSessionManager, DocIdEncoder docIdEncoder,
       List<String> validatedStartPaths, Set<String> excludedAttributes,
-      String cabinetWhereCondition, int maxHtmlLinks) throws IOException {
+      String cabinetWhereCondition, int maxHtmlLinks, String displayUrl)
+      throws IOException {
     DocId id = req.getDocId();
     logger.log(Level.FINER, "Get content for id: {0}", id);
 
@@ -818,7 +829,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
       if (type.isTypeOf("dm_document")) {
         getDocumentContent(resp, (IDfSysObject) dmPersObj, id, docIdEncoder,
-            excludedAttributes);
+            excludedAttributes, displayUrl);
       } else if (type.isTypeOf("dm_folder")) {
         // TODO(bmj): Pass maxHtmlLinks to getFolderContent.
         getFolderContent(resp, (IDfFolder) dmPersObj, id, docIdEncoder,
@@ -829,6 +840,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       }
     } catch (DfException e) {
       throw new IOException("Error getting content:", e);
+    } catch (URISyntaxException e) {
+      throw new IOException("Error getting URI:", e);
     }
   }
 
@@ -903,10 +916,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
   }
 
-  /** Copies the Documentum document content into the response. */
+  /** Copies the Documentum document content into the response.
+   * @throws URISyntaxException */
   private void getDocumentContent(Response resp, IDfSysObject dmSysbObj,
-      DocId id, DocIdEncoder docIdEncoder, Set<String> excludedAttributes)
-      throws DfException, IOException {
+      DocId id, DocIdEncoder docIdEncoder, Set<String> excludedAttributes,
+      String displayUrl) throws DfException, IOException, URISyntaxException {
     // Include document attributes as metadata.
     getMetadata(resp, dmSysbObj, id, excludedAttributes);
 
@@ -919,6 +933,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     String contentType = dmSysbObj.getContentType();
     logger.log(Level.FINER, "Content Type: {0}", contentType);
     resp.setContentType(contentType);
+    resp.setDisplayUrl(new URI(MessageFormat.format(displayUrl,
+        dmSysbObj.getObjectId(), docIdToPath(id))));
     try (InputStream inStream = dmSysbObj.getContent()) {
       IOHelper.copyStream(inStream, resp.getOutputStream());
     }

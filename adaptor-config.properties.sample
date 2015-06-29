@@ -5,5 +5,9 @@ gsa.hostname=<GSA hostname>
 documentum.username=<Documentum username>
 documentum.password=<Password for above user>
 documentum.docbaseName=<Repository name>
+# In the URL pattern, {0} will be replaced by the object ID and {1} will be
+# replaced by the object path.
+# Example: http://example.com/webtop/drl/objectId/{0}
+documentum.displayUrlPattern=<Display URL for the document>
 documentum.src=<List of folder paths>
 documentum.src.separator=<Delimiter used to separate paths in documentum.src>
