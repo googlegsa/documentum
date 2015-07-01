@@ -1055,10 +1055,6 @@ public class DocumentumAdaptorTest {
 
   private void testDocContent(Date lastCrawled, Date lastModified,
       boolean expectNotModified) throws Exception {
-    DocContentTestProxies proxyCls = new DocContentTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-
     String path = "/Folder1/path1/object1";
     String name = "object1";
     String contentType = "crtext/html";
@@ -1070,22 +1066,18 @@ public class DocumentumAdaptorTest {
         "09" + name, name, path, "dm_document", contentType, content,
         dateFormat.format(lastModified)));
 
-    Request req = new MockRequest(adaptor.docIdFromPath(path), lastCrawled);
-    MockResponse resp = new MockResponse();
-    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
-
-    adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
-        ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"), null, null, 1000, "");
+    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path),
+        lastCrawled);
+    MockResponse response = getDocContent(request, "", "/Folder1");
 
     if (expectNotModified) {
-      assertTrue(resp.notModified);
-      assertNull(resp.contentType);
-      assertNull(resp.content);
+      assertTrue(response.notModified);
+      assertNull(response.contentType);
+      assertNull(response.content);
     } else {
-      assertFalse(resp.notModified);
-      assertEquals(contentType, resp.contentType);
-      assertEquals(content, resp.content.toString(UTF_8.name()));
+      assertFalse(response.notModified);
+      assertEquals(contentType, response.contentType);
+      assertEquals(content, response.content.toString(UTF_8.name()));
     }
   }
 
@@ -1113,41 +1105,45 @@ public class DocumentumAdaptorTest {
         getDisplayUrl("http://webtopurl/drl"));
   }
 
-  private String getDisplayUrl(String displayUrl) throws Exception {
+  private String getDisplayUrl(String displayUrlPattern) throws Exception {
     String id = "09object1";
     String path = "/Folder1/path1/object1";
     String name = "object1";
     String contentType = "crtext/html";
     String content = "<html><body>Hello</body></html>";
-    List<String> startPaths = ImmutableList.of("/Folder1");
-    MockResponse resp = new MockResponse();
-
-    handleDocContent(resp, id, name, path, new Date(), contentType, content,
-        startPaths, displayUrl);
-
-    return resp.displayUrl.toString();
-  }
-
-  private void handleDocContent(MockResponse resp, String id, String name,
-      String path, Date lastModified, String contentType, String content,
-      List<String> validatedStartPaths, String displayUrl) throws Exception {
-    DocContentTestProxies proxyCls = new DocContentTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
     jdbcFixture.executeUpdate(String.format(
         "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
         + "r_object_type, a_content_type, mock_content, r_modify_date) "
         + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'})",
         id, name, path, "dm_document", contentType, content,
-        dateFormat.format(lastModified)));
+        dateFormat.format(new Date())));
 
-    Request req = new MockRequest(adaptor.docIdFromPath(path));
+    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
+    MockResponse response =
+        getDocContent(request, displayUrlPattern, "/Folder1");
+    return response.displayUrl.toString();
+  }
+
+  private MockResponse getDocContent(String path, String... startPaths)
+      throws Exception {
+    return getDocContent(new MockRequest(DocumentumAdaptor.docIdFromPath(path)),
+        "", startPaths);
+  }
+
+  private MockResponse getDocContent(Request request, String displayUrlPattern,
+      String... startPaths) throws Exception {
+    DocContentTestProxies proxyCls = new DocContentTestProxies();
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
+    MockResponse response = new MockResponse();
 
-    adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
+    adaptor.getDocContentHelper(request, response, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        validatedStartPaths, null, null, 1000, displayUrl);
+        Arrays.asList(startPaths), null, null, 1000, displayUrlPattern);
+
+    return response;
   }
 
   /* Mock proxy classes for testing file metadata */
@@ -1330,57 +1326,35 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testVirtualDocContentNoChildren() throws Exception {
-    DocContentTestProxies proxyCls = new DocContentTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-
+    String path = "/Folder1/path1/vdoc";
     String objectContentType = "crtext/html";
     String objectContent = "<html><body>Hello</body></html>";
-    String path = "/Folder1/path1/vdoc";
     insertVirtualDocument(path, objectContentType, objectContent);
 
-    // TODO(bmj): Use getDocContentResponse() once it is merged in.
-    Request req = new MockRequest(adaptor.docIdFromPath(path));
-    MockResponse resp = new MockResponse();
-    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
+    MockResponse response = getDocContent(path, "/Folder1");
 
-    adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
-        ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"), null, null, 1000, "");
-
-    assertEquals(objectContentType, resp.contentType);
-    assertEquals(objectContent, resp.content.toString(UTF_8.name()));
-    assertTrue(resp.anchors.isEmpty());
+    assertEquals(objectContentType, response.contentType);
+    assertEquals(objectContent, response.content.toString(UTF_8.name()));
+    assertTrue(response.anchors.isEmpty());
   }
 
   @Test
   public void testVirtualDocContentWithChildren() throws Exception {
-    DocContentTestProxies proxyCls = new DocContentTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-
+    String path = "/Folder1/path1/vdoc";
     String objectContentType = "crtext/html";
     String objectContent = "<html><body>Hello</body></html>";
-    String path = "/Folder1/path1/vdoc";
     insertVirtualDocument(path, objectContentType, objectContent,
         "object1", "object2", "object3");
 
-    // TODO(bmj): Use getDocContentResponse() once it is merged in.
-    Request req = new MockRequest(adaptor.docIdFromPath(path));
-    MockResponse resp = new MockResponse();
-    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
+    MockResponse response = getDocContent(path, "/Folder1");
 
-    adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
-        ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"), null, null, 1000, "");
-
-    assertEquals(objectContentType, resp.contentType);
-    assertEquals(objectContent, resp.content.toString(UTF_8.name()));
+    assertEquals(objectContentType, response.contentType);
+    assertEquals(objectContent, response.content.toString(UTF_8.name()));
 
     // Verify child links.
-    assertEquals(3, resp.anchors.size());
+    assertEquals(3, response.anchors.size());
     for (String name : ImmutableList.of("object1", "object2", "object3")) {
-      URI uri = resp.anchors.get(name);
+      URI uri = response.anchors.get(name);
       assertNotNull(uri);
       assertTrue(uri.toString().endsWith(path + "/" + name));
     }
@@ -1390,7 +1364,7 @@ public class DocumentumAdaptorTest {
   public void testFolderDocContent() throws Exception {
     String now = getNowPlusMinutes(0);
     String folderId = "0b01081f80078d29";
-    String folder = "/Folder2/subfolder/path2";
+    String folder = "/Folder1/subfolder/path2";
     insertFolder(now, folderId, folder);
     insertDocument(now, "0901081f80079263", folder + "/file1", folderId);
     insertDocument(now, "0901081f8007926d", folder + "/file2 evil<chars?",
@@ -1409,48 +1383,20 @@ public class DocumentumAdaptorTest {
     expected.append("<li><a href=\"path2/file3\">file3</a></li>");
     expected.append("</body></html>");
 
-    // TODO(bmj): Use getDocContentResponse() once it is merged in.
-    DocContentTestProxies proxyCls = new DocContentTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
-    Request req = new MockRequest(adaptor.docIdFromPath(folder));
-    MockResponse resp = new MockResponse();
-    adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
-        ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder2"), null, null, 1000, "");
+    MockResponse response = getDocContent(folder, "/Folder1");
 
-    assertFalse(resp.notFound);
-    assertEquals("text/html; charset=UTF-8", resp.contentType);
-    assertEquals(expected.toString(), resp.content.toString(UTF_8.name()));
+    assertFalse(response.notFound);
+    assertEquals("text/html; charset=UTF-8", response.contentType);
+    assertEquals(expected.toString(), response.content.toString(UTF_8.name()));
   }
 
   @Test
   public void testGetDocContentNotFound() throws Exception {
-    DocContentTestProxies proxyCls = new DocContentTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-
-    String folder = "/Folder2/doesNotExist";
-
-    // TODO(bmj): Use getDocContentResponse() once it is merged in.
-    Request req = new MockRequest(new DocId(folder));
-    MockResponse resp = new MockResponse();
-    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
-
-    adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
-        ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder2"), null, null, 1000, "");
-
-    assertTrue(resp.notFound);
+    assertTrue(getDocContent("/Folder1/doesNotExist", "/Folder1").notFound);
   }
 
   @Test
   public void testGetDocContentNotUnderStartPath() throws Exception {
-    DocContentTestProxies proxyCls = new DocContentTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-
     String now = getNowPlusMinutes(0);
     String path1 = "/Folder1/path1";
     String path2 = "/Folder2/path2";
@@ -1458,17 +1404,7 @@ public class DocumentumAdaptorTest {
     insertFolder(now, "0b01081f80078d29", path1);
     insertFolder(now, "0b01081f80078d30", path2);
 
-    // TODO(bmj): Use getDocContentResponse() once it is merged in.
-    Request req = new MockRequest(new DocId(path2));
-    MockResponse resp = new MockResponse();
-    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
-
-    adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
-        ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"),  // Folder2 not included.
-        null, null, 1000, "");
-
-    assertTrue(resp.notFound);
+    assertTrue(getDocContent(path2, "/Folder1").notFound);
   }
 
   /* Mock proxy classes backed by the H2 database tables. */
