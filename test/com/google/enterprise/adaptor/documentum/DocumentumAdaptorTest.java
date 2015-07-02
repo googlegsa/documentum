@@ -70,7 +70,10 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.text.SimpleDateFormat;
@@ -786,13 +789,14 @@ public class DocumentumAdaptorTest {
     }
 
     private class SysObjectMock {
-      String id;
-      String name;
-      String type;
-      String contentType;
-      String content;
-      Date lastModified;
-      boolean isVirtualDocument;
+      private final String id;
+      private final String name;
+      private final String type;
+      private final String contentType;
+      private final String content;
+      private final Date lastModified;
+      private final boolean isVirtualDocument;
+      private final Multimap<String, String> attributes;
 
       public SysObjectMock(ResultSet rs) throws SQLException {
         id = rs.getString("r_object_id");
@@ -802,6 +806,7 @@ public class DocumentumAdaptorTest {
         content = rs.getString("mock_content");
         lastModified = new Date(rs.getTimestamp("r_modify_date").getTime());
         isVirtualDocument = rs.getBoolean("r_is_virtual_doc");
+        attributes = readAttributes(id);
       }
 
       public IDfId getObjectId() {
@@ -854,8 +859,20 @@ public class DocumentumAdaptorTest {
             new VirtualDocumentMock(id));
       }
 
-      public Enumeration<IDfAttr> enumAttrs() {
-        return new Vector<IDfAttr>().elements();  // No attrs.
+      public Enumeration<IDfAttr> enumAttrs() throws DfException {
+        Vector<IDfAttr> v = new Vector<IDfAttr>();
+        for (String name : attributes.keySet()) {
+          v.add(Proxies.newProxyInstance(IDfAttr.class, new AttrMock(name)));
+        }
+        return v.elements();
+      }
+
+      public int getValueCount(String name) {
+        return attributes.get(name).size();
+      }
+
+      public String getRepeatingString(String name, int index) {
+        return new ArrayList<String>(attributes.get(name)).get(index);
       }
     }
 
@@ -927,8 +944,8 @@ public class DocumentumAdaptorTest {
     }
       
     private class CollectionMock {
-      final Statement stmt;
-      final ResultSet rs;
+      private final Statement stmt;
+      private final ResultSet rs;
 
       public CollectionMock(String query) throws DfException {
         try {
@@ -982,7 +999,7 @@ public class DocumentumAdaptorTest {
     }
 
     private class TimeMock {
-      private Date date;
+      private final Date date;
 
       public TimeMock(Date date) {
         this.date = date;
@@ -994,7 +1011,7 @@ public class DocumentumAdaptorTest {
     }
 
     private class IdMock {
-      private String objectId;
+      private final String objectId;
 
       public IdMock(String objectId) {
         this.objectId = objectId;
@@ -1002,6 +1019,18 @@ public class DocumentumAdaptorTest {
 
       public String toString() {
         return objectId;
+      }
+    }
+
+    private class AttrMock {
+      private final String name;
+
+      public AttrMock(String name) {
+        this.name = name;
+      }
+
+      public String getName() {
+        return name;
       }
     }
   }
@@ -1053,22 +1082,31 @@ public class DocumentumAdaptorTest {
     testDocContent(lastCrawled, lastModified, true);
   }
 
-  private void testDocContent(Date lastCrawled, Date lastModified,
-      boolean expectNotModified) throws Exception {
-    String path = "/Folder1/path1/object1";
-    String name = "object1";
-    String contentType = "crtext/html";
-    String content = "<html><body>Hello</body></html>";
+  private void insertDocument(String path) throws SQLException {
+    insertDocument(new Date(), path, "text/plain", "Hello World");
+  }
+
+  private void insertDocument(Date lastModified, String path,
+       String contentType, String content) throws SQLException {
+    String name = path.substring(path.lastIndexOf("/") + 1);
     jdbcFixture.executeUpdate(String.format(
         "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
         + "r_object_type, a_content_type, mock_content, r_modify_date) "
         + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'})",
         "09" + name, name, path, "dm_document", contentType, content,
         dateFormat.format(lastModified)));
+  }
+
+  private void testDocContent(Date lastCrawled, Date lastModified,
+      boolean expectNotModified) throws Exception {
+    String path = "/Folder1/path1/object1";
+    String contentType = "crtext/html";
+    String content = "<html><body>Hello</body></html>";
+    insertDocument(lastModified, path, contentType, content);
 
     Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path),
         lastCrawled);
-    MockResponse response = getDocContent(request, "", "/Folder1");
+    MockResponse response = getDocContent(request, "", null, "/Folder1");
 
     if (expectNotModified) {
       assertTrue(response.notModified);
@@ -1083,56 +1121,50 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testDisplayUrlWithId() throws Exception {
+    String path = "/Folder1/path1/object1";
     assertEquals("http://webtopurl/drl/09object1",
-        getDisplayUrl("http://webtopurl/drl/{0}"));
+        getDisplayUrl("http://webtopurl/drl/{0}", path));
   }
 
   @Test
   public void testDisplayUrlWithPath() throws Exception {
+    String path = "/Folder1/path1/object1";
     assertEquals("http://webtopurl/drl//Folder1/path1/object1",
-        getDisplayUrl("http://webtopurl/drl/{1}"));
+        getDisplayUrl("http://webtopurl/drl/{1}", path));
   }
 
   @Test
   public void testDisplayUrlWithIdAndPath() throws Exception {
+    String path = "/Folder1/path1/object1";
     assertEquals("/Folder1/path1/object1-http://webtopurl/09object1/drl/",
-        getDisplayUrl("{1}-http://webtopurl/{0}/drl/"));
+        getDisplayUrl("{1}-http://webtopurl/{0}/drl/", path));
   }
 
   @Test
   public void testDisplayUrlNoIdOrPath() throws Exception {
+    String path = "/Folder1/path1/object1";
     assertEquals("http://webtopurl/drl",
-        getDisplayUrl("http://webtopurl/drl"));
+        getDisplayUrl("http://webtopurl/drl", path));
   }
 
-  private String getDisplayUrl(String displayUrlPattern) throws Exception {
-    String id = "09object1";
-    String path = "/Folder1/path1/object1";
-    String name = "object1";
-    String contentType = "crtext/html";
-    String content = "<html><body>Hello</body></html>";
-
-    jdbcFixture.executeUpdate(String.format(
-        "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
-        + "r_object_type, a_content_type, mock_content, r_modify_date) "
-        + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'})",
-        id, name, path, "dm_document", contentType, content,
-        dateFormat.format(new Date())));
-
+  private String getDisplayUrl(String displayUrlPattern, String path)
+      throws Exception {
+    insertDocument(path);
+    String startPath = path.substring(0, path.indexOf("/", 1));
     Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
-    MockResponse response =
-        getDocContent(request, displayUrlPattern, "/Folder1");
+    MockResponse response = getDocContent(request, displayUrlPattern, null,
+        startPath);
     return response.displayUrl.toString();
   }
 
   private MockResponse getDocContent(String path, String... startPaths)
       throws Exception {
     return getDocContent(new MockRequest(DocumentumAdaptor.docIdFromPath(path)),
-        "", startPaths);
+        "", null, startPaths);
   }
 
   private MockResponse getDocContent(Request request, String displayUrlPattern,
-      String... startPaths) throws Exception {
+      Set<String> excludedAttributes, String... startPaths) throws Exception {
     DocContentTestProxies proxyCls = new DocContentTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
@@ -1141,106 +1173,10 @@ public class DocumentumAdaptorTest {
 
     adaptor.getDocContentHelper(request, response, dmClientX, sessionManager,
         ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        Arrays.asList(startPaths), null, null, 1000, displayUrlPattern);
+        Arrays.asList(startPaths), excludedAttributes, null, 1000,
+        displayUrlPattern);
 
     return response;
-  }
-
-  /* Mock proxy classes for testing file metadata */
-  private class MetadataTestProxies {
-    Multimap<String, String> attributes;
-
-    public void setAttributes(Multimap<String, String> attributes) {
-      this.attributes = attributes;
-    }
-
-    public IDfClientX getProxyClientX() {
-      return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
-    }
-
-    private class ClientXMock {
-    }
-
-    public IDfSessionManager getProxySessionManager() {
-      return Proxies.newProxyInstance(IDfSessionManager.class,
-          new SessionManagerMock());
-    }
-
-    private class SessionManagerMock {
-      public IDfSession getSession(String docbaseName) {
-        return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
-      }
-    }
-
-    private class SessionMock {
-      public IDfSysObject getObjectByPath(String path) {
-        return Proxies.newProxyInstance(IDfSysObject.class,
-            new SysObjectMock());
-      }
-    }
-
-    private class SysObjectMock {
-      public IDfId getObjectId() {
-        return Proxies.newProxyInstance(IDfId.class, new IdMock());
-      }
-
-      public InputStream getContent() {
-        return new ByteArrayInputStream("Hello World".getBytes(UTF_8));
-      }
-
-      public IDfType getType() {
-        return Proxies.newProxyInstance(IDfType.class, new TypeMock());
-      }
-
-      public String getContentType() {
-        return "text/plain";
-      }
-
-      public boolean isVirtualDocument() {
-        return false;
-      }
-
-      public Enumeration<IDfAttr> enumAttrs() {
-        Vector<IDfAttr> v = new Vector<IDfAttr>();
-        for (String name : attributes.keySet()) {
-          v.add(Proxies.newProxyInstance(IDfAttr.class, new AttrMock(name)));
-        }
-        return v.elements();
-      }
-
-      public int getValueCount(String name) {
-        return attributes.get(name).size();
-      }
-
-      public String getRepeatingString(String name, int index) {
-        return new ArrayList<String>(attributes.get(name)).get(index);
-      }
-    }
-
-    private class TypeMock {
-      public boolean isTypeOf(String type) {
-        return type.equals("dm_document");
-      }
-
-      public String getName() {
-        return "dm_document";
-      }
-    }
-
-    private class IdMock {
-    }
-
-    private class AttrMock {
-      private final String name;
-
-      public AttrMock(String name) {
-        this.name = name;
-      }
-
-      public String getName() {
-        return name;
-      }
-    }
   }
 
   @Test
@@ -1287,24 +1223,97 @@ public class DocumentumAdaptorTest {
     testMetadata(attributes, expected);
   }
 
+  /*
+   * Note that the metadata structure stored in these tests is slightly
+   * different that Documentum stores them:
+   *
+   * DCTM stores the data as:
+   *
+   * attr1    attr2    attr3
+   * -----    -----    -----
+   * valu1    valuA    valuI
+   * valu2             valuII
+   * valu3
+   * 
+   * whereas this table is:
+   * 
+   * attr1    attr2    attr3
+   * -----    -----    -----
+   * valu1
+   * valu2
+   * valu3
+   *          valuA
+   *                   valuI
+   *                   valuII
+   *
+   * The difference is insignificant for these tests.
+   */
+  private void writeAttributes(String objectId, Multimap<String, String> attrs)
+      throws SQLException {
+    StringBuilder ddl = new StringBuilder();
+    ddl.append("CREATE TABLE attributes (r_object_id varchar");
+    for (String attr : attrs.keySet()) {
+      ddl.append(", ").append(attr).append(" varchar");
+    }
+    ddl.append(")");
+    jdbcFixture.executeUpdate(ddl.toString());
+
+    for (String attr : attrs.keySet()) {
+      for (String value : attrs.get(attr)) {
+        jdbcFixture.executeUpdate(String.format(
+            "INSERT INTO attributes (r_object_id, %s) VALUES ('%s', '%s')",
+            attr, objectId, value));
+      }
+    }
+  }
+
+  private Multimap<String, String> readAttributes(String objectId)
+      throws SQLException {
+    Multimap<String, String> attributes = TreeMultimap.create();
+    try (Connection connection = jdbcFixture.getConnection()) {
+      DatabaseMetaData dbm = connection.getMetaData();
+      try (ResultSet tables = dbm.getTables(null, null, "ATTRIBUTES", null)) {
+        if (!tables.next()) {
+          // Attributes table does not exist if there are
+          // no attributes in the test.
+          return attributes;
+        }
+      }
+      // Read all the attributes for our objectId.
+      String query = String.format("SELECT * FROM attributes "
+          + "WHERE r_object_id = '%s'", objectId);
+      try (Statement stmt = connection.createStatement();
+           ResultSet rs = stmt.executeQuery(query)) {
+        ResultSetMetaData rsm = rs.getMetaData();
+        while (rs.next()) {
+          for (int i = 1; i <= rsm.getColumnCount(); i++) {
+            // H2 uppercases the column names.
+            String attr = rsm.getColumnName(i).toLowerCase();
+            if (!attr.equals("r_object_id")) {
+              String value = rs.getString(attr);
+              if (value != null) {
+                attributes.put(attr, value);
+              }
+            }
+          }
+        }
+      }
+    }
+    return attributes;
+  }
+
   private void testMetadata(TreeMultimap<String, String> attrs,
       TreeMultimap<String, String> expected) throws Exception {
-    MetadataTestProxies proxyCls = new MetadataTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-
-    proxyCls.setAttributes(Multimaps.unmodifiableMultimap(attrs));
     String path = "/Folder1/path1/object1";
-    Request req = new MockRequest(adaptor.docIdFromPath(path));
-    MockResponse resp = new MockResponse();
-    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
+    String objectId = "09object1";
+    insertDocument(path);
+    writeAttributes(objectId, attrs);
 
-    adaptor.getDocContentHelper(req, resp, dmClientX, sessionManager,
-        ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        ImmutableList.of("/Folder1"), ImmutableSet.of("foo", "bar"),
-        null, 1000, "");
+    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
+    MockResponse response =
+        getDocContent(request, "", ImmutableSet.of("foo", "bar"), "/Folder1");
 
-    assertEquals(expected, resp.metadata);
+    assertEquals(expected, response.metadata);
   }
 
   private void insertVirtualDocument(String vdocPath, String contentType,
