@@ -622,510 +622,6 @@ public class DocumentumAdaptorTest {
     initValidStartPaths(adaptor, path1, path2, path3);
   }
 
-  private void insertCabinets(String... cabinets) throws SQLException {
-    for (String cabinet : cabinets) {
-      jdbcFixture.executeUpdate(String.format("INSERT INTO dm_cabinet "
-          + "(r_object_id, r_folder_path, object_name) VALUES('%s','%s','%s')",
-          "0c" + cabinet, "/" + cabinet, cabinet));
-    }
-  }
-
-  private void checkGetRootContent(String whereClause, int maxHtmlLinks,
-      String... expectedCabinets) throws Exception {
-    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-    DocIdEncoder docidEncoder =
-        ProxyAdaptorContext.getInstance().getDocIdEncoder();
-    MockRequest request = new MockRequest(adaptor.docIdFromPath("/"));
-    MockResponse response = new MockResponse();
-
-    List<String> queries = new ArrayList<>();
-    Logging.captureLogMessages(DocumentumAdaptor.class,
-        "Get All Cabinets Query", queries);
-
-    adaptor.getDocContentHelper(request, response, dmClientX, 
-        proxyCls.getProxySessionManager(), docidEncoder, ImmutableList.of("/"),
-        null, whereClause, maxHtmlLinks, "");
-
-    assertEquals(queries.toString(), 1, queries.size());
-    String query = queries.get(0); 
-    if (whereClause.isEmpty()) {
-      assertFalse(query, query.contains(" WHERE "));
-    } else {
-      assertTrue(query, query.contains(" WHERE " + whereClause));
-    }
-
-    assertEquals("text/html; charset=UTF-8", response.contentType);
-    String content = response.content.toString(UTF_8.name());
-
-    assertEquals(content, maxHtmlLinks == 0 || expectedCabinets.length == 0,
-                 content.indexOf("href") < 0);
-    assertEquals(response.anchors.toString(),
-                 maxHtmlLinks >= expectedCabinets.length,
-                 response.anchors.isEmpty());
-
-    for (String cabinet : expectedCabinets) {
-      // First look in the HTML links for the cabinet. If not there,
-      // look in the external anchors.
-      String link = "<a href=\"" + cabinet + "\">" + cabinet + "</a>";
-      if (content.indexOf(link) < 0) {
-        URI uri = docidEncoder.encodeDocId(new DocId(cabinet));
-        URI anchor = response.anchors.get(cabinet);
-        assertNotNull("Cabinet " + cabinet + " with URI " + uri + " is missing"
-            + " from response:/n" + content + "/n" + response.anchors, anchor);
-        assertEquals(uri, anchor);
-      }
-    }
-  }
-
-  @Test
-  public void testGetRootContentNoCabinets() throws Exception {
-    checkGetRootContent("1=1", 100);
-  }
-
-  @Test
-  public void testGetRootContentEmptyWhereClause() throws Exception {
-    insertCabinets("System", "Cabinet1", "Cabinet2");
-    checkGetRootContent("", 100, "System", "Cabinet1", "Cabinet2");
-  }
-
-  @Test
-  public void testGetRootContentHtmlResponseOnly() throws Exception {
-    insertCabinets("Cabinet1", "Cabinet2", "Cabinet3");
-    checkGetRootContent("", 100, "Cabinet1", "Cabinet2", "Cabinet3");
-  }
-
-  @Test
-  public void testGetRootContentAnchorResponseOnly() throws Exception {
-    insertCabinets("Cabinet1", "Cabinet2", "Cabinet3");
-    checkGetRootContent("", 0, "Cabinet1", "Cabinet2", "Cabinet3");
-  }
-
-  @Test
-  public void testGetRootContentHtmlAndAnchorResponse() throws Exception {
-    insertCabinets("Cabinet1", "Cabinet2", "Cabinet3", "Cabinet4");
-    checkGetRootContent("", 2, "Cabinet1", "Cabinet2", "Cabinet3",
-       "Cabinet4");
-  }
-
-  @Test
-  public void testGetRootContentAddedWhereClause() throws Exception {
-    insertCabinets("System", "Temp", "Cabinet1", "Cabinet2");
-    checkGetRootContent("object_name NOT IN ('System', 'Temp')",
-        100, "Cabinet1", "Cabinet2");
-  }
-
-  @Test
-  public void testGetRootContentDefaultWhereClause() throws Exception {
-    jdbcFixture.executeUpdate(
-        "CREATE TABLE dm_docbase_config (owner_name varchar)",
-        "INSERT INTO dm_docbase_config (owner_name) VALUES('Owner')",
-        "CREATE TABLE dm_server_config (r_install_owner varchar)",
-        "INSERT INTO dm_server_config (r_install_owner) VALUES('Installer')");
-    insertCabinets("Integration", "Resources", "System");
-    insertCabinets("Temp", "Templates", "Owner", "Installer");
-    insertCabinets("Cabinet1", "Cabinet2");
-
-    Config config = ProxyAdaptorContext.getInstance().getConfig();
-    new DocumentumAdaptor(null).initConfig(config);
-
-    checkGetRootContent(config.getValue("documentum.cabinetWhereCondition"),
-        100, "Cabinet1", "Cabinet2");
-  }
-
-  @Test
-  public void testGetRootContentInvalidWhereClause() throws Exception {
-    insertCabinets("Cabinet1", "Cabinet2");
-    try {
-      checkGetRootContent("( xyzzy", 100);
-      fail("Expected exception not thrown.");
-    } catch (IOException expected) {
-      assertTrue(expected.getCause() instanceof DfException);
-    }
-  }
-
-  @Test
-  public void testDocContentInitialCrawl() throws Exception {
-    Date lastModified = new Date();
-    testDocContent(null, lastModified, false);
-  }
-
-  @Test
-  public void testDocContentModifiedSinceLastCrawl() throws Exception {
-    Date lastCrawled = new Date();
-    Date lastModified = new Date(lastCrawled.getTime() + (120 * 1000L));
-    testDocContent(lastCrawled, lastModified, false);
-  }
-
-  @Test
-  public void testDocContentOneDayBeforeWindowJustShort() throws Exception {
-    Date lastCrawled = new Date();
-    Date lastModified = new Date( // Two seconds short of a full day.
-        lastCrawled.getTime() - (24 * 60 * 60 * 1000L - 2000L));
-    testDocContent(lastCrawled, lastModified, false);
-  }
-
-  @Test
-  public void testDocContentOneDayBeforeWindowJustOver() throws Exception {
-    Date lastCrawled = new Date();
-    Date lastModified = new Date( // Two seconds more than a full day.
-        lastCrawled.getTime() - (24 * 60 * 60 * 1000L + 2000L));
-    testDocContent(lastCrawled, lastModified, true);
-  }
-
-  @Test
-  public void testDocContentRecentlyModified() throws Exception {
-    // Even though content was crawled after it was recently
-    // modified, don't trust Documentum dates to be UTC, so
-    // content should be returned anyway.
-    Date lastCrawled = new Date();
-    Date lastModified = new Date(lastCrawled.getTime() - (8 * 60 * 60 * 1000L));
-    testDocContent(lastModified, lastCrawled, false);
-  }
-
-  @Test
-  public void testDocContentNotRecentlyModified() throws Exception {
-    Date lastCrawled = new Date();
-    Date lastModified =
-        new Date(lastCrawled.getTime() - (72 * 60 * 60 * 1000L));
-    testDocContent(lastCrawled, lastModified, true);
-  }
-
-  private void insertDocument(String path) throws SQLException {
-    insertDocument(new Date(), path, "text/plain", "Hello World");
-  }
-
-  private void insertDocument(Date lastModified, String path,
-       String contentType, String content) throws SQLException {
-    String name = path.substring(path.lastIndexOf("/") + 1);
-    jdbcFixture.executeUpdate(String.format(
-        "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
-        + "r_object_type, a_content_type, mock_content, r_modify_date) "
-        + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'})",
-        "09" + name, name, path, "dm_document", contentType, content,
-        dateFormat.format(lastModified)));
-  }
-
-  private void testDocContent(Date lastCrawled, Date lastModified,
-      boolean expectNotModified) throws Exception {
-    String path = "/Folder1/path1/object1";
-    String contentType = "crtext/html";
-    String content = "<html><body>Hello</body></html>";
-    insertDocument(lastModified, path, contentType, content);
-
-    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path),
-        lastCrawled);
-    MockResponse response = getDocContent(request, "", null, "/Folder1");
-
-    if (expectNotModified) {
-      assertTrue(response.notModified);
-      assertNull(response.contentType);
-      assertNull(response.content);
-    } else {
-      assertFalse(response.notModified);
-      assertEquals(contentType, response.contentType);
-      assertEquals(content, response.content.toString(UTF_8.name()));
-    }
-  }
-
-  @Test
-  public void testDisplayUrlWithId() throws Exception {
-    String path = "/Folder1/path1/object1";
-    assertEquals("http://webtopurl/drl/09object1",
-        getDisplayUrl("http://webtopurl/drl/{0}", path));
-  }
-
-  @Test
-  public void testDisplayUrlWithPath() throws Exception {
-    String path = "/Folder1/path1/object1";
-    assertEquals("http://webtopurl/drl//Folder1/path1/object1",
-        getDisplayUrl("http://webtopurl/drl/{1}", path));
-  }
-
-  @Test
-  public void testDisplayUrlWithIdAndPath() throws Exception {
-    String path = "/Folder1/path1/object1";
-    assertEquals("/Folder1/path1/object1-http://webtopurl/09object1/drl/",
-        getDisplayUrl("{1}-http://webtopurl/{0}/drl/", path));
-  }
-
-  @Test
-  public void testDisplayUrlNoIdOrPath() throws Exception {
-    String path = "/Folder1/path1/object1";
-    assertEquals("http://webtopurl/drl",
-        getDisplayUrl("http://webtopurl/drl", path));
-  }
-
-  private String getDisplayUrl(String displayUrlPattern, String path)
-      throws Exception {
-    insertDocument(path);
-    String startPath = path.substring(0, path.indexOf("/", 1));
-    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
-    MockResponse response = getDocContent(request, displayUrlPattern, null,
-        startPath);
-    return response.displayUrl.toString();
-  }
-
-  private MockResponse getDocContent(String path, String... startPaths)
-      throws Exception {
-    return getDocContent(new MockRequest(DocumentumAdaptor.docIdFromPath(path)),
-        "", null, startPaths);
-  }
-
-  private MockResponse getDocContent(Request request, String displayUrlPattern,
-      Set<String> excludedAttributes, String... startPaths) throws Exception {
-    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-    MockResponse response = new MockResponse();
-
-    adaptor.getDocContentHelper(request, response, dmClientX, sessionManager,
-        ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        Arrays.asList(startPaths), excludedAttributes, null, 1000,
-        displayUrlPattern);
-
-    return response;
-  }
-
-  @Test
-  public void testSingleValueMetadata() throws Exception {
-    TreeMultimap<String, String> attributes = TreeMultimap.create();
-    attributes.put("attr1", "value1");
-    attributes.put("attr2", "value2");
-    attributes.put("attr3", "value3");
-    testMetadata(attributes, attributes);
-  }
-
-  @Test
-  public void testMultiValueMetadata() throws Exception {
-    TreeMultimap<String, String> attributes = TreeMultimap.create();
-    attributes.put("attr1", "value1");
-    attributes.put("attr1", "value2");
-    attributes.put("attr1", "value3");
-    assertEquals(1, attributes.keySet().size());
-    assertEquals(3, attributes.get("attr1").size());
-    testMetadata(attributes, attributes);
-  }
-
-  @Test
-  public void testEmptyValueMetadata() throws Exception {
-    TreeMultimap<String, String> attributes = TreeMultimap.create();
-    attributes.put("attr1", "value1");
-    attributes.put("attr2", "value2");
-    attributes.put("attr2", "");
-    attributes.put("attr3", "");
-    testMetadata(attributes, attributes);
-  }
-
-  @Test
-  public void testExcludeAttrMetadata() throws Exception {
-    TreeMultimap<String, String> attributes = TreeMultimap.create();
-    attributes.put("attr1", "value1");
-    attributes.put("attr2", "value2");
-    attributes.put("attr3", "value3");
-    attributes.put("foo", "foo1");
-    attributes.put("bar", "bar1");
-    TreeMultimap<String, String> expected = TreeMultimap.create(attributes);
-    expected.removeAll("foo");  // In the excludedAttributes set.
-    expected.removeAll("bar");  // In the excludedAttributes set.
-    testMetadata(attributes, expected);
-  }
-
-  /*
-   * Note that the metadata structure stored in these tests is slightly
-   * different that Documentum stores them:
-   *
-   * DCTM stores the data as:
-   *
-   * attr1    attr2    attr3
-   * -----    -----    -----
-   * valu1    valuA    valuI
-   * valu2             valuII
-   * valu3
-   * 
-   * whereas this table is:
-   * 
-   * attr1    attr2    attr3
-   * -----    -----    -----
-   * valu1
-   * valu2
-   * valu3
-   *          valuA
-   *                   valuI
-   *                   valuII
-   *
-   * The difference is insignificant for these tests.
-   */
-  private void writeAttributes(String objectId, Multimap<String, String> attrs)
-      throws SQLException {
-    StringBuilder ddl = new StringBuilder();
-    ddl.append("CREATE TABLE attributes (r_object_id varchar");
-    for (String attr : attrs.keySet()) {
-      ddl.append(", ").append(attr).append(" varchar");
-    }
-    ddl.append(")");
-    jdbcFixture.executeUpdate(ddl.toString());
-
-    for (String attr : attrs.keySet()) {
-      for (String value : attrs.get(attr)) {
-        jdbcFixture.executeUpdate(String.format(
-            "INSERT INTO attributes (r_object_id, %s) VALUES ('%s', '%s')",
-            attr, objectId, value));
-      }
-    }
-  }
-
-  private Multimap<String, String> readAttributes(String objectId)
-      throws SQLException {
-    Multimap<String, String> attributes = TreeMultimap.create();
-    try (Connection connection = jdbcFixture.getConnection()) {
-      DatabaseMetaData dbm = connection.getMetaData();
-      try (ResultSet tables = dbm.getTables(null, null, "ATTRIBUTES", null)) {
-        if (!tables.next()) {
-          // Attributes table does not exist if there are
-          // no attributes in the test.
-          return attributes;
-        }
-      }
-      // Read all the attributes for our objectId.
-      String query = String.format("SELECT * FROM attributes "
-          + "WHERE r_object_id = '%s'", objectId);
-      try (Statement stmt = connection.createStatement();
-           ResultSet rs = stmt.executeQuery(query)) {
-        ResultSetMetaData rsm = rs.getMetaData();
-        while (rs.next()) {
-          for (int i = 1; i <= rsm.getColumnCount(); i++) {
-            // H2 uppercases the column names.
-            String attr = rsm.getColumnName(i).toLowerCase();
-            if (!attr.equals("r_object_id")) {
-              String value = rs.getString(attr);
-              if (value != null) {
-                attributes.put(attr, value);
-              }
-            }
-          }
-        }
-      }
-    }
-    return attributes;
-  }
-
-  private void testMetadata(TreeMultimap<String, String> attrs,
-      TreeMultimap<String, String> expected) throws Exception {
-    String path = "/Folder1/path1/object1";
-    String objectId = "09object1";
-    insertDocument(path);
-    writeAttributes(objectId, attrs);
-
-    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
-    MockResponse response =
-        getDocContent(request, "", ImmutableSet.of("foo", "bar"), "/Folder1");
-
-    assertEquals(expected, response.metadata);
-  }
-
-  private void insertVirtualDocument(String vdocPath, String contentType,
-      String content, String... children) throws SQLException {
-    String name = vdocPath.substring(vdocPath.lastIndexOf("/") + 1);
-    String vdocId = "09" + name;
-    String now = getNowPlusMinutes(0);
-    jdbcFixture.executeUpdate(String.format(
-        "INSERT INTO dm_sysobject(r_object_id, object_name, mock_object_path, "
-        + "r_object_type, r_is_virtual_doc, a_content_type, mock_content, "
-        + "r_modify_date) "
-        + "VALUES('%s', '%s', '%s', '%s', TRUE, '%s', '%s', {ts '%s'})",
-        vdocId, name, vdocPath, "dm_document_virtual", contentType, content,
-        now));
-    for (String child : children) {
-      insertDocument(now, "09" + child, vdocPath + "/" + child, vdocId);
-    }
-  }
-
-  @Test
-  public void testVirtualDocContentNoChildren() throws Exception {
-    String path = "/Folder1/path1/vdoc";
-    String objectContentType = "crtext/html";
-    String objectContent = "<html><body>Hello</body></html>";
-    insertVirtualDocument(path, objectContentType, objectContent);
-
-    MockResponse response = getDocContent(path, "/Folder1");
-
-    assertEquals(objectContentType, response.contentType);
-    assertEquals(objectContent, response.content.toString(UTF_8.name()));
-    assertTrue(response.anchors.isEmpty());
-  }
-
-  @Test
-  public void testVirtualDocContentWithChildren() throws Exception {
-    String path = "/Folder1/path1/vdoc";
-    String objectContentType = "crtext/html";
-    String objectContent = "<html><body>Hello</body></html>";
-    insertVirtualDocument(path, objectContentType, objectContent,
-        "object1", "object2", "object3");
-
-    MockResponse response = getDocContent(path, "/Folder1");
-
-    assertEquals(objectContentType, response.contentType);
-    assertEquals(objectContent, response.content.toString(UTF_8.name()));
-
-    // Verify child links.
-    assertEquals(3, response.anchors.size());
-    for (String name : ImmutableList.of("object1", "object2", "object3")) {
-      URI uri = response.anchors.get(name);
-      assertNotNull(uri);
-      assertTrue(uri.toString().endsWith(path + "/" + name));
-    }
-  }
-
-  @Test
-  public void testFolderDocContent() throws Exception {
-    String now = getNowPlusMinutes(0);
-    String folderId = "0b01081f80078d29";
-    String folder = "/Folder1/subfolder/path2";
-    insertFolder(now, folderId, folder);
-    insertDocument(now, "0901081f80079263", folder + "/file1", folderId);
-    insertDocument(now, "0901081f8007926d", folder + "/file2 evil<chars?",
-        folderId);
-    insertDocument(now, "0901081f80079278", folder + "/file3", folderId);
-
-    StringBuilder expected = new StringBuilder();
-    expected.append("<!DOCTYPE html>\n<html><head><title>");
-    expected.append("Folder path2");
-    expected.append("</title></head><body><h1>");
-    expected.append("Folder path2");
-    expected.append("</h1>");
-    expected.append("<li><a href=\"path2/file1\">file1</a></li>");
-    expected.append("<li><a href=\"path2/file2%20evil%3Cchars%3F\">"
-        + "file2 evil&lt;chars?</a></li>");
-    expected.append("<li><a href=\"path2/file3\">file3</a></li>");
-    expected.append("</body></html>");
-
-    MockResponse response = getDocContent(folder, "/Folder1");
-
-    assertFalse(response.notFound);
-    assertEquals("text/html; charset=UTF-8", response.contentType);
-    assertEquals(expected.toString(), response.content.toString(UTF_8.name()));
-  }
-
-  @Test
-  public void testGetDocContentNotFound() throws Exception {
-    assertTrue(getDocContent("/Folder1/doesNotExist", "/Folder1").notFound);
-  }
-
-  @Test
-  public void testGetDocContentNotUnderStartPath() throws Exception {
-    String now = getNowPlusMinutes(0);
-    String path1 = "/Folder1/path1";
-    String path2 = "/Folder2/path2";
-
-    insertFolder(now, "0b01081f80078d29", path1);
-    insertFolder(now, "0b01081f80078d30", path2);
-
-    assertTrue(getDocContent(path2, "/Folder1").notFound);
-  }
-
   /* Mock proxy classes backed by the H2 database tables. */
   private class H2BackedTestProxies {
 
@@ -1653,6 +1149,536 @@ public class DocumentumAdaptorTest {
     }
   }
 
+  private void insertCabinets(String... cabinets) throws SQLException {
+    for (String cabinet : cabinets) {
+      jdbcFixture.executeUpdate(String.format("INSERT INTO dm_cabinet "
+          + "(r_object_id, r_folder_path, object_name) VALUES('%s','%s','%s')",
+          "0c" + cabinet, "/" + cabinet, cabinet));
+    }
+  }
+
+  private void checkGetRootContent(String whereClause, int maxHtmlLinks,
+      String... expectedCabinets) throws Exception {
+    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
+    DocIdEncoder docidEncoder =
+        ProxyAdaptorContext.getInstance().getDocIdEncoder();
+    MockRequest request = new MockRequest(adaptor.docIdFromPath("/"));
+    MockResponse response = new MockResponse();
+
+    List<String> queries = new ArrayList<>();
+    Logging.captureLogMessages(DocumentumAdaptor.class,
+        "Get All Cabinets Query", queries);
+
+    adaptor.getDocContentHelper(request, response, dmClientX, 
+        proxyCls.getProxySessionManager(), docidEncoder, ImmutableList.of("/"),
+        null, whereClause, maxHtmlLinks, "");
+
+    assertEquals(queries.toString(), 1, queries.size());
+    String query = queries.get(0); 
+    if (whereClause.isEmpty()) {
+      assertFalse(query, query.contains(" WHERE "));
+    } else {
+      assertTrue(query, query.contains(" WHERE " + whereClause));
+    }
+
+    assertEquals("text/html; charset=UTF-8", response.contentType);
+    String content = response.content.toString(UTF_8.name());
+
+    assertEquals(content, maxHtmlLinks == 0 || expectedCabinets.length == 0,
+                 content.indexOf("href") < 0);
+    assertEquals(response.anchors.toString(),
+                 maxHtmlLinks >= expectedCabinets.length,
+                 response.anchors.isEmpty());
+
+    for (String cabinet : expectedCabinets) {
+      // First look in the HTML links for the cabinet. If not there,
+      // look in the external anchors.
+      String link = "<a href=\"" + cabinet + "\">" + cabinet + "</a>";
+      if (content.indexOf(link) < 0) {
+        URI uri = docidEncoder.encodeDocId(new DocId(cabinet));
+        URI anchor = response.anchors.get(cabinet);
+        assertNotNull("Cabinet " + cabinet + " with URI " + uri + " is missing"
+            + " from response:/n" + content + "/n" + response.anchors, anchor);
+        assertEquals(uri, anchor);
+      }
+    }
+  }
+
+  @Test
+  public void testGetRootContentNoCabinets() throws Exception {
+    checkGetRootContent("1=1", 100);
+  }
+
+  @Test
+  public void testGetRootContentEmptyWhereClause() throws Exception {
+    insertCabinets("System", "Cabinet1", "Cabinet2");
+    checkGetRootContent("", 100, "System", "Cabinet1", "Cabinet2");
+  }
+
+  @Test
+  public void testGetRootContentHtmlResponseOnly() throws Exception {
+    insertCabinets("Cabinet1", "Cabinet2", "Cabinet3");
+    checkGetRootContent("", 100, "Cabinet1", "Cabinet2", "Cabinet3");
+  }
+
+  @Test
+  public void testGetRootContentAnchorResponseOnly() throws Exception {
+    insertCabinets("Cabinet1", "Cabinet2", "Cabinet3");
+    checkGetRootContent("", 0, "Cabinet1", "Cabinet2", "Cabinet3");
+  }
+
+  @Test
+  public void testGetRootContentHtmlAndAnchorResponse() throws Exception {
+    insertCabinets("Cabinet1", "Cabinet2", "Cabinet3", "Cabinet4");
+    checkGetRootContent("", 2, "Cabinet1", "Cabinet2", "Cabinet3",
+       "Cabinet4");
+  }
+
+  @Test
+  public void testGetRootContentAddedWhereClause() throws Exception {
+    insertCabinets("System", "Temp", "Cabinet1", "Cabinet2");
+    checkGetRootContent("object_name NOT IN ('System', 'Temp')",
+        100, "Cabinet1", "Cabinet2");
+  }
+
+  @Test
+  public void testGetRootContentDefaultWhereClause() throws Exception {
+    jdbcFixture.executeUpdate(
+        "CREATE TABLE dm_docbase_config (owner_name varchar)",
+        "INSERT INTO dm_docbase_config (owner_name) VALUES('Owner')",
+        "CREATE TABLE dm_server_config (r_install_owner varchar)",
+        "INSERT INTO dm_server_config (r_install_owner) VALUES('Installer')");
+    insertCabinets("Integration", "Resources", "System");
+    insertCabinets("Temp", "Templates", "Owner", "Installer");
+    insertCabinets("Cabinet1", "Cabinet2");
+
+    Config config = ProxyAdaptorContext.getInstance().getConfig();
+    new DocumentumAdaptor(null).initConfig(config);
+
+    checkGetRootContent(config.getValue("documentum.cabinetWhereCondition"),
+        100, "Cabinet1", "Cabinet2");
+  }
+
+  @Test
+  public void testGetRootContentInvalidWhereClause() throws Exception {
+    insertCabinets("Cabinet1", "Cabinet2");
+    try {
+      checkGetRootContent("( xyzzy", 100);
+      fail("Expected exception not thrown.");
+    } catch (IOException expected) {
+      assertTrue(expected.getCause() instanceof DfException);
+    }
+  }
+
+  private void insertDocument(String path) throws SQLException {
+    insertDocument(new Date(), path, "text/plain", "Hello World");
+  }
+
+  private void insertDocument(Date lastModified, String path,
+       String contentType, String content) throws SQLException {
+    String name = path.substring(path.lastIndexOf("/") + 1);
+    jdbcFixture.executeUpdate(String.format(
+        "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
+        + "r_object_type, a_content_type, mock_content, r_modify_date) "
+        + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'})",
+        "09" + name, name, path, "dm_document", contentType, content,
+        dateFormat.format(lastModified)));
+  }
+
+  private void insertDocument(String lastModified, String id, String path,
+      String... folderIds) throws SQLException {
+    String name = path.substring(path.lastIndexOf("/") + 1);
+    insertSysObject(lastModified, id, name, path, "dm_document", folderIds);
+  }
+
+  private void insertFolder(String lastModified, String id, String... paths)
+       throws SQLException {
+    jdbcFixture.executeUpdate(String.format(
+        "insert into dm_folder(r_object_id, r_folder_path) values('%s', '%s')",
+        id, Joiner.on(",").join(paths)));
+    for (String path : paths) {
+      String name = path.substring(path.lastIndexOf("/") + 1);
+      insertSysObject(lastModified, id, name, path, "dm_folder");
+    }
+  }
+
+  private void insertSysObject(String lastModified, String id, String name,
+      String path, String type, String... folderIds) throws SQLException {
+    jdbcFixture.executeUpdate(String.format(
+        "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
+        + "r_object_type, i_folder_id, r_modify_date) "
+        + "values('%s', '%s', '%s', '%s', '%s', {ts '%s'})",
+        id, name, path, type, Joiner.on(",").join(folderIds), lastModified));
+  }
+
+  private void testDocContent(Date lastCrawled, Date lastModified,
+      boolean expectNotModified) throws Exception {
+    String path = "/Folder1/path1/object1";
+    String contentType = "crtext/html";
+    String content = "<html><body>Hello</body></html>";
+    insertDocument(lastModified, path, contentType, content);
+
+    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path),
+        lastCrawled);
+    MockResponse response = getDocContent(request, "", null, "/Folder1");
+
+    if (expectNotModified) {
+      assertTrue(response.notModified);
+      assertNull(response.contentType);
+      assertNull(response.content);
+    } else {
+      assertFalse(response.notModified);
+      assertEquals(contentType, response.contentType);
+      assertEquals(content, response.content.toString(UTF_8.name()));
+    }
+  }
+
+  private MockResponse getDocContent(String path, String... startPaths)
+      throws Exception {
+    return getDocContent(new MockRequest(DocumentumAdaptor.docIdFromPath(path)),
+        "", null, startPaths);
+  }
+
+  private MockResponse getDocContent(Request request, String displayUrlPattern,
+      Set<String> excludedAttributes, String... startPaths) throws Exception {
+    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
+    MockResponse response = new MockResponse();
+
+    adaptor.getDocContentHelper(request, response, dmClientX, sessionManager,
+        ProxyAdaptorContext.getInstance().getDocIdEncoder(),
+        Arrays.asList(startPaths), excludedAttributes, null, 1000,
+        displayUrlPattern);
+
+    return response;
+  }
+
+  @Test
+  public void testDocContentInitialCrawl() throws Exception {
+    Date lastModified = new Date();
+    testDocContent(null, lastModified, false);
+  }
+
+  @Test
+  public void testDocContentModifiedSinceLastCrawl() throws Exception {
+    Date lastCrawled = new Date();
+    Date lastModified = new Date(lastCrawled.getTime() + (120 * 1000L));
+    testDocContent(lastCrawled, lastModified, false);
+  }
+
+  @Test
+  public void testDocContentOneDayBeforeWindowJustShort() throws Exception {
+    Date lastCrawled = new Date();
+    Date lastModified = new Date( // Two seconds short of a full day.
+        lastCrawled.getTime() - (24 * 60 * 60 * 1000L - 2000L));
+    testDocContent(lastCrawled, lastModified, false);
+  }
+
+  @Test
+  public void testDocContentOneDayBeforeWindowJustOver() throws Exception {
+    Date lastCrawled = new Date();
+    Date lastModified = new Date( // Two seconds more than a full day.
+        lastCrawled.getTime() - (24 * 60 * 60 * 1000L + 2000L));
+    testDocContent(lastCrawled, lastModified, true);
+  }
+
+  @Test
+  public void testDocContentRecentlyModified() throws Exception {
+    // Even though content was crawled after it was recently
+    // modified, don't trust Documentum dates to be UTC, so
+    // content should be returned anyway.
+    Date lastCrawled = new Date();
+    Date lastModified = new Date(lastCrawled.getTime() - (8 * 60 * 60 * 1000L));
+    testDocContent(lastModified, lastCrawled, false);
+  }
+
+  @Test
+  public void testDocContentNotRecentlyModified() throws Exception {
+    Date lastCrawled = new Date();
+    Date lastModified =
+        new Date(lastCrawled.getTime() - (72 * 60 * 60 * 1000L));
+    testDocContent(lastCrawled, lastModified, true);
+  }
+
+  private String getDisplayUrl(String displayUrlPattern, String path)
+      throws Exception {
+    insertDocument(path);
+    String startPath = path.substring(0, path.indexOf("/", 1));
+    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
+    MockResponse response = getDocContent(request, displayUrlPattern, null,
+        startPath);
+    return response.displayUrl.toString();
+  }
+
+  @Test
+  public void testDisplayUrlWithId() throws Exception {
+    String path = "/Folder1/path1/object1";
+    assertEquals("http://webtopurl/drl/09object1",
+        getDisplayUrl("http://webtopurl/drl/{0}", path));
+  }
+
+  @Test
+  public void testDisplayUrlWithPath() throws Exception {
+    String path = "/Folder1/path1/object1";
+    assertEquals("http://webtopurl/drl//Folder1/path1/object1",
+        getDisplayUrl("http://webtopurl/drl/{1}", path));
+  }
+
+  @Test
+  public void testDisplayUrlWithIdAndPath() throws Exception {
+    String path = "/Folder1/path1/object1";
+    assertEquals("/Folder1/path1/object1-http://webtopurl/09object1/drl/",
+        getDisplayUrl("{1}-http://webtopurl/{0}/drl/", path));
+  }
+
+  @Test
+  public void testDisplayUrlNoIdOrPath() throws Exception {
+    String path = "/Folder1/path1/object1";
+    assertEquals("http://webtopurl/drl",
+        getDisplayUrl("http://webtopurl/drl", path));
+  }
+
+  /*
+   * Note that the metadata structure stored in these tests is slightly
+   * different that Documentum stores them:
+   *
+   * DCTM stores the data as:
+   *
+   * attr1    attr2    attr3
+   * -----    -----    -----
+   * valu1    valuA    valuI
+   * valu2             valuII
+   * valu3
+   * 
+   * whereas this table is:
+   * 
+   * attr1    attr2    attr3
+   * -----    -----    -----
+   * valu1
+   * valu2
+   * valu3
+   *          valuA
+   *                   valuI
+   *                   valuII
+   *
+   * The difference is insignificant for these tests.
+   */
+  private void writeAttributes(String objectId, Multimap<String, String> attrs)
+      throws SQLException {
+    StringBuilder ddl = new StringBuilder();
+    ddl.append("CREATE TABLE attributes (r_object_id varchar");
+    for (String attr : attrs.keySet()) {
+      ddl.append(", ").append(attr).append(" varchar");
+    }
+    ddl.append(")");
+    jdbcFixture.executeUpdate(ddl.toString());
+
+    for (String attr : attrs.keySet()) {
+      for (String value : attrs.get(attr)) {
+        jdbcFixture.executeUpdate(String.format(
+            "INSERT INTO attributes (r_object_id, %s) VALUES ('%s', '%s')",
+            attr, objectId, value));
+      }
+    }
+  }
+
+  private Multimap<String, String> readAttributes(String objectId)
+      throws SQLException {
+    Multimap<String, String> attributes = TreeMultimap.create();
+    try (Connection connection = jdbcFixture.getConnection()) {
+      DatabaseMetaData dbm = connection.getMetaData();
+      try (ResultSet tables = dbm.getTables(null, null, "ATTRIBUTES", null)) {
+        if (!tables.next()) {
+          // Attributes table does not exist if there are
+          // no attributes in the test.
+          return attributes;
+        }
+      }
+      // Read all the attributes for our objectId.
+      String query = String.format("SELECT * FROM attributes "
+          + "WHERE r_object_id = '%s'", objectId);
+      try (Statement stmt = connection.createStatement();
+           ResultSet rs = stmt.executeQuery(query)) {
+        ResultSetMetaData rsm = rs.getMetaData();
+        while (rs.next()) {
+          for (int i = 1; i <= rsm.getColumnCount(); i++) {
+            // H2 uppercases the column names.
+            String attr = rsm.getColumnName(i).toLowerCase();
+            if (!attr.equals("r_object_id")) {
+              String value = rs.getString(attr);
+              if (value != null) {
+                attributes.put(attr, value);
+              }
+            }
+          }
+        }
+      }
+    }
+    return attributes;
+  }
+
+  private void testMetadata(TreeMultimap<String, String> attrs,
+      TreeMultimap<String, String> expected) throws Exception {
+    String path = "/Folder1/path1/object1";
+    String objectId = "09object1";
+    insertDocument(path);
+    writeAttributes(objectId, attrs);
+
+    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
+    MockResponse response =
+        getDocContent(request, "", ImmutableSet.of("foo", "bar"), "/Folder1");
+
+    assertEquals(expected, response.metadata);
+  }
+
+  @Test
+  public void testSingleValueMetadata() throws Exception {
+    TreeMultimap<String, String> attributes = TreeMultimap.create();
+    attributes.put("attr1", "value1");
+    attributes.put("attr2", "value2");
+    attributes.put("attr3", "value3");
+    testMetadata(attributes, attributes);
+  }
+
+  @Test
+  public void testMultiValueMetadata() throws Exception {
+    TreeMultimap<String, String> attributes = TreeMultimap.create();
+    attributes.put("attr1", "value1");
+    attributes.put("attr1", "value2");
+    attributes.put("attr1", "value3");
+    assertEquals(1, attributes.keySet().size());
+    assertEquals(3, attributes.get("attr1").size());
+    testMetadata(attributes, attributes);
+  }
+
+  @Test
+  public void testEmptyValueMetadata() throws Exception {
+    TreeMultimap<String, String> attributes = TreeMultimap.create();
+    attributes.put("attr1", "value1");
+    attributes.put("attr2", "value2");
+    attributes.put("attr2", "");
+    attributes.put("attr3", "");
+    testMetadata(attributes, attributes);
+  }
+
+  @Test
+  public void testExcludeAttrMetadata() throws Exception {
+    TreeMultimap<String, String> attributes = TreeMultimap.create();
+    attributes.put("attr1", "value1");
+    attributes.put("attr2", "value2");
+    attributes.put("attr3", "value3");
+    attributes.put("foo", "foo1");
+    attributes.put("bar", "bar1");
+    TreeMultimap<String, String> expected = TreeMultimap.create(attributes);
+    expected.removeAll("foo");  // In the excludedAttributes set.
+    expected.removeAll("bar");  // In the excludedAttributes set.
+    testMetadata(attributes, expected);
+  }
+
+  private void insertVirtualDocument(String vdocPath, String contentType,
+      String content, String... children) throws SQLException {
+    String name = vdocPath.substring(vdocPath.lastIndexOf("/") + 1);
+    String vdocId = "09" + name;
+    String now = getNowPlusMinutes(0);
+    jdbcFixture.executeUpdate(String.format(
+        "INSERT INTO dm_sysobject(r_object_id, object_name, mock_object_path, "
+        + "r_object_type, r_is_virtual_doc, a_content_type, mock_content, "
+        + "r_modify_date) "
+        + "VALUES('%s', '%s', '%s', '%s', TRUE, '%s', '%s', {ts '%s'})",
+        vdocId, name, vdocPath, "dm_document_virtual", contentType, content,
+        now));
+    for (String child : children) {
+      insertDocument(now, "09" + child, vdocPath + "/" + child, vdocId);
+    }
+  }
+
+  @Test
+  public void testVirtualDocContentNoChildren() throws Exception {
+    String path = "/Folder1/path1/vdoc";
+    String objectContentType = "crtext/html";
+    String objectContent = "<html><body>Hello</body></html>";
+    insertVirtualDocument(path, objectContentType, objectContent);
+
+    MockResponse response = getDocContent(path, "/Folder1");
+
+    assertEquals(objectContentType, response.contentType);
+    assertEquals(objectContent, response.content.toString(UTF_8.name()));
+    assertTrue(response.anchors.isEmpty());
+  }
+
+  @Test
+  public void testVirtualDocContentWithChildren() throws Exception {
+    String path = "/Folder1/path1/vdoc";
+    String objectContentType = "crtext/html";
+    String objectContent = "<html><body>Hello</body></html>";
+    insertVirtualDocument(path, objectContentType, objectContent,
+        "object1", "object2", "object3");
+
+    MockResponse response = getDocContent(path, "/Folder1");
+
+    assertEquals(objectContentType, response.contentType);
+    assertEquals(objectContent, response.content.toString(UTF_8.name()));
+
+    // Verify child links.
+    assertEquals(3, response.anchors.size());
+    for (String name : ImmutableList.of("object1", "object2", "object3")) {
+      URI uri = response.anchors.get(name);
+      assertNotNull(uri);
+      assertTrue(uri.toString().endsWith(path + "/" + name));
+    }
+  }
+
+  @Test
+  public void testFolderDocContent() throws Exception {
+    String now = getNowPlusMinutes(0);
+    String folderId = "0b01081f80078d29";
+    String folder = "/Folder1/subfolder/path2";
+    insertFolder(now, folderId, folder);
+    insertDocument(now, "0901081f80079263", folder + "/file1", folderId);
+    insertDocument(now, "0901081f8007926d", folder + "/file2 evil<chars?",
+        folderId);
+    insertDocument(now, "0901081f80079278", folder + "/file3", folderId);
+
+    StringBuilder expected = new StringBuilder();
+    expected.append("<!DOCTYPE html>\n<html><head><title>");
+    expected.append("Folder path2");
+    expected.append("</title></head><body><h1>");
+    expected.append("Folder path2");
+    expected.append("</h1>");
+    expected.append("<li><a href=\"path2/file1\">file1</a></li>");
+    expected.append("<li><a href=\"path2/file2%20evil%3Cchars%3F\">"
+        + "file2 evil&lt;chars?</a></li>");
+    expected.append("<li><a href=\"path2/file3\">file3</a></li>");
+    expected.append("</body></html>");
+
+    MockResponse response = getDocContent(folder, "/Folder1");
+
+    assertFalse(response.notFound);
+    assertEquals("text/html; charset=UTF-8", response.contentType);
+    assertEquals(expected.toString(), response.content.toString(UTF_8.name()));
+  }
+
+  @Test
+  public void testGetDocContentNotFound() throws Exception {
+    assertTrue(getDocContent("/Folder1/doesNotExist", "/Folder1").notFound);
+  }
+
+  @Test
+  public void testGetDocContentNotUnderStartPath() throws Exception {
+    String now = getNowPlusMinutes(0);
+    String path1 = "/Folder1/path1";
+    String path2 = "/Folder2/path2";
+
+    insertFolder(now, "0b01081f80078d29", path1);
+    insertFolder(now, "0b01081f80078d30", path2);
+
+    assertTrue(getDocContent(path2, "/Folder1").notFound);
+  }
+
   private void insertUsers(String... names) throws SQLException {
     for (String name : names) {
       jdbcFixture.executeUpdate(String.format(
@@ -1664,6 +1690,11 @@ public class DocumentumAdaptorTest {
   private void insertGroup(String groupName, String... members)
       throws SQLException {
     insertGroupEx(getNowPlusMinutes(0), "", groupName, members);
+  }
+
+  private void insertLdapGroup(String groupName, String... members)
+      throws SQLException {
+    insertGroupEx(getNowPlusMinutes(0), "LDAP", groupName, members);
   }
 
   private void insertGroupEx(String lastModified, String source,
@@ -2324,6 +2355,38 @@ public class DocumentumAdaptorTest {
     assertFalse(checkpoint.equals(new Checkpoint("foo", "xyzzy")));
   }
 
+  /* TODO(bmj): This should create the adaptor, init it with config, then call
+   * its getDocIds method with a recording pusher and return the pushed groups.
+   */
+  private Map<GroupPrincipal, Collection<Principal>> getGroups(Config config)
+       throws DfException {
+    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
+    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
+    IDfSession session = 
+        sessionManager.getSession(config.getValue("documentum.docbaseName"));
+    try {
+      Principals principals = new Principals(session, "localNS",
+          config.getValue("adaptor.namespace"),
+          config.getValue("documentum.windowsDomain"));
+      boolean localGroupsOnly = Boolean.parseBoolean(
+          config.getValue("documentum.pushLocalGroupsOnly"));
+      return adaptor.getGroups(dmClientX, session, principals, localGroupsOnly);
+    } finally {
+      sessionManager.release(session);
+    }
+  }
+
+  /* Filters the 'dm_world' group out of the map of groups. */
+  private <T> Map<GroupPrincipal, T> filterDmWorld(Map<GroupPrincipal, T> map) {
+    return Maps.filterKeys(map, new Predicate<GroupPrincipal>() {
+        public boolean apply(GroupPrincipal principal) {
+          return !"dm_world".equals(principal.getName());
+        }
+      });
+  }
+
   @Test
   public void testGetGroupsDmWorldOnly() throws Exception {
     Config config = getTestAdaptorConfig();
@@ -2595,41 +2658,39 @@ public class DocumentumAdaptorTest {
     assertEquals(expected, filterDmWorld(groups));
   }
 
-  /* Filters the 'dm_world' group out of the map of groups. */
-  private <T> Map<GroupPrincipal, T> filterDmWorld(Map<GroupPrincipal, T> map) {
-    return Maps.filterKeys(map, new Predicate<GroupPrincipal>() {
-        public boolean apply(GroupPrincipal principal) {
-          return !"dm_world".equals(principal.getName());
-        }
-      });
-  }
-
-  private void insertLdapGroup(String groupName, String... members)
-      throws SQLException {
-    insertGroupEx(getNowPlusMinutes(0), "LDAP", groupName, members);
+  private void insertModifiedGroup(String lastModified, String groupName,
+      String... members) throws SQLException {
+    insertGroupEx(lastModified, "", groupName, members);
   }
 
   /* TODO(bmj): This should create the adaptor, init it with config, then call
-   * its getDocIds method with a recording pusher and return the pushed groups.
+   * its getModifiedDocIds method with a recording pusher.
    */
-  private Map<GroupPrincipal, Collection<Principal>> getGroups(Config config)
-       throws DfException {
+  private void checkModifiedGroupsPushed(Config config, Checkpoint checkpoint,
+      Map<GroupPrincipal, ? extends Collection<? extends Principal>>
+      expectedGroups, Checkpoint expectedCheckpoint)
+      throws DfException, IOException, InterruptedException {
     H2BackedTestProxies proxyCls = new H2BackedTestProxies();
+    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
     IDfSession session = 
         sessionManager.getSession(config.getValue("documentum.docbaseName"));
+    Checkpoint endCheckpoint;
     try {
       Principals principals = new Principals(session, "localNS",
           config.getValue("adaptor.namespace"),
           config.getValue("documentum.windowsDomain"));
       boolean localGroupsOnly = Boolean.parseBoolean(
           config.getValue("documentum.pushLocalGroupsOnly"));
-      return adaptor.getGroups(dmClientX, session, principals, localGroupsOnly);
+      endCheckpoint = adaptor.pushGroupUpdates(pusher, dmClientX, session,
+          principals, localGroupsOnly, checkpoint);
     } finally {
       sessionManager.release(session);
     }
+    assertEquals(expectedGroups, pusher.getGroups());
+    assertEquals(expectedCheckpoint, endCheckpoint);
   }
 
   @Test
@@ -2729,67 +2790,6 @@ public class DocumentumAdaptorTest {
         expected, new Checkpoint(FEB_1970, "12Group2"));
   }
 
-  private void insertModifiedGroup(String lastModified, String groupName,
-      String... members) throws SQLException {
-    insertGroupEx(lastModified, "", groupName, members);
-  }
-
-  /* TODO(bmj): This should create the adaptor, init it with config, then call
-   * its getModifiedDocIds method with a recording pusher.
-   */
-  private void checkModifiedGroupsPushed(Config config, Checkpoint checkpoint,
-      Map<GroupPrincipal, ? extends Collection<? extends Principal>>
-      expectedGroups, Checkpoint expectedCheckpoint)
-      throws DfException, IOException, InterruptedException {
-    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
-    IDfSession session = 
-        sessionManager.getSession(config.getValue("documentum.docbaseName"));
-    Checkpoint endCheckpoint;
-    try {
-      Principals principals = new Principals(session, "localNS",
-          config.getValue("adaptor.namespace"),
-          config.getValue("documentum.windowsDomain"));
-      boolean localGroupsOnly = Boolean.parseBoolean(
-          config.getValue("documentum.pushLocalGroupsOnly"));
-      endCheckpoint = adaptor.pushGroupUpdates(pusher, dmClientX, session,
-          principals, localGroupsOnly, checkpoint);
-    } finally {
-      sessionManager.release(session);
-    }
-    assertEquals(expectedGroups, pusher.getGroups());
-    assertEquals(expectedCheckpoint, endCheckpoint);
-  }
-
-  private void insertSysObject(String lastModified, String id, String name,
-      String path, String type, String... folderIds) throws SQLException {
-    jdbcFixture.executeUpdate(String.format(
-        "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
-        + "r_object_type, i_folder_id, r_modify_date) "
-        + "values('%s', '%s', '%s', '%s', '%s', {ts '%s'})",
-        id, name, path, type, Joiner.on(",").join(folderIds), lastModified));
-  }
-
-  private void insertDocument(String lastModified, String id, String path,
-      String... folderIds) throws SQLException {
-    String name = path.substring(path.lastIndexOf("/") + 1);
-    insertSysObject(lastModified, id, name, path, "dm_document", folderIds);
-  }
-
-  private void insertFolder(String lastModified, String id, String... paths)
-       throws SQLException {
-    jdbcFixture.executeUpdate(String.format(
-        "insert into dm_folder(r_object_id, r_folder_path) values('%s', '%s')",
-        id, Joiner.on(",").join(paths)));
-    for (String path : paths) {
-      String name = path.substring(path.lastIndexOf("/") + 1);
-      insertSysObject(lastModified, id, name, path, "dm_folder");
-    }
-  }
-
   /**
    * Builds a list of expected DocId Records that the Pusher should receive.
    *
@@ -2815,6 +2815,30 @@ public class DocumentumAdaptorTest {
   /** Convenience method to assemble a list of start paths for readability. */
   private List<String> startPaths(String... paths) {
     return ImmutableList.copyOf(paths);
+  }
+
+  /* TODO(bmj): This should create the adaptor, init it with config, then call
+   * its getModifiedDocIds method with a recording pusher.
+   */
+  private void checkModifiedDocIdsPushed(List<String> startPaths,
+      Checkpoint checkpoint, List<Record> expectedDocIds,
+      Checkpoint expectedCheckpoint)
+      throws DfException, IOException, InterruptedException {
+    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
+    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
+    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
+    IDfSession session = sessionManager.getSession("foo");
+    Checkpoint endCheckpoint;
+    try {
+      endCheckpoint = adaptor.pushDocumentUpdates(pusher, dmClientX, session,
+          startPaths, checkpoint);
+    } finally {
+      sessionManager.release(session);
+    }
+    assertEquals(expectedDocIds, pusher.getRecords());
+    assertEquals(expectedCheckpoint, endCheckpoint);
   }
 
   @Test
@@ -3058,29 +3082,5 @@ public class DocumentumAdaptorTest {
         new Checkpoint(FEB_1970, folder),
         makeExpectedDocIds(folder, "foo", "bar", "baz"),
         new Checkpoint(MAR_1970, "0b01081f80001003"));
-  }
-
-  /* TODO(bmj): This should create the adaptor, init it with config, then call
-   * its getModifiedDocIds method with a recording pusher.
-   */
-  private void checkModifiedDocIdsPushed(List<String> startPaths,
-      Checkpoint checkpoint, List<Record> expectedDocIds,
-      Checkpoint expectedCheckpoint)
-      throws DfException, IOException, InterruptedException {
-    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
-    IDfSession session = sessionManager.getSession("foo");
-    Checkpoint endCheckpoint;
-    try {
-      endCheckpoint = adaptor.pushDocumentUpdates(pusher, dmClientX, session,
-          startPaths, checkpoint);
-    } finally {
-      sessionManager.release(session);
-    }
-    assertEquals(expectedDocIds, pusher.getRecords());
-    assertEquals(expectedCheckpoint, endCheckpoint);
   }
 }
