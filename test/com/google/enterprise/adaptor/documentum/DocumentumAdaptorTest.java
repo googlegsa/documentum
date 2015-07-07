@@ -645,7 +645,7 @@ public class DocumentumAdaptorTest {
         "Get All Cabinets Query", queries);
 
     adaptor.getDocContentHelper(request, response, dmClientX, 
-        proxyCls.sessionManager, docidEncoder, ImmutableList.of("/"),
+        proxyCls.getProxySessionManager(), docidEncoder, ImmutableList.of("/"),
         null, whereClause, maxHtmlLinks, "");
 
     assertEquals(queries.toString(), 1, queries.size());
@@ -742,296 +742,6 @@ public class DocumentumAdaptorTest {
       fail("Expected exception not thrown.");
     } catch (IOException expected) {
       assertTrue(expected.getCause() instanceof DfException);
-    }
-  }
-
-  /* Mock proxy classes for testing file content */
-  private class DocContentTestProxies {
-
-    public IDfClientX getProxyClientX() {
-      return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
-    }
-
-    private class ClientXMock {
-    }
-
-    public IDfSessionManager getProxySessionManager() {
-      return Proxies.newProxyInstance(IDfSessionManager.class,
-          new SessionManagerMock());
-    }
-
-    private class SessionManagerMock {
-      public IDfSession getSession(String docbaseName) {
-        return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
-      }
-    }
-
-    private class SessionMock {
-      public IDfSysObject getObjectByPath(String path) throws DfException {
-        String query = String.format("SELECT * FROM dm_sysobject "
-            + "WHERE mock_object_path = '%s'", path);
-        try (Statement stmt = jdbcFixture.getConnection().createStatement();
-             ResultSet rs = stmt.executeQuery(query)) {
-          if (rs.first()) {
-            if (rs.getString("r_object_type").startsWith("dm_folder")) {
-              return Proxies.newProxyInstance(IDfFolder.class,
-                  new FolderMock(rs));
-            } else {
-              return Proxies.newProxyInstance(IDfSysObject.class,
-                  new SysObjectMock(rs));
-            }
-          }
-          return null;
-        } catch (SQLException e) {
-          throw new DfException(e);
-        }
-      }
-    }
-
-    private class SysObjectMock {
-      private final String id;
-      private final String name;
-      private final String type;
-      private final String contentType;
-      private final String content;
-      private final Date lastModified;
-      private final boolean isVirtualDocument;
-      private final Multimap<String, String> attributes;
-
-      public SysObjectMock(ResultSet rs) throws SQLException {
-        id = rs.getString("r_object_id");
-        name = rs.getString("object_name");
-        type = rs.getString("r_object_type");
-        contentType = rs.getString("a_content_type");
-        content = rs.getString("mock_content");
-        lastModified = new Date(rs.getTimestamp("r_modify_date").getTime());
-        isVirtualDocument = rs.getBoolean("r_is_virtual_doc");
-        attributes = readAttributes(id);
-      }
-
-      public IDfId getObjectId() {
-        return Proxies.newProxyInstance(IDfId.class, new IdMock(id));
-      }
-
-      public String getObjectName() {
-        return name;
-      }
-
-      public String getString(String attrName) {
-        switch (attrName) {
-          case "object_name": return name;
-          case "r_object_id": return id;
-          default: return null;
-        }
-      }
-
-      public InputStream getContent() {
-        if (content == null) {
-          return null;
-        }
-        return new ByteArrayInputStream(content.getBytes(UTF_8));
-      }
-
-      public IDfType getType() {
-        return Proxies.newProxyInstance(IDfType.class, new TypeMock(type));
-      }
-
-      public String getContentType() {
-        return contentType;
-      }
-
-      public IDfTime getTime(String attr) {
-        if (attr.equals("r_modify_date")) {
-          return Proxies.newProxyInstance(IDfTime.class,
-              new TimeMock(lastModified));
-        } else {
-          return null;
-        }
-      }
-
-      public boolean isVirtualDocument() {
-        return isVirtualDocument;
-      }
-
-      public IDfVirtualDocument asVirtualDocument(String lateBinding,
-          boolean followRootAssembly) {
-        return Proxies.newProxyInstance(IDfVirtualDocument.class,
-            new VirtualDocumentMock(id));
-      }
-
-      public Enumeration<IDfAttr> enumAttrs() throws DfException {
-        Vector<IDfAttr> v = new Vector<IDfAttr>();
-        for (String name : attributes.keySet()) {
-          v.add(Proxies.newProxyInstance(IDfAttr.class, new AttrMock(name)));
-        }
-        return v.elements();
-      }
-
-      public int getValueCount(String name) {
-        return attributes.get(name).size();
-      }
-
-      public String getRepeatingString(String name, int index) {
-        return new ArrayList<String>(attributes.get(name)).get(index);
-      }
-    }
-
-    private class VirtualDocumentMock {
-      private final String vdocId;
-      
-      public VirtualDocumentMock(String vdocId) {
-        this.vdocId = vdocId;
-      }
-
-      public IDfVirtualDocumentNode getRootNode() throws DfException {
-        return Proxies.newProxyInstance(IDfVirtualDocumentNode.class,
-            new VdocRootNodeMock(vdocId));
-      }
-    }
-
-    private class VdocRootNodeMock {
-      private final ArrayList<String> vdocChildren = new ArrayList<>();
-
-      public VdocRootNodeMock(String vdocId) throws DfException {
-        String query = String.format("SELECT mock_object_path "
-            + "FROM dm_sysobject WHERE i_folder_id = '%s'", vdocId);
-        try (Statement stmt = jdbcFixture.getConnection().createStatement();
-             ResultSet rs = stmt.executeQuery(query)) {
-          while (rs.next()) {
-            vdocChildren.add(rs.getString("mock_object_path"));
-          }
-        } catch (SQLException e) {
-          throw new DfException(e);
-        }
-      }
-
-      public int getChildCount() {
-        return vdocChildren.size();
-      }
-
-      public IDfVirtualDocumentNode getChild(int index) {
-        return Proxies.newProxyInstance(IDfVirtualDocumentNode.class,
-            new VdocChildNodeMock(vdocChildren.get(index)));
-      }
-    }
-
-    private class VdocChildNodeMock {
-      private final String childPath;
-
-      public VdocChildNodeMock(String childPath) {
-        this.childPath = childPath;
-      }
-
-      public IDfSysObject getSelectedObject() throws DfException {
-        IDfSession session = DocContentTestProxies.this
-            .getProxySessionManager().getSession("foo");
-        return (IDfSysObject) session.getObjectByPath(childPath);
-      }
-    }
-
-    private class FolderMock extends SysObjectMock {
-      public FolderMock(ResultSet rs) throws SQLException {
-        super(rs);
-      }
-
-      public IDfCollection getContents(String colNames) throws DfException {
-        String query = String.format(
-            "SELECT %s FROM dm_sysobject WHERE i_folder_id = '%s'",
-            colNames, getObjectId());
-        return Proxies.newProxyInstance(IDfCollection.class,
-            new CollectionMock(query));
-      }
-    }
-      
-    private class CollectionMock {
-      private final Statement stmt;
-      private final ResultSet rs;
-
-      public CollectionMock(String query) throws DfException {
-        try {
-          stmt = jdbcFixture.getConnection().createStatement();
-          rs = stmt.executeQuery(query);
-        } catch (SQLException e) {
-          throw new DfException(e);
-        }
-      }
-
-      public String getString(String colName) throws DfException {
-        try {
-          return rs.getString(colName);
-        } catch (SQLException e) {
-          throw new DfException(e);
-        }
-      }
-
-      public boolean next() throws DfException {
-        try {
-          return rs.next();
-        } catch (SQLException e) {
-          throw new DfException(e);
-        }
-      }
-
-      public void close() throws DfException {
-        try {
-          rs.close();
-          stmt.close();
-        } catch (SQLException e) {
-          throw new DfException(e);
-        }
-      }
-    }
-
-    private class TypeMock {
-      private final String type;
-
-      public TypeMock(String type) {
-        this.type = type;
-      }
-
-      public boolean isTypeOf(String otherType) {
-        return type.startsWith(otherType);
-      }
-
-      public String getName() {
-        return type;
-      }
-    }
-
-    private class TimeMock {
-      private final Date date;
-
-      public TimeMock(Date date) {
-        this.date = date;
-      }
-
-      public Date getDate() {
-        return date;
-      }
-    }
-
-    private class IdMock {
-      private final String objectId;
-
-      public IdMock(String objectId) {
-        this.objectId = objectId;
-      }
-
-      public String toString() {
-        return objectId;
-      }
-    }
-
-    private class AttrMock {
-      private final String name;
-
-      public AttrMock(String name) {
-        this.name = name;
-      }
-
-      public String getName() {
-        return name;
-      }
     }
   }
 
@@ -1165,7 +875,7 @@ public class DocumentumAdaptorTest {
 
   private MockResponse getDocContent(Request request, String displayUrlPattern,
       Set<String> excludedAttributes, String... startPaths) throws Exception {
-    DocContentTestProxies proxyCls = new DocContentTestProxies();
+    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
@@ -1418,11 +1128,14 @@ public class DocumentumAdaptorTest {
 
   /* Mock proxy classes backed by the H2 database tables. */
   private class H2BackedTestProxies {
-    IDfSessionManager sessionManager = Proxies.newProxyInstance(
-        IDfSessionManager.class, new SessionManagerMock());
 
     public IDfClientX getProxyClientX() {
       return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
+    }
+
+    public IDfSessionManager getProxySessionManager() {
+      return Proxies.newProxyInstance(IDfSessionManager.class,
+          new SessionManagerMock());
     }
 
     private class ClientXMock {
@@ -1498,10 +1211,6 @@ public class DocumentumAdaptorTest {
         }
       }
 
-      public int getState() {
-        return IDfCollection.DF_READY_STATE;
-      }
-
       public void close() throws DfException {
         try {
           rs.close();
@@ -1525,6 +1234,27 @@ public class DocumentumAdaptorTest {
       public IDfACL getObject(IDfId id) {
         return Proxies.newProxyInstance(IDfACL.class,
             new AclMock(id.toString()));
+      }
+
+      public IDfSysObject getObjectByPath(String path) throws DfException {
+        String query = String.format(
+            "SELECT *, mock_object_path AS r_folder_path "
+            + "FROM dm_sysobject WHERE mock_object_path = '%s'", path);
+        try (Statement stmt = jdbcFixture.getConnection().createStatement();
+             ResultSet rs = stmt.executeQuery(query)) {
+          if (rs.first()) {
+            if (rs.getString("r_object_type").startsWith("dm_folder")) {
+              return Proxies.newProxyInstance(IDfFolder.class,
+                  new FolderMock(rs));
+            } else {
+              return Proxies.newProxyInstance(IDfSysObject.class,
+                  new SysObjectMock(rs));
+            }
+          }
+          return null;
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
       }
 
       public Object getObjectByQualification(String query) throws DfException {
@@ -1553,7 +1283,9 @@ public class DocumentumAdaptorTest {
           return null;
         }
         String query = String.format(
-            "SELECT * FROM dm_folder WHERE r_object_id = '%s'", spec);
+            "SELECT s.*, f.r_folder_path FROM dm_sysobject s "
+            + "JOIN dm_folder f ON s.r_object_id = f.r_object_id "
+            + "WHERE s.r_object_id = '%s'", spec);
         try (Statement stmt = jdbcFixture.getConnection().createStatement();
              ResultSet rs = stmt.executeQuery(query)) {
           if (rs.first()) {
@@ -1571,10 +1303,156 @@ public class DocumentumAdaptorTest {
       }
     }
 
-    private class FolderMock {
+    private class SysObjectMock {
+      private final String id;
+      private final String name;
+      private final String type;
+      private final String contentType;
+      private final String content;
+      private final Date lastModified;
+      private final boolean isVirtualDocument;
+      private final Multimap<String, String> attributes;
+
+      public SysObjectMock(ResultSet rs) throws SQLException {
+        id = rs.getString("r_object_id");
+        name = rs.getString("object_name");
+        type = rs.getString("r_object_type");
+        contentType = rs.getString("a_content_type");
+        content = rs.getString("mock_content");
+        lastModified = new Date(rs.getTimestamp("r_modify_date").getTime());
+        isVirtualDocument = rs.getBoolean("r_is_virtual_doc");
+        attributes = readAttributes(id);
+      }
+
+      public IDfId getObjectId() {
+        return Proxies.newProxyInstance(IDfId.class, new IdMock(id));
+      }
+
+      public String getObjectName() {
+        return name;
+      }
+
+      public String getString(String attrName) {
+        switch (attrName) {
+          case "object_name": return name;
+          case "r_object_id": return id;
+          default: return null;
+        }
+      }
+
+      public InputStream getContent() {
+        if (content == null) {
+          return null;
+        }
+        return new ByteArrayInputStream(content.getBytes(UTF_8));
+      }
+
+      public IDfType getType() {
+        return Proxies.newProxyInstance(IDfType.class, new TypeMock(type));
+      }
+
+      public String getContentType() {
+        return contentType;
+      }
+
+      public IDfTime getTime(String attr) {
+        if (attr.equals("r_modify_date")) {
+          return Proxies.newProxyInstance(IDfTime.class,
+              new TimeMock(lastModified));
+        } else {
+          return null;
+        }
+      }
+
+      public boolean isVirtualDocument() {
+        return isVirtualDocument;
+      }
+
+      public IDfVirtualDocument asVirtualDocument(String lateBinding,
+          boolean followRootAssembly) {
+        return Proxies.newProxyInstance(IDfVirtualDocument.class,
+            new VirtualDocumentMock(id));
+      }
+
+      public Enumeration<IDfAttr> enumAttrs() throws DfException {
+        Vector<IDfAttr> v = new Vector<IDfAttr>();
+        for (String name : attributes.keySet()) {
+          v.add(Proxies.newProxyInstance(IDfAttr.class, new AttrMock(name)));
+        }
+        return v.elements();
+      }
+
+      public int getValueCount(String name) {
+        return attributes.get(name).size();
+      }
+
+      public String getRepeatingString(String name, int index) {
+        return new ArrayList<String>(attributes.get(name)).get(index);
+      }
+    }
+
+    private class VirtualDocumentMock {
+      private final String vdocId;
+      
+      public VirtualDocumentMock(String vdocId) {
+        this.vdocId = vdocId;
+      }
+
+      public IDfVirtualDocumentNode getRootNode() throws DfException {
+        return Proxies.newProxyInstance(IDfVirtualDocumentNode.class,
+            new VdocRootNodeMock(vdocId));
+      }
+    }
+
+    private class VdocRootNodeMock {
+      private final ArrayList<String> vdocChildren = new ArrayList<>();
+
+      public VdocRootNodeMock(String vdocId) throws DfException {
+        String query = String.format("SELECT mock_object_path "
+            + "FROM dm_sysobject WHERE i_folder_id = '%s'", vdocId);
+        try (Statement stmt = jdbcFixture.getConnection().createStatement();
+             ResultSet rs = stmt.executeQuery(query)) {
+          while (rs.next()) {
+            vdocChildren.add(rs.getString("mock_object_path"));
+          }
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+
+      public int getChildCount() {
+        return vdocChildren.size();
+      }
+
+      public IDfVirtualDocumentNode getChild(int index) {
+        return Proxies.newProxyInstance(IDfVirtualDocumentNode.class,
+            new VdocChildNodeMock(vdocChildren.get(index)));
+      }
+    }
+
+    private class VdocChildNodeMock {
+      private final String childPath;
+
+      public VdocChildNodeMock(String childPath) {
+        this.childPath = childPath;
+      }
+
+      public IDfSysObject getSelectedObject() throws DfException {
+        IDfSessionManager sessionManager = getProxySessionManager();
+        IDfSession session = sessionManager.getSession("foo");
+        try {
+          return (IDfSysObject) session.getObjectByPath(childPath);
+        } finally {
+          sessionManager.release(session);
+        }
+      }
+    }
+
+    private class FolderMock extends SysObjectMock {
       private String[] folderPaths;
 
       public FolderMock(ResultSet rs) throws SQLException {
+        super(rs);
         this.folderPaths = rs.getString("r_folder_path").split(",");
       }
        
@@ -1584,6 +1462,14 @@ public class DocumentumAdaptorTest {
 
       public String getFolderPath(int index) {
         return folderPaths[index];
+      }
+
+      public IDfCollection getContents(String colNames) throws DfException {
+        String query = String.format(
+            "SELECT %s FROM dm_sysobject WHERE i_folder_id = '%s'",
+            colNames, getObjectId());
+        return Proxies.newProxyInstance(IDfCollection.class,
+            new CollectionMock(query));
       }
     }
 
@@ -1596,6 +1482,46 @@ public class DocumentumAdaptorTest {
 
       public boolean isTypeOf(String otherType) {
         return type.startsWith(otherType);
+      }
+
+      public String getName() {
+        return type;
+      }
+    }
+
+    private class TimeMock {
+      private final Date date;
+
+      public TimeMock(Date date) {
+        this.date = date;
+      }
+
+      public Date getDate() {
+        return date;
+      }
+    }
+
+    private class IdMock {
+      private final String objectId;
+
+      public IdMock(String objectId) {
+        this.objectId = objectId;
+      }
+
+      public String toString() {
+        return objectId;
+      }
+    }
+
+    private class AttrMock {
+      private final String name;
+
+      public AttrMock(String name) {
+        this.name = name;
+      }
+
+      public String getName() {
+        return name;
       }
     }
 
@@ -2217,8 +2143,9 @@ public class DocumentumAdaptorTest {
    */
   private Map<DocId, Acl> getAllAcls(Config config) throws DfException {
     H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    IDfSession session = proxyCls.sessionManager
-        .getSession(config.getValue("documentum.docbaseName"));
+    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
+    IDfSession session = 
+        sessionManager.getSession(config.getValue("documentum.docbaseName"));
     try {
       Principals principals = new Principals(session, "localNS",
           config.getValue("adaptor.namespace"),
@@ -2226,7 +2153,7 @@ public class DocumentumAdaptorTest {
       return new DocumentumAcls(proxyCls.getProxyClientX(), session, principals)
           .getAcls();
     } finally {
-      proxyCls.sessionManager.release(session);
+      sessionManager.release(session);
     }
   }
 
@@ -2244,7 +2171,7 @@ public class DocumentumAdaptorTest {
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(proxyCls.getProxyClientX());
     Config config = getTestAdaptorConfig();
-    IDfSession session = proxyCls.sessionManager.getSession("test");
+    IDfSession session = proxyCls.getProxySessionManager().getSession("test");
     DocumentumAcls dctmAcls =
         new DocumentumAcls(proxyCls.getProxyClientX(), session, new Principals(
             session, "localNS", config.getValue("adaptor.namespace"),
@@ -2690,8 +2617,9 @@ public class DocumentumAdaptorTest {
     H2BackedTestProxies proxyCls = new H2BackedTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-    IDfSession session = proxyCls.sessionManager
-        .getSession(config.getValue("documentum.docbaseName"));
+    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
+    IDfSession session = 
+        sessionManager.getSession(config.getValue("documentum.docbaseName"));
     try {
       Principals principals = new Principals(session, "localNS",
           config.getValue("adaptor.namespace"),
@@ -2700,7 +2628,7 @@ public class DocumentumAdaptorTest {
           config.getValue("documentum.pushLocalGroupsOnly"));
       return adaptor.getGroups(dmClientX, session, principals, localGroupsOnly);
     } finally {
-      proxyCls.sessionManager.release(session);
+      sessionManager.release(session);
     }
   }
 
@@ -2817,8 +2745,9 @@ public class DocumentumAdaptorTest {
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-    IDfSession session = proxyCls.sessionManager
-        .getSession(config.getValue("documentum.docbaseName"));
+    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
+    IDfSession session = 
+        sessionManager.getSession(config.getValue("documentum.docbaseName"));
     Checkpoint endCheckpoint;
     try {
       Principals principals = new Principals(session, "localNS",
@@ -2829,7 +2758,7 @@ public class DocumentumAdaptorTest {
       endCheckpoint = adaptor.pushGroupUpdates(pusher, dmClientX, session,
           principals, localGroupsOnly, checkpoint);
     } finally {
-      proxyCls.sessionManager.release(session);
+      sessionManager.release(session);
     }
     assertEquals(expectedGroups, pusher.getGroups());
     assertEquals(expectedCheckpoint, endCheckpoint);
@@ -3142,13 +3071,14 @@ public class DocumentumAdaptorTest {
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-    IDfSession session = proxyCls.sessionManager.getSession("foo");
+    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
+    IDfSession session = sessionManager.getSession("foo");
     Checkpoint endCheckpoint;
     try {
       endCheckpoint = adaptor.pushDocumentUpdates(pusher, dmClientX, session,
           startPaths, checkpoint);
     } finally {
-      proxyCls.sessionManager.release(session);
+      sessionManager.release(session);
     }
     assertEquals(expectedDocIds, pusher.getRecords());
     assertEquals(expectedCheckpoint, endCheckpoint);
