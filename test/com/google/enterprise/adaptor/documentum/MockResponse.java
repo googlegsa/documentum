@@ -132,4 +132,13 @@ class MockResponse implements Response {
   public void respondNoContent() {
     throw new UnsupportedOperationException();
   }
+
+  @Override
+  public String toString() {
+    return String.format("{ notFound: %b, noIndex: %b, notModified: %b, "
+        + "lastModified: %s, displayUrl: %s, contentType: %s, content: '%s', "
+        + "metadata: %s, namedResources: %s, anchors: %s }",
+        notFound, noIndex, notModified, lastModified, displayUrl,
+        contentType, content, metadata, namedResources, anchors);
+  }
 }

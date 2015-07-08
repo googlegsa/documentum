@@ -102,6 +102,8 @@ public class DocumentumAdaptorTest {
   private static final String FEB_1970 = "1970-02-01 02:03:04";
   private static final String MAR_1970 = "1970-03-01 02:03:04";
 
+  private static final String START_PATH = "/Folder1/path1";
+
   private static final String CREATE_TABLE_ACL = "create table dm_acl "
       + "(r_object_id varchar, r_accessor_name varchar, "
       + "r_accessor_permit int, r_permit_type int, r_is_group boolean)";
@@ -142,6 +144,9 @@ public class DocumentumAdaptorTest {
     jdbcFixture.executeUpdate(CREATE_TABLE_ACL, CREATE_TABLE_AUDITTRAIL_ACL,
         CREATE_TABLE_CABINET, CREATE_TABLE_FOLDER, CREATE_TABLE_GROUP,
         CREATE_TABLE_SYSOBJECT, CREATE_TABLE_USER);
+
+    // Force the default test start path to exist, so we pass init().
+    insertFolder(EPOCH_1970, "0bStartPath", START_PATH);
   }
 
   @After
@@ -150,18 +155,18 @@ public class DocumentumAdaptorTest {
   }
 
   private Config getTestAdaptorConfig() {
-    return getTestAdaptorConfig(ProxyAdaptorContext.getInstance());
+    return initTestAdaptorConfig(ProxyAdaptorContext.getInstance());
   }
 
-  private Config getTestAdaptorConfig(AdaptorContext context) {
+  private Config initTestAdaptorConfig(AdaptorContext context) {
     Config config = context.getConfig();
     config.addKey("documentum.username", "testuser");
     config.addKey("documentum.password", "testpwd");
     config.addKey("documentum.docbaseName", "testdocbase");
     config.addKey("documentum.displayUrlPattern", "http://webtop/drl/{0}");
-    config.addKey("documentum.src", "/Folder1/path1");
+    config.addKey("documentum.src", START_PATH);
     config.addKey("documentum.src.separator", ",");
-    config.addKey("documentum.excludedAttributes", "foo, bar");
+    config.addKey("documentum.excludedAttributes", "");
     config.addKey("adaptor.namespace", "globalNS");
     config.addKey("documentum.windowsDomain", "");
     config.addKey("documentum.pushLocalGroupsOnly", "false");
@@ -181,7 +186,7 @@ public class DocumentumAdaptorTest {
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(proxyCls.getProxyClientX());
     AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = getTestAdaptorConfig(context);
+    initTestAdaptorConfig(context);
 
     adaptor.init(context);
 
@@ -212,7 +217,7 @@ public class DocumentumAdaptorTest {
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(proxyCls.getProxyClientX());
     AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = getTestAdaptorConfig(context);
+    Config config = initTestAdaptorConfig(context);
     config.overrideKey("documentum.src", "/Folder1/path1, /Folder2/path2,"
         + "/Folder3/path3");
     adaptor.init(context);
@@ -530,13 +535,8 @@ public class DocumentumAdaptorTest {
   private void initValidStartPaths(DocumentumAdaptor adaptor,
       String... paths) throws DfException {
     AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = getTestAdaptorConfig(context);
-    String startPaths = paths[0];
-    for (int i = 1; i < paths.length; i++) {
-      startPaths = startPaths + "," + paths[i];
-    }
-    config.overrideKey("documentum.src", startPaths);
-
+    Config config = initTestAdaptorConfig(context);
+    config.overrideKey("documentum.src", Joiner.on(",").join(paths));
     adaptor.init(context);
   }
 
@@ -635,8 +635,35 @@ public class DocumentumAdaptorTest {
     }
 
     private class ClientXMock {
+      public String getDFCVersion() {
+        return "1.0.0.000 (Mock DFC)";
+      }
+
+      public IDfClient getLocalClient() {
+        return Proxies.newProxyInstance(IDfClient.class, new ClientMock());
+      }
+
+      public IDfLoginInfo getLoginInfo() {
+        return Proxies.newProxyInstance(IDfLoginInfo.class,
+            new LoginInfoMock());
+      }
+
       public IDfQuery getQuery() {
         return Proxies.newProxyInstance(IDfQuery.class, new QueryMock());
+      }
+    }
+
+    private class ClientMock {
+      public IDfSessionManager newSessionManager() {
+        return getProxySessionManager();
+      }
+    }
+
+    private class LoginInfoMock {
+      public void setPassword(String password) {
+      }
+
+      public void setUser(String username) {
       }
     }
 
@@ -724,9 +751,16 @@ public class DocumentumAdaptorTest {
 
       public void release(IDfSession session) {
       }
+
+      public void setIdentity(String docbaseName, IDfLoginInfo loginInfo) {
+      }
     }
 
     private class SessionMock {
+      public String getServerVersion() {
+        return "1.0.0.000 (Mock CS)";
+      }
+
       public IDfACL getObject(IDfId id) {
         return Proxies.newProxyInstance(IDfACL.class,
             new AclMock(id.toString()));
@@ -1315,14 +1349,16 @@ public class DocumentumAdaptorTest {
 
   private void testDocContent(Date lastCrawled, Date lastModified,
       boolean expectNotModified) throws Exception {
-    String path = "/Folder1/path1/object1";
+    String path = START_PATH + "/object1";
     String contentType = "crtext/html";
     String content = "<html><body>Hello</body></html>";
     insertDocument(lastModified, path, contentType, content);
 
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    initTestAdaptorConfig(context);
     Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path),
         lastCrawled);
-    MockResponse response = getDocContent(request, "", null, "/Folder1");
+    MockResponse response = getDocContent(context, request);
 
     if (expectNotModified) {
       assertTrue(response.notModified);
@@ -1335,25 +1371,22 @@ public class DocumentumAdaptorTest {
     }
   }
 
-  private MockResponse getDocContent(String path, String... startPaths)
-      throws Exception {
-    return getDocContent(new MockRequest(DocumentumAdaptor.docIdFromPath(path)),
-        "", null, startPaths);
+  private MockResponse getDocContent(String path) throws Exception {
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    initTestAdaptorConfig(context);
+    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
+    return getDocContent(context, request);
   }
 
-  private MockResponse getDocContent(Request request, String displayUrlPattern,
-      Set<String> excludedAttributes, String... startPaths) throws Exception {
+  private MockResponse getDocContent(AdaptorContext context, Request request)
+      throws Exception {
     H2BackedTestProxies proxyCls = new H2BackedTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
-    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
+    adaptor.init(context);
+
     MockResponse response = new MockResponse();
-
-    adaptor.getDocContentHelper(request, response, dmClientX, sessionManager,
-        ProxyAdaptorContext.getInstance().getDocIdEncoder(),
-        Arrays.asList(startPaths), excludedAttributes, null, 1000,
-        displayUrlPattern);
-
+    adaptor.getDocContent(request, response);
     return response;
   }
 
@@ -1406,11 +1439,17 @@ public class DocumentumAdaptorTest {
 
   private String getDisplayUrl(String displayUrlPattern, String path)
       throws Exception {
+    assertTrue(path, path.startsWith(START_PATH));
     insertDocument(path);
-    String startPath = path.substring(0, path.indexOf("/", 1));
+
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    Config config = initTestAdaptorConfig(context);
+    config.overrideKey("documentum.displayUrlPattern", displayUrlPattern);
+
     Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
-    MockResponse response = getDocContent(request, displayUrlPattern, null,
-        startPath);
+    MockResponse response = getDocContent(context, request);
+
+    assertNotNull(response.toString(), response.displayUrl);
     return response.displayUrl.toString();
   }
 
@@ -1523,14 +1562,17 @@ public class DocumentumAdaptorTest {
 
   private void testMetadata(TreeMultimap<String, String> attrs,
       TreeMultimap<String, String> expected) throws Exception {
-    String path = "/Folder1/path1/object1";
+    String path = START_PATH + "/object1";
     String objectId = "09object1";
     insertDocument(path);
     writeAttributes(objectId, attrs);
 
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    Config config = initTestAdaptorConfig(context);
+    config.overrideKey("documentum.excludedAttributes", "foo, bar");
+
     Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
-    MockResponse response =
-        getDocContent(request, "", ImmutableSet.of("foo", "bar"), "/Folder1");
+    MockResponse response = getDocContent(context, request);
 
     assertEquals(expected, response.metadata);
   }
@@ -1598,12 +1640,12 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testVirtualDocContentNoChildren() throws Exception {
-    String path = "/Folder1/path1/vdoc";
+    String path = START_PATH + "/vdoc";
     String objectContentType = "crtext/html";
     String objectContent = "<html><body>Hello</body></html>";
     insertVirtualDocument(path, objectContentType, objectContent);
 
-    MockResponse response = getDocContent(path, "/Folder1");
+    MockResponse response = getDocContent(path);
 
     assertEquals(objectContentType, response.contentType);
     assertEquals(objectContent, response.content.toString(UTF_8.name()));
@@ -1612,13 +1654,13 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testVirtualDocContentWithChildren() throws Exception {
-    String path = "/Folder1/path1/vdoc";
+    String path = START_PATH + "/vdoc";
     String objectContentType = "crtext/html";
     String objectContent = "<html><body>Hello</body></html>";
     insertVirtualDocument(path, objectContentType, objectContent,
         "object1", "object2", "object3");
 
-    MockResponse response = getDocContent(path, "/Folder1");
+    MockResponse response = getDocContent(path);
 
     assertEquals(objectContentType, response.contentType);
     assertEquals(objectContent, response.content.toString(UTF_8.name()));
@@ -1636,7 +1678,7 @@ public class DocumentumAdaptorTest {
   public void testFolderDocContent() throws Exception {
     String now = getNowPlusMinutes(0);
     String folderId = "0b01081f80078d29";
-    String folder = "/Folder1/subfolder/path2";
+    String folder = START_PATH + "/path2";
     insertFolder(now, folderId, folder);
     insertDocument(now, "0901081f80079263", folder + "/file1", folderId);
     insertDocument(now, "0901081f8007926d", folder + "/file2 evil<chars?",
@@ -1655,7 +1697,7 @@ public class DocumentumAdaptorTest {
     expected.append("<li><a href=\"path2/file3\">file3</a></li>");
     expected.append("</body></html>");
 
-    MockResponse response = getDocContent(folder, "/Folder1");
+    MockResponse response = getDocContent(folder);
 
     assertFalse(response.notFound);
     assertEquals("text/html; charset=UTF-8", response.contentType);
@@ -1664,19 +1706,18 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testGetDocContentNotFound() throws Exception {
-    assertTrue(getDocContent("/Folder1/doesNotExist", "/Folder1").notFound);
+    String path = START_PATH + "/doesNotExist";
+    assertTrue(getDocContent(path).notFound);
   }
 
   @Test
   public void testGetDocContentNotUnderStartPath() throws Exception {
     String now = getNowPlusMinutes(0);
-    String path1 = "/Folder1/path1";
-    String path2 = "/Folder2/path2";
+    String path = "/Folder2/path2";
+    insertFolder(now, "0b01081f80078d30", path);
 
-    insertFolder(now, "0b01081f80078d29", path1);
-    insertFolder(now, "0b01081f80078d30", path2);
-
-    assertTrue(getDocContent(path2, "/Folder1").notFound);
+    assertFalse(path.startsWith(START_PATH));
+    assertTrue(getDocContent(path).notFound);
   }
 
   private void insertUsers(String... names) throws SQLException {
@@ -2871,7 +2912,7 @@ public class DocumentumAdaptorTest {
     insertDocument(FEB_1970, "0b01081f80001002", folder + "/bar", folderId);
 
     checkModifiedDocIdsPushed(startPaths(folder),
-        new Checkpoint(EPOCH_1970, "0"),
+        new Checkpoint(JAN_1970, "0"),
         makeExpectedDocIds(folder, folder, "foo", "bar"),
         new Checkpoint(FEB_1970, "0b01081f80001002"));
   }
@@ -2910,12 +2951,12 @@ public class DocumentumAdaptorTest {
   public void testModifiedFolder() throws Exception {
     String folderId = "0b01081f80001000";
     String folder = "/Folder1";
-    insertFolder(JAN_1970, folderId, folder);
+    insertFolder(FEB_1970, folderId, folder);
 
     checkModifiedDocIdsPushed(startPaths(folder),
-        new Checkpoint(EPOCH_1970, "0b01081f80001003"),
+        new Checkpoint(JAN_1970, "0b01081f80001003"),
         makeExpectedDocIds(folder, folder),
-        new Checkpoint(JAN_1970, folderId));
+        new Checkpoint(FEB_1970, folderId));
   }
 
   @Test
