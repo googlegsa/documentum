@@ -170,6 +170,7 @@ public class DocumentumAdaptorTest {
     config.addKey("adaptor.namespace", "globalNS");
     config.addKey("documentum.windowsDomain", "");
     config.addKey("documentum.pushLocalGroupsOnly", "false");
+    config.addKey("documentum.maxHtmlSize", "1000");
     config.addKey("documentum.cabinetWhereCondition", "");
     return config;
   }

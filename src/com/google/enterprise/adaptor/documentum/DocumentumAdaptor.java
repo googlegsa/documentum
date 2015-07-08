@@ -130,6 +130,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private String localNamespace;
   private String windowsDomain;
   private boolean pushLocalGroupsOnly;
+  private int maxHtmlSize;
   private String cabinetWhereCondition;
 
   private Checkpoint modifiedAclsCheckpoint = new Checkpoint();
@@ -281,6 +282,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     config.addKey("adaptor.namespace", Principal.DEFAULT_NAMESPACE);
     config.addKey("documentum.windowsDomain", "");
     config.addKey("documentum.pushLocalGroupsOnly", "false");
+    config.addKey("documentum.maxHtmlSize", "1000");
     // TODO(bmj): Do the system cabinet names need to be localizable?
     config.addKey("documentum.cabinetWhereCondition", "object_name NOT IN "
         + "('Integration', 'Resources', 'System', 'Temp', 'Templates') AND "
@@ -331,6 +333,14 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     logger.log(Level.CONFIG, "documentum.src.separator: {0}", separator);
     startPaths = parseStartPaths(src, separator);
     logger.log(Level.CONFIG, "start paths: {0}", startPaths);
+    try {
+      maxHtmlSize = Math.max(0, 
+          Integer.parseInt(config.getValue("documentum.maxHtmlSize").trim()));
+      logger.log(Level.CONFIG, "documentum.maxHtmlSize: {0}", maxHtmlSize);
+    } catch (NumberFormatException e) {
+      throw new InvalidConfigurationException(
+          "documentum.maxHtmlSize must be a positive integer.", e);
+    }
     cabinetWhereCondition =
         config.getValue("documentum.cabinetWhereCondition");
     logger.log(Level.CONFIG, "documentum.cabinetWhereCondition: {0}", 
@@ -770,7 +780,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   public void getDocContent(Request req, Response resp) throws IOException {
     getDocContentHelper(req, resp, dmClientX, dmSessionManager, docIdEncoder,
         validatedStartPaths, excludedAttributes, cabinetWhereCondition,
-        /* maxHtmlLinks */ 1000, displayUrl);
+        maxHtmlSize, displayUrl);
   }
 
   @VisibleForTesting
