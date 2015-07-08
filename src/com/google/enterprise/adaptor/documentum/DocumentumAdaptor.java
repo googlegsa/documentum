@@ -778,17 +778,6 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    */
   @Override
   public void getDocContent(Request req, Response resp) throws IOException {
-    getDocContentHelper(req, resp, dmClientX, dmSessionManager, docIdEncoder,
-        validatedStartPaths, excludedAttributes, cabinetWhereCondition,
-        maxHtmlSize, displayUrl);
-  }
-
-  @VisibleForTesting
-  void getDocContentHelper(Request req, Response resp, IDfClientX dmClientX,
-      IDfSessionManager dmSessionManager, DocIdEncoder docIdEncoder,
-      List<String> validatedStartPaths, Set<String> excludedAttributes,
-      String cabinetWhereCondition, int maxHtmlLinks, String displayUrl)
-      throws IOException {
     DocId id = req.getDocId();
     logger.log(Level.FINER, "Get content for id: {0}", id);
 
@@ -804,8 +793,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
       // Special root path "/" means return all cabinets.
       if (path.equals("/")) {
-        getRootContent(resp, dmClientX, dmSession, id, docIdEncoder,
-            cabinetWhereCondition, maxHtmlLinks);
+        getRootContent(resp, dmSession, id);
         return;
       }
 
@@ -838,12 +826,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       }
 
       if (type.isTypeOf("dm_document")) {
-        getDocumentContent(resp, (IDfSysObject) dmPersObj, id, docIdEncoder,
-            excludedAttributes, displayUrl);
+        getDocumentContent(resp, (IDfSysObject) dmPersObj, id);
       } else if (type.isTypeOf("dm_folder")) {
-        // TODO(bmj): Pass maxHtmlLinks to getFolderContent.
-        getFolderContent(resp, (IDfFolder) dmPersObj, id, docIdEncoder,
-            excludedAttributes);
+        getFolderContent(resp, (IDfFolder) dmPersObj, id);
       } else {
         logger.log(Level.WARNING, "Unsupported type: {0}", type);
         resp.respondNotFound();
@@ -877,13 +862,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    * Returns all the docbase's cabinets as links in a generated HTML document
    * and as external links.
    */
-  private void getRootContent(Response resp, IDfClientX dmClientX, 
-      IDfSession session, DocId id, DocIdEncoder docIdEncoder,
-      String whereCondition, int maxHtmlLinks)
+  private void getRootContent(Response resp, IDfSession session, DocId id)
       throws DfException, IOException {
     String queryStr = MessageFormat.format(
        "SELECT r_folder_path FROM dm_cabinet{0,choice,0#|0< WHERE {1}}",
-        whereCondition.length(), whereCondition);
+        cabinetWhereCondition.length(), cabinetWhereCondition);
     // Don't use MessageFormat syntax for this log message for testing purposes.
     logger.log(Level.FINER, "Get All Cabinets Query: " + queryStr);
     IDfQuery query = dmClientX.getQuery();
@@ -901,7 +884,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       try (HtmlResponseWriter htmlWriter =
           new HtmlResponseWriter(writer, docIdEncoder, Locale.ENGLISH)) {
         htmlWriter.start(id, "/");
-        for (int i = 0; i < maxHtmlLinks && result.next(); i++) {
+        for (int i = 0; i < maxHtmlSize && result.next(); i++) {
           String cabinet = result.getString("r_folder_path");
           logger.log(Level.FINER, "Cabinet: {0}", cabinet);
           DocId docid = docIdFromPath(cabinet);
@@ -929,14 +912,13 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   /** Copies the Documentum document content into the response.
    * @throws URISyntaxException */
   private void getDocumentContent(Response resp, IDfSysObject dmSysbObj,
-      DocId id, DocIdEncoder docIdEncoder, Set<String> excludedAttributes,
-      String displayUrl) throws DfException, IOException, URISyntaxException {
+      DocId id) throws DfException, IOException, URISyntaxException {
     // Include document attributes as metadata.
-    getMetadata(resp, dmSysbObj, id, excludedAttributes);
+    getMetadata(resp, dmSysbObj, id);
 
     // If it is a virtual document, include links to the child documents.
     if (dmSysbObj.isVirtualDocument()) {
-      getVdocChildLinks(resp, dmSysbObj, id, docIdEncoder);
+      getVdocChildLinks(resp, dmSysbObj, id);
     }
 
     // Return the content.
@@ -951,8 +933,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   }
 
   /** Supplies the document attributes as metadata in the response. */
-  private void getMetadata(Response resp, IDfSysObject dmSysbObj, DocId id,
-      Set<String> excludedAttributes) throws DfException, IOException {
+  private void getMetadata(Response resp, IDfSysObject dmSysbObj, DocId id)
+      throws DfException, IOException {
     Set<String> attributeNames = getAttributeNames(dmSysbObj);
     for (String name : attributeNames) {
       if (!excludedAttributes.contains(name)) {
@@ -986,7 +968,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
   /** Supplies VDoc children as external link metadata in the response. */
   private void getVdocChildLinks(Response resp, IDfSysObject dmSysbObj,
-      DocId id, DocIdEncoder docIdEncoder) throws DfException, IOException {
+      DocId id) throws DfException, IOException {
     IDfVirtualDocument vDoc = dmSysbObj.asVirtualDocument("CURRENT", false);
     IDfVirtualDocumentNode root = vDoc.getRootNode();
     int count = root.getChildCount();
@@ -1002,19 +984,18 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   }
 
   /** Returns the Folder's contents as links in a generated HTML document. */
-  private void getFolderContent(Response resp, IDfFolder dmFolder, DocId id,
-      DocIdEncoder docIdEncoder, Set<String> excludedAttributes) 
+  private void getFolderContent(Response resp, IDfFolder dmFolder, DocId id)
       throws DfException, IOException {
     // Include folder attributes as metadata.
-    getMetadata(resp, dmFolder, id, excludedAttributes);
+    getMetadata(resp, dmFolder, id);
 
     logger.log(Level.FINER, "Listing contents of folder: {0} ",
         dmFolder.getObjectName());
     IDfCollection dmCollection =
         dmFolder.getContents("r_object_id, object_name");
 
-    try (HtmlResponseWriter htmlWriter =
-         createHtmlResponseWriter(resp, docIdEncoder)) {
+    // TODO(bmj): Use maxHtmlSize in getFolderContent.
+    try (HtmlResponseWriter htmlWriter = createHtmlResponseWriter(resp)) {
       htmlWriter.start(id, dmFolder.getObjectName());
       while (dmCollection.next()) {
         String objId = dmCollection.getString("r_object_id");
@@ -1034,8 +1015,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
   }
 
-  private HtmlResponseWriter createHtmlResponseWriter(Response response,
-      DocIdEncoder docIdEncoder) throws IOException {
+  private HtmlResponseWriter createHtmlResponseWriter(Response response)
+      throws IOException {
     response.setContentType("text/html; charset=" + CHARSET.name());
     Writer writer = new OutputStreamWriter(response.getOutputStream(), CHARSET);
     // TODO(ejona): Get locale from request.
