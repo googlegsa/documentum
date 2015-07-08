@@ -1194,21 +1194,21 @@ public class DocumentumAdaptorTest {
 
   private void checkGetRootContent(String whereClause, int maxHtmlLinks,
       String... expectedCabinets) throws Exception {
-    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-    DocIdEncoder docidEncoder =
-        ProxyAdaptorContext.getInstance().getDocIdEncoder();
-    MockRequest request = new MockRequest(adaptor.docIdFromPath("/"));
-    MockResponse response = new MockResponse();
-
     List<String> queries = new ArrayList<>();
     Logging.captureLogMessages(DocumentumAdaptor.class,
         "Get All Cabinets Query", queries);
 
-    adaptor.getDocContentHelper(request, response, dmClientX, 
-        proxyCls.getProxySessionManager(), docidEncoder, ImmutableList.of("/"),
-        null, whereClause, maxHtmlLinks, "");
+    String startPath = "/";
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    DocIdEncoder docidEncoder = context.getDocIdEncoder();
+    Config config = initTestAdaptorConfig(context);
+    config.overrideKey("documentum.src", startPath);
+    config.overrideKey("documentum.maxHtmlSize", "" + maxHtmlLinks);
+    config.overrideKey("documentum.cabinetWhereCondition", whereClause);
+
+    Request request =
+        new MockRequest(DocumentumAdaptor.docIdFromPath(startPath));
+    MockResponse response = getDocContent(context, request);
 
     assertEquals(queries.toString(), 1, queries.size());
     String query = queries.get(0); 
