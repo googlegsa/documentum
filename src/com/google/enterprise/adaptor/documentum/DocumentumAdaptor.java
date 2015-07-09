@@ -474,8 +474,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         savedException = e;
       }
       try {
-        pusher.pushGroupDefinitions(
-            getGroups(dmClientX, dmSession, principals, pushLocalGroupsOnly),
+        pusher.pushGroupDefinitions(getGroups(dmSession, principals),
             /* case sensitive */ true);
       } catch (DfException e) {
         if (savedException == null) {
@@ -494,12 +493,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   }
 
   /** Returns a map of groups and their members. */
-  @VisibleForTesting
-  Map<GroupPrincipal, Collection<Principal>> getGroups(IDfClientX dmClientX,
-      IDfSession session, Principals principals, boolean localGroupsOnly)
-      throws DfException {
+  private Map<GroupPrincipal, Collection<Principal>> getGroups(
+      IDfSession session, Principals principals) throws DfException {
     IDfQuery query = dmClientX.getQuery();
-    query.setDQL(localGroupsOnly ? LOCAL_GROUPS_QUERY : ALL_GROUPS_QUERY);
+    query.setDQL(pushLocalGroupsOnly ? LOCAL_GROUPS_QUERY : ALL_GROUPS_QUERY);
     IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
     try {
       ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups =

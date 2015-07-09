@@ -1721,6 +1721,68 @@ public class DocumentumAdaptorTest {
     assertTrue(getDocContent(path).notFound);
   }
 
+  /**
+   * Builds a list of expected DocId Records that the Pusher should receive.
+   */
+  private List<Record> expectedRecordsFor(String... paths) {
+    ImmutableList.Builder<Record> builder = ImmutableList.builder();
+    for (String path : paths) {
+      DocId docid = DocumentumAdaptor.docIdFromPath(path);
+      builder.add(new Record.Builder(docid).build());
+    }
+    return builder.build();
+  }
+
+  private void testGetDocIds(List<String> startPaths,
+      List<Record> expectedRecords) throws Exception {
+    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
+
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    Config config = initTestAdaptorConfig(context);
+    config.overrideKey("documentum.src", Joiner.on(",").join(startPaths));
+    adaptor.init(context);
+
+    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
+    adaptor.getDocIds(pusher);
+
+    assertEquals(expectedRecords, pusher.getRecords());
+  }
+
+  @Test
+  public void testGetDocIdsRootStartPath() throws Exception {
+    testGetDocIds(startPaths("/"), expectedRecordsFor("/"));
+  }
+
+  @Test
+  public void testGetDocIdsSingleStartPath() throws Exception {
+    testGetDocIds(startPaths(START_PATH), expectedRecordsFor(START_PATH));
+  }
+
+  @Test
+  public void testGetDocIdsMultipleStartPaths() throws Exception {
+    String now = getNowPlusMinutes(0);
+    String path2 = "/Folder2";
+    String path3 = "/Folder3";
+    insertFolder(now, "0bFolder2", path2);
+    insertFolder(now, "0bFolder3", path3);
+
+    testGetDocIds(startPaths(START_PATH, path2, path3),
+        expectedRecordsFor(START_PATH, path2, path3));
+  }
+
+  @Test
+  public void testGetDocIdsMultipleStartPathsSomeOffline() throws Exception {
+    String now = getNowPlusMinutes(0);
+    String path2 = "/Folder2";
+    String path3 = "/Folder3";
+    insertFolder(now, "0bFolder3", path3);
+
+    testGetDocIds(startPaths(START_PATH, path2, path3),
+        expectedRecordsFor(START_PATH, path3));
+  }
+
   private void insertUsers(String... names) throws SQLException {
     for (String name : names) {
       jdbcFixture.executeUpdate(String.format(
@@ -1807,25 +1869,42 @@ public class DocumentumAdaptorTest {
     grantPermit(id, permitobj);
   }
 
+  private Map<DocId, Acl> getAllAcls() throws Exception {
+    return getAllAcls("");
+  }
+
+  private Map<DocId, Acl> getAllAcls(String windowsDomain) throws Exception {
+    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
+
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    Config config = initTestAdaptorConfig(context);
+    config.overrideKey("documentum.windowsDomain", windowsDomain);
+    config.overrideKey("adaptor.namespace", "NS");
+    config.overrideKey("documentum.docbaseName", "Local"); // Local Namespace
+    adaptor.init(context);
+
+    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
+    adaptor.getDocIds(pusher);
+    return pusher.getNamedResources();
+  }
+
   // tests for ACLs
   // TODO: (Srinivas) -  Add a unit test and perform manual test of
   //                     user and group names with quotes in them.
   @Test
   public void testAcls() throws Exception {
-    Config config = getTestAdaptorConfig();
-
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     createAcl("4501081f80000102");
-    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Map<DocId, Acl> namedResources = getAllAcls();
 
     assertEquals(3, namedResources.size());
   }
 
   @Test
   public void testAllowAcls() throws Exception {
-    Config config = getTestAdaptorConfig();
-
     insertUsers("User1", "User2", "User3", "User4", "User5");
     String id = "4501081f80000100";
     createAcl(id);
@@ -1835,12 +1914,12 @@ public class DocumentumAdaptorTest {
     addDenyPermitToAcl(id, "User2", IDfACL.DF_PERMIT_BROWSE);
     addDenyPermitToAcl(id, "User3", IDfACL.DF_PERMIT_WRITE);
 
-    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Map<DocId, Acl> namedResources = getAllAcls();
     Acl acl = namedResources.get(new DocId(id));
-    assertEquals(ImmutableSet.of(new UserPrincipal("User4", "globalNS"),
-        new UserPrincipal("User5", "globalNS")),
+    assertEquals(ImmutableSet.of(new UserPrincipal("User4", "NS"),
+        new UserPrincipal("User5", "NS")),
         acl.getPermitUsers());
-    assertEquals(ImmutableSet.of(new UserPrincipal("User2", "globalNS")),
+    assertEquals(ImmutableSet.of(new UserPrincipal("User2", "NS")),
         acl.getDenyUsers());
     assertEquals(ImmutableSet.of(), acl.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl.getDenyGroups());
@@ -1848,8 +1927,6 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testBrowseAcls() throws Exception {
-    Config config = getTestAdaptorConfig();
-
     insertUsers("User1", "User2", "User3", "User4", "User5");
     String id = "4501081f80000100";
     createAcl(id);
@@ -1859,12 +1936,12 @@ public class DocumentumAdaptorTest {
     addDenyPermitToAcl(id, "User2", IDfACL.DF_PERMIT_BROWSE);
     addDenyPermitToAcl(id, "User3", IDfACL.DF_PERMIT_WRITE);
 
-    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Map<DocId, Acl> namedResources = getAllAcls();
     Acl acl = namedResources.get(new DocId(id));
-    assertEquals(ImmutableSet.of(new UserPrincipal("User4", "globalNS"),
-        new UserPrincipal("User5", "globalNS")),
+    assertEquals(ImmutableSet.of(new UserPrincipal("User4", "NS"),
+        new UserPrincipal("User5", "NS")),
         acl.getPermitUsers());
-    assertEquals(ImmutableSet.of(new UserPrincipal("User2", "globalNS")),
+    assertEquals(ImmutableSet.of(new UserPrincipal("User2", "NS")),
         acl.getDenyUsers());
     assertEquals(ImmutableSet.of(), acl.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl.getDenyGroups());
@@ -1872,8 +1949,6 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testGroupAcls() throws Exception {
-    Config config = getTestAdaptorConfig();
-
     insertUsers("User1", "User2");
     insertGroup("Group1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
@@ -1886,26 +1961,23 @@ public class DocumentumAdaptorTest {
     addAllowPermitToAcl(id, "Group2", IDfACL.DF_PERMIT_WRITE);
     addDenyPermitToAcl(id, "Group3", IDfACL.DF_PERMIT_READ);
 
-    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Map<DocId, Acl> namedResources = getAllAcls();
     Acl acl = namedResources.get(new DocId(id));
-    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
-        new GroupPrincipal("Group2", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "NS_Local"),
+        new GroupPrincipal("Group2", "NS_Local")),
         acl.getPermitGroups());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "NS_Local")),
         acl.getDenyGroups());
-    assertEquals(ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
-        new UserPrincipal("User2", "globalNS")),
+    assertEquals(ImmutableSet.of(new UserPrincipal("User1", "NS"),
+        new UserPrincipal("User2", "NS")),
         acl.getPermitUsers());
     assertEquals(ImmutableSet.of(), acl.getDenyUsers());
   }
 
   @Test
   public void testGroupDmWorldAcl() throws Exception {
-    Config config = getTestAdaptorConfig();
-
     insertUsers("User1", "User3");
     insertGroup("Group1", "User2", "User3");
-    insertGroup("dm_world", "User1", "User2", "User3");
     String id = "4501081f80000102";
     createAcl(id);
     addAllowPermitToAcl(id, "Group1", IDfACL.DF_PERMIT_BROWSE);
@@ -1913,21 +1985,18 @@ public class DocumentumAdaptorTest {
     addDenyPermitToAcl(id, "User1", IDfACL.DF_PERMIT_READ);
     addDenyPermitToAcl(id, "User3", IDfACL.DF_PERMIT_WRITE);
 
-    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Map<DocId, Acl> namedResources = getAllAcls();
     Acl acl = namedResources.get(new DocId(id));
-    assertEquals(ImmutableSet.of(new GroupPrincipal("dm_world", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("dm_world", "NS_Local")),
         acl.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl.getDenyGroups());
     assertEquals(ImmutableSet.of(), acl.getPermitUsers());
-    assertEquals(ImmutableSet.of(new UserPrincipal("User1", "globalNS")),
+    assertEquals(ImmutableSet.of(new UserPrincipal("User1", "NS")),
         acl.getDenyUsers());
   }
 
   @Test
   public void testDomainForAclUser() throws Exception {
-    Config config = getTestAdaptorConfig();
-    config.overrideKey("documentum.windowsDomain", "ajax");
-
     insertUsers("User1", "User2", "User3", "User4", "User5");
     String id = "4501081f80000100";
     createAcl(id);
@@ -1937,21 +2006,18 @@ public class DocumentumAdaptorTest {
     addDenyPermitToAcl(id, "User2", IDfACL.DF_PERMIT_BROWSE);
     addDenyPermitToAcl(id, "User3", IDfACL.DF_PERMIT_WRITE);
 
-    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Map<DocId, Acl> namedResources = getAllAcls("ajax");
 
     Acl acl = namedResources.get(new DocId(id));
-    assertEquals(ImmutableSet.of(new UserPrincipal("ajax\\User4", "globalNS"),
-        new UserPrincipal("ajax\\User5", "globalNS")),
+    assertEquals(ImmutableSet.of(new UserPrincipal("ajax\\User4", "NS"),
+        new UserPrincipal("ajax\\User5", "NS")),
         acl.getPermitUsers());
-    assertEquals(ImmutableSet.of(new UserPrincipal("ajax\\User2", "globalNS")),
+    assertEquals(ImmutableSet.of(new UserPrincipal("ajax\\User2", "NS")),
         acl.getDenyUsers());
   }
 
   @Test
   public void testDnsDomainForAclUser() throws Exception {
-    Config config = getTestAdaptorConfig();
-    config.overrideKey("documentum.windowsDomain", "ajax.example.com");
-
     insertUsers("User1", "User2", "User3", "User4", "User5");
     String id = "4501081f80000100";
     createAcl(id);
@@ -1961,22 +2027,19 @@ public class DocumentumAdaptorTest {
     addDenyPermitToAcl(id, "User2", IDfACL.DF_PERMIT_BROWSE);
     addDenyPermitToAcl(id, "User3", IDfACL.DF_PERMIT_WRITE);
 
-    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Map<DocId, Acl> namedResources = getAllAcls("ajax.example.com");
     Acl acl = namedResources.get(new DocId(id));
     assertEquals(ImmutableSet.of(
-        new UserPrincipal("ajax.example.com\\User4", "globalNS"),
-        new UserPrincipal("ajax.example.com\\User5", "globalNS")),
+        new UserPrincipal("ajax.example.com\\User4", "NS"),
+        new UserPrincipal("ajax.example.com\\User5", "NS")),
         acl.getPermitUsers());
     assertEquals(ImmutableSet.of(
-        new UserPrincipal("ajax.example.com\\User2", "globalNS")),
+        new UserPrincipal("ajax.example.com\\User2", "NS")),
         acl.getDenyUsers());
   }
 
   @Test
   public void testDomainForAclGroup() throws Exception {
-    Config config = getTestAdaptorConfig();
-    config.overrideKey("documentum.windowsDomain", "ajax");
-
     insertUsers("User1", "User2");
     insertGroup("Group1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
@@ -1989,12 +2052,12 @@ public class DocumentumAdaptorTest {
     addAllowPermitToAcl(id, "Group2", IDfACL.DF_PERMIT_WRITE);
     addDenyPermitToAcl(id, "Group3", IDfACL.DF_PERMIT_READ);
 
-    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Map<DocId, Acl> namedResources = getAllAcls("ajax");
     Acl acl = namedResources.get(new DocId(id));
-    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
-        new GroupPrincipal("Group2", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "NS_Local"),
+        new GroupPrincipal("Group2", "NS_Local")),
         acl.getPermitGroups());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "NS_Local")),
         acl.getDenyGroups());
   }
 
@@ -2016,10 +2079,7 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
-  public void testRequiredGroupSetAcl() throws DfException,
-      InterruptedException, SQLException {
-    Config config = getTestAdaptorConfig();
-
+  public void testRequiredGroupSetAcl() throws Exception {
     insertUsers("User1", "User2", "User3", "User4", "User5", "User6", "User7");
     insertGroup("Group1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
@@ -2035,13 +2095,13 @@ public class DocumentumAdaptorTest {
     addRequiredGroupSetToAcl(id, "GroupSet1");
     addRequiredGroupSetToAcl(id, "GroupSet2");
 
-    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Map<DocId, Acl> namedResources = getAllAcls();
     assertEquals(2, namedResources.size());
 
     Acl acl1 = namedResources.get(new DocId("45Acl0_reqGroupSet"));
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("GroupSet1", "localNS"),
-        new GroupPrincipal("GroupSet2", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("GroupSet1", "NS_Local"),
+        new GroupPrincipal("GroupSet2", "NS_Local")),
         acl1.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl1.getDenyGroups());
 
@@ -2049,17 +2109,15 @@ public class DocumentumAdaptorTest {
     assertEquals(new DocId("45Acl0_reqGroupSet"),
         acl2.getInheritFrom());
     assertEquals(InheritanceType.PARENT_OVERRIDES, acl2.getInheritanceType());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
-        new GroupPrincipal("Group2", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "NS_Local"),
+        new GroupPrincipal("Group2", "NS_Local")),
         acl2.getPermitGroups());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "NS_Local")),
         acl2.getDenyGroups());
   }
 
   @Test
   public void testRequiredGroupsAcl() throws Exception {
-    Config config = getTestAdaptorConfig();
-
     insertUsers("User1", "User2", "User3", "User4", "User5", "User6", "User7");
     insertGroup("Group1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
@@ -2077,43 +2135,41 @@ public class DocumentumAdaptorTest {
     addRequiredGroupToAcl(id, "Group5");
     addRequiredGroupToAcl(id, "Group6");
 
-    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Map<DocId, Acl> namedResources = getAllAcls();
     assertEquals(4, namedResources.size());
 
     Acl acl1 = namedResources.get(new DocId("45Acl0_Group6"));
     assertEquals(new DocId("45Acl0_Group5"), acl1.getInheritFrom());
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("Group6", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group6", "NS_Local")),
         acl1.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl1.getDenyGroups());
 
     Acl acl2 = namedResources.get(new DocId("45Acl0_Group5"));
     assertEquals(new DocId("45Acl0_Group4"), acl2.getInheritFrom());
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl2.getInheritanceType());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("Group5", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group5", "NS_Local")),
         acl2.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl2.getDenyGroups());
 
     Acl acl3 = namedResources.get(new DocId("45Acl0_Group4"));
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl3.getInheritanceType());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("Group4", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group4", "NS_Local")),
         acl3.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl3.getDenyGroups());
 
     Acl acl4 = namedResources.get(new DocId(id));
     assertEquals(new DocId("45Acl0_Group6"), acl4.getInheritFrom());
     assertEquals(InheritanceType.PARENT_OVERRIDES, acl4.getInheritanceType());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
-        new GroupPrincipal("Group2", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "NS_Local"),
+        new GroupPrincipal("Group2", "NS_Local")),
         acl4.getPermitGroups());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "NS_Local")),
         acl4.getDenyGroups());
   }
 
   @Test
   public void testRequiredGroupsAndSetsAcl() throws Exception {
-    Config config = getTestAdaptorConfig();
-
     insertUsers("User1", "User2", "User3", "User4", "User5", "User6", "User7");
     insertGroup("Group1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
@@ -2135,34 +2191,34 @@ public class DocumentumAdaptorTest {
     addRequiredGroupSetToAcl(id, "GroupSet1");
     addRequiredGroupSetToAcl(id, "GroupSet2");
 
-    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Map<DocId, Acl> namedResources = getAllAcls();
     assertEquals(5, namedResources.size());
 
     Acl acl1 = namedResources.get(new DocId("45Acl0_Group6"));
     assertEquals(new DocId("45Acl0_Group5"), acl1.getInheritFrom());
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("Group6", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group6", "NS_Local")),
         acl1.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl1.getDenyGroups());
 
     Acl acl2 = namedResources.get(new DocId("45Acl0_Group5"));
     assertEquals(new DocId("45Acl0_Group4"), acl2.getInheritFrom());
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl2.getInheritanceType());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("Group5", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group5", "NS_Local")),
         acl2.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl2.getDenyGroups());
 
     Acl acl3 = namedResources.get(new DocId("45Acl0_Group4"));
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl3.getInheritanceType());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("Group4", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group4", "NS_Local")),
         acl3.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl3.getDenyGroups());
 
     Acl acl4 = namedResources.get(new DocId("45Acl0_reqGroupSet"));
     assertEquals(new DocId("45Acl0_Group6"), acl4.getInheritFrom());
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl4.getInheritanceType());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("GroupSet1", "localNS"),
-        new GroupPrincipal("GroupSet2", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("GroupSet1", "NS_Local"),
+        new GroupPrincipal("GroupSet2", "NS_Local")),
         acl4.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl4.getDenyGroups());
 
@@ -2170,10 +2226,10 @@ public class DocumentumAdaptorTest {
     assertEquals(new DocId("45Acl0_reqGroupSet"),
         acl5.getInheritFrom());
     assertEquals(InheritanceType.PARENT_OVERRIDES, acl5.getInheritanceType());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
-        new GroupPrincipal("Group2", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "NS_Local"),
+        new GroupPrincipal("Group2", "NS_Local")),
         acl5.getPermitGroups());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group3", "NS_Local")),
         acl5.getDenyGroups());
   }
 
@@ -2181,8 +2237,6 @@ public class DocumentumAdaptorTest {
   // users and groups in permits and denies.
   @Test
   public void testMissingRequiredGroup() throws Exception {
-    Config config = getTestAdaptorConfig();
-
     insertUsers("User1", "User2", "User3");
     insertGroup("Group1", "User2", "User3");
 
@@ -2191,14 +2245,14 @@ public class DocumentumAdaptorTest {
     addAllowPermitToAcl(id, "Group1", IDfACL.DF_PERMIT_READ);
     addRequiredGroupToAcl(id, "GroupNotExists");
 
-    Map<DocId, Acl> namedResources = getAllAcls(config);
+    Map<DocId, Acl> namedResources = getAllAcls();
     assertEquals(2, namedResources.size());
 
     // TODO(srinivas): non-existent groups should be dropped from the ACL?
     Acl acl1 = namedResources.get(new DocId("45Acl0_GroupNotExists"));
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
     assertEquals(
-        ImmutableSet.of(new GroupPrincipal("GroupNotExists", "localNS")),
+        ImmutableSet.of(new GroupPrincipal("GroupNotExists", "NS_Local")),
         acl1.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl1.getDenyGroups());
 
@@ -2206,28 +2260,9 @@ public class DocumentumAdaptorTest {
     assertEquals(new DocId("45Acl0_GroupNotExists"),
         acl2.getInheritFrom());
     assertEquals(InheritanceType.PARENT_OVERRIDES, acl2.getInheritanceType());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "localNS")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "NS_Local")),
         acl2.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl2.getDenyGroups());
-  }
-
-  /* TODO(bmj): This should create the adaptor, init it with config, then call
-   * its getDocIds method with a recording pusher and return the pushed acls.
-   */
-  private Map<DocId, Acl> getAllAcls(Config config) throws DfException {
-    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
-    IDfSession session = 
-        sessionManager.getSession(config.getValue("documentum.docbaseName"));
-    try {
-      Principals principals = new Principals(session, "localNS",
-          config.getValue("adaptor.namespace"),
-          config.getValue("documentum.windowsDomain"));
-      return new DocumentumAcls(proxyCls.getProxyClientX(), session, principals)
-          .getAcls();
-    } finally {
-      sessionManager.release(session);
-    }
   }
 
   private void insertAclAudit(String id, String chronicleId, String auditObjId,
@@ -2397,27 +2432,28 @@ public class DocumentumAdaptorTest {
     assertFalse(checkpoint.equals(new Checkpoint("foo", "xyzzy")));
   }
 
-  /* TODO(bmj): This should create the adaptor, init it with config, then call
-   * its getDocIds method with a recording pusher and return the pushed groups.
-   */
-  private Map<GroupPrincipal, Collection<Principal>> getGroups(Config config)
-       throws DfException {
+  private Map<GroupPrincipal, ? extends Collection<Principal>> getGroups()
+       throws Exception {
+    return getGroups(false, "");
+  }
+
+  private Map<GroupPrincipal, ? extends Collection<Principal>> getGroups(
+      boolean localGroupsOnly, String windowsDomain) throws Exception {
     H2BackedTestProxies proxyCls = new H2BackedTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
-    IDfSession session = 
-        sessionManager.getSession(config.getValue("documentum.docbaseName"));
-    try {
-      Principals principals = new Principals(session, "localNS",
-          config.getValue("adaptor.namespace"),
-          config.getValue("documentum.windowsDomain"));
-      boolean localGroupsOnly = Boolean.parseBoolean(
-          config.getValue("documentum.pushLocalGroupsOnly"));
-      return adaptor.getGroups(dmClientX, session, principals, localGroupsOnly);
-    } finally {
-      sessionManager.release(session);
-    }
+
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    Config config = initTestAdaptorConfig(context);
+    config.overrideKey("documentum.pushLocalGroupsOnly", "" + localGroupsOnly);
+    config.overrideKey("documentum.windowsDomain", windowsDomain);
+    config.overrideKey("adaptor.namespace", "NS");
+    config.overrideKey("documentum.docbaseName", "Local"); // Local Namespace
+    adaptor.init(context);
+
+    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
+    adaptor.getDocIds(pusher);
+    return pusher.getGroups();
   }
 
   /* Filters the 'dm_world' group out of the map of groups. */
@@ -2431,129 +2467,110 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testGetGroupsDmWorldOnly() throws Exception {
-    Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2", "User3", "User4", "User5");
 
     // The only group should be the virtual group, dm_world, which consists
     // of all users.
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-        expected = ImmutableMap.of(new GroupPrincipal("dm_world", "localNS"),
-            ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
-                            new UserPrincipal("User2", "globalNS"),
-                            new UserPrincipal("User3", "globalNS"),
-                            new UserPrincipal("User4", "globalNS"),
-                            new UserPrincipal("User5", "globalNS")));
+        expected = ImmutableMap.of(new GroupPrincipal("dm_world", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                            new UserPrincipal("User2", "NS"),
+                            new UserPrincipal("User3", "NS"),
+                            new UserPrincipal("User4", "NS"),
+                            new UserPrincipal("User5", "NS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
-
-    assertEquals(expected, groups);
+    assertEquals(expected, getGroups());
   }
 
   @Test
   public void testGetGroupsUserMembersOnly() throws Exception {
-    Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2", "User3", "User4", "User5");
     insertGroup("Group1", "User1", "User2", "User3");
     insertGroup("Group2", "User3", "User4", "User5");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-        expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
-            ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
-                            new UserPrincipal("User2", "globalNS"),
-                            new UserPrincipal("User3", "globalNS")),
-            new GroupPrincipal("Group2", "localNS"),
-            ImmutableSet.of(new UserPrincipal("User3", "globalNS"),
-                            new UserPrincipal("User4", "globalNS"),
-                            new UserPrincipal("User5", "globalNS")));
+        expected = ImmutableMap.of(new GroupPrincipal("Group1", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                            new UserPrincipal("User2", "NS"),
+                            new UserPrincipal("User3", "NS")),
+            new GroupPrincipal("Group2", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User3", "NS"),
+                            new UserPrincipal("User4", "NS"),
+                            new UserPrincipal("User5", "NS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
-
-    assertEquals(expected, filterDmWorld(groups));
+    assertEquals(expected, filterDmWorld(getGroups()));
   }
 
   @Test
   public void testGetGroupsInvalidMembers() throws Exception {
-    Config config = getTestAdaptorConfig();
     insertUsers("User1", "User3", "User5");
     insertGroup("Group1", "User1", "User2", "User3");
     insertGroup("Group2", "User3", "User4", "User5");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-        expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
-            ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
-                            new UserPrincipal("User3", "globalNS")),
-            new GroupPrincipal("Group2", "localNS"),
-            ImmutableSet.of(new UserPrincipal("User3", "globalNS"),
-                            new UserPrincipal("User5", "globalNS")));
+        expected = ImmutableMap.of(new GroupPrincipal("Group1", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                            new UserPrincipal("User3", "NS")),
+            new GroupPrincipal("Group2", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User3", "NS"),
+                            new UserPrincipal("User5", "NS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
-
-    assertEquals(expected, filterDmWorld(groups));
+    assertEquals(expected, filterDmWorld(getGroups()));
   }
 
   @Test
   public void testGetGroupsEmptyGroup() throws Exception {
-    Config config = getTestAdaptorConfig();
     insertUsers("User1", "User3", "User5");
     insertGroup("Group1", "User1", "User2", "User3");
     insertGroup("Group2");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-        expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
-            ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
-                            new UserPrincipal("User3", "globalNS")),
-            new GroupPrincipal("Group2", "localNS"),
+        expected = ImmutableMap.of(new GroupPrincipal("Group1", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                            new UserPrincipal("User3", "NS")),
+            new GroupPrincipal("Group2", "NS_Local"),
             ImmutableSet.<Principal>of());
 
-    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
-
-    assertEquals(expected, filterDmWorld(groups));
+    assertEquals(expected, filterDmWorld(getGroups()));
   }
 
   @Test
   public void testGetGroupsUserAndGroupMembers() throws Exception {
-    Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2", "User3", "User4", "User5");
     insertGroup("Group1", "User1", "User2", "User3");
     insertGroup("Group2", "Group1", "User4", "User5");
 
-   ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-       expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
-           ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
-                           new UserPrincipal("User2", "globalNS"),
-                           new UserPrincipal("User3", "globalNS")),
-           new GroupPrincipal("Group2", "localNS"),
-           ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
-                           new UserPrincipal("User4", "globalNS"),
-                           new UserPrincipal("User5", "globalNS")));
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+       expected = ImmutableMap.of(new GroupPrincipal("Group1", "NS_Local"),
+           ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                           new UserPrincipal("User2", "NS"),
+                           new UserPrincipal("User3", "NS")),
+           new GroupPrincipal("Group2", "NS_Local"),
+           ImmutableSet.of(new GroupPrincipal("Group1", "NS_Local"),
+                           new UserPrincipal("User4", "NS"),
+                           new UserPrincipal("User5", "NS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
-
-    assertEquals(expected, filterDmWorld(groups));
+    assertEquals(expected, filterDmWorld(getGroups()));
   }
 
   @Test
   public void testGetGroupsDifferentMemberLoginName() throws Exception {
-    Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2");
     jdbcFixture.executeUpdate("insert into dm_user(user_name, user_login_name) "
         + "values('User3', 'UserTres')");
     insertGroup("Group1", "User1", "User2", "User3");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-        expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
-            ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
-                            new UserPrincipal("User2", "globalNS"),
-                            new UserPrincipal("UserTres", "globalNS")));
+        expected = ImmutableMap.of(new GroupPrincipal("Group1", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                            new UserPrincipal("User2", "NS"),
+                            new UserPrincipal("UserTres", "NS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
-
-    assertEquals(expected, filterDmWorld(groups));
+    assertEquals(expected, filterDmWorld(getGroups()));
   }
 
   @Test
   public void testGetGroupsDifferentGroupLoginName() throws Exception {
-    Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2");
     jdbcFixture.executeUpdate(
         "insert into dm_user(user_name, user_login_name, r_is_group) "
@@ -2563,18 +2580,15 @@ public class DocumentumAdaptorTest {
         + "values('Group1', 'User1,User2', '')");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-        expected = ImmutableMap.of(new GroupPrincipal("GroupUno", "localNS"),
-            ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
-                            new UserPrincipal("User2", "globalNS")));
+        expected = ImmutableMap.of(new GroupPrincipal("GroupUno", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                            new UserPrincipal("User2", "NS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
-
-    assertEquals(expected, filterDmWorld(groups));
+    assertEquals(expected, filterDmWorld(getGroups()));
   }
 
   @Test
   public void testGetGroupsMemberLdapDn() throws Exception {
-    Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2");
     jdbcFixture.executeUpdate("insert into dm_user(user_name, user_login_name, "
         + "user_source, user_ldap_dn, r_is_group) values('User3', 'User3', "
@@ -2582,19 +2596,16 @@ public class DocumentumAdaptorTest {
     insertGroup("Group1", "User1", "User2", "User3");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-        expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
-            ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
-                            new UserPrincipal("User2", "globalNS"),
-                            new UserPrincipal("test\\User3", "globalNS")));
+        expected = ImmutableMap.of(new GroupPrincipal("Group1", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                            new UserPrincipal("User2", "NS"),
+                            new UserPrincipal("test\\User3", "NS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
-
-    assertEquals(expected, filterDmWorld(groups));
+    assertEquals(expected, filterDmWorld(getGroups()));
   }
 
   @Test
   public void testGetGroupsGroupLdapDn() throws Exception {
-    Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2");
     jdbcFixture.executeUpdate("insert into dm_user(user_name, user_login_name, "
         + "user_source, user_ldap_dn) values('Group1', 'Group1', 'LDAP', "
@@ -2605,97 +2616,87 @@ public class DocumentumAdaptorTest {
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
         expected =
-            ImmutableMap.of(new GroupPrincipal("test\\Group1", "globalNS"),
-                ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
-                                new UserPrincipal("User2", "globalNS")));
+            ImmutableMap.of(new GroupPrincipal("test\\Group1", "NS"),
+                ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                                new UserPrincipal("User2", "NS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
-
-    assertEquals(expected, filterDmWorld(groups));
+    assertEquals(expected, filterDmWorld(getGroups()));
   }
 
   @Test
   public void testGetGroupsWindowsDomainUsers() throws Exception {
-    Config config = getTestAdaptorConfig();
-    config.overrideKey("documentum.windowsDomain", "TEST");
     insertUsers("User1", "User2", "User3", "User4", "User5");
     insertGroup("Group1", "User1", "User2", "User3");
     insertGroup("Group2", "Group1", "User4", "User5");
 
    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-       expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
-           ImmutableSet.of(new UserPrincipal("TEST\\User1", "globalNS"),
-                           new UserPrincipal("TEST\\User2", "globalNS"),
-                           new UserPrincipal("TEST\\User3", "globalNS")),
-           new GroupPrincipal("Group2", "localNS"),
-           ImmutableSet.of(new GroupPrincipal("Group1", "localNS"),
-                           new UserPrincipal("TEST\\User4", "globalNS"),
-                           new UserPrincipal("TEST\\User5", "globalNS")));
+       expected = ImmutableMap.of(new GroupPrincipal("Group1", "NS_Local"),
+           ImmutableSet.of(new UserPrincipal("TEST\\User1", "NS"),
+                           new UserPrincipal("TEST\\User2", "NS"),
+                           new UserPrincipal("TEST\\User3", "NS")),
+           new GroupPrincipal("Group2", "NS_Local"),
+           ImmutableSet.of(new GroupPrincipal("Group1", "NS_Local"),
+                           new UserPrincipal("TEST\\User4", "NS"),
+                           new UserPrincipal("TEST\\User5", "NS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
+    Map<GroupPrincipal, ? extends Collection<Principal>> groups =
+        getGroups(/* localGroupsOnly */ false, /* windowsDomain */ "TEST");
 
     assertEquals(expected, filterDmWorld(groups));
   }
 
   @Test
   public void testGetGroupsLocalAndGlobalGroups() throws Exception {
-    Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2", "User3", "User4", "User5");
     insertGroup("Group1", "User1", "User2", "User3");
     insertLdapGroup("Group2", "User3", "User4", "User5");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-        expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
-            ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
-                            new UserPrincipal("User2", "globalNS"),
-                            new UserPrincipal("User3", "globalNS")),
-            new GroupPrincipal("Group2", "globalNS"),
-            ImmutableSet.of(new UserPrincipal("User3", "globalNS"),
-                            new UserPrincipal("User4", "globalNS"),
-                            new UserPrincipal("User5", "globalNS")));
+        expected = ImmutableMap.of(new GroupPrincipal("Group1", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                            new UserPrincipal("User2", "NS"),
+                            new UserPrincipal("User3", "NS")),
+            new GroupPrincipal("Group2", "NS"),
+            ImmutableSet.of(new UserPrincipal("User3", "NS"),
+                            new UserPrincipal("User4", "NS"),
+                            new UserPrincipal("User5", "NS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
-
-    assertEquals(expected, filterDmWorld(groups));
+    assertEquals(expected, filterDmWorld(getGroups()));
   }
 
   @Test
   public void testGetGroupsGlobalGroupMembers() throws Exception {
-    Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2", "User3", "User4", "User5");
     insertLdapGroup("Group1", "User1", "User2", "User3");
     insertGroup("Group2", "Group1", "User4", "User5");
 
    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-       expected = ImmutableMap.of(new GroupPrincipal("Group1", "globalNS"),
-           ImmutableSet.of(new UserPrincipal("User1", "globalNS"),
-                           new UserPrincipal("User2", "globalNS"),
-                           new UserPrincipal("User3", "globalNS")),
-           new GroupPrincipal("Group2", "localNS"),
-           ImmutableSet.of(new GroupPrincipal("Group1", "globalNS"),
-                           new UserPrincipal("User4", "globalNS"),
-                           new UserPrincipal("User5", "globalNS")));
+       expected = ImmutableMap.of(new GroupPrincipal("Group1", "NS"),
+           ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                           new UserPrincipal("User2", "NS"),
+                           new UserPrincipal("User3", "NS")),
+           new GroupPrincipal("Group2", "NS_Local"),
+           ImmutableSet.of(new GroupPrincipal("Group1", "NS"),
+                           new UserPrincipal("User4", "NS"),
+                           new UserPrincipal("User5", "NS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
-
-    assertEquals(expected, filterDmWorld(groups));
+    assertEquals(expected, filterDmWorld(getGroups()));
   }
 
   @Test
   public void testGetGroupsLocalGroupsOnly() throws Exception {
-    Config config = getTestAdaptorConfig();
-    config.overrideKey("documentum.pushLocalGroupsOnly", "true");
     insertUsers("User1", "User2", "User3", "User4", "User5");
     insertLdapGroup("Group1", "User1", "User2", "User3");
     insertGroup("Group2", "Group1", "User4", "User5");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-       expected = ImmutableMap.of(new GroupPrincipal("Group2", "localNS"),
-           ImmutableSet.of(new GroupPrincipal("Group1", "globalNS"),
-                           new UserPrincipal("User4", "globalNS"),
-                           new UserPrincipal("User5", "globalNS")));
+       expected = ImmutableMap.of(new GroupPrincipal("Group2", "NS_Local"),
+           ImmutableSet.of(new GroupPrincipal("Group1", "NS"),
+                           new UserPrincipal("User4", "NS"),
+                           new UserPrincipal("User5", "NS")));
 
-    Map<GroupPrincipal, Collection<Principal>> groups = getGroups(config);
+    Map<GroupPrincipal, ? extends Collection<Principal>> groups =
+        getGroups(/* localGroupsOnly */ true, "");
 
     assertEquals(expected, filterDmWorld(groups));
   }
@@ -2863,7 +2864,7 @@ public class DocumentumAdaptorTest {
    * its getModifiedDocIds method with a recording pusher.
    */
   private void checkModifiedDocIdsPushed(List<String> startPaths,
-      Checkpoint checkpoint, List<Record> expectedDocIds,
+      Checkpoint checkpoint, List<Record> expectedRecords,
       Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
     H2BackedTestProxies proxyCls = new H2BackedTestProxies();
@@ -2879,7 +2880,7 @@ public class DocumentumAdaptorTest {
     } finally {
       sessionManager.release(session);
     }
-    assertEquals(expectedDocIds, pusher.getRecords());
+    assertEquals(expectedRecords, pusher.getRecords());
     assertEquals(expectedCheckpoint, endCheckpoint);
   }
 
