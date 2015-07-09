@@ -133,9 +133,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private int maxHtmlSize;
   private String cabinetWhereCondition;
 
-  private Checkpoint modifiedAclsCheckpoint = new Checkpoint();
-  private Checkpoint modifiedDocumentsCheckpoint = new Checkpoint();
-  private Checkpoint modifiedGroupsCheckpoint = new Checkpoint();
+  @VisibleForTesting Checkpoint modifiedAclsCheckpoint = new Checkpoint();
+  @VisibleForTesting Checkpoint modifiedDocumentsCheckpoint = new Checkpoint();
+  @VisibleForTesting Checkpoint modifiedGroupsCheckpoint = new Checkpoint();
 
   public static void main(String[] args) {
     AbstractAdaptor.main(new DocumentumAdaptor(), args);
@@ -588,8 +588,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       // Push modified documents.
       try {
         validateStartPaths(dmSession);
-        modifiedDocumentsCheckpoint = pushDocumentUpdates(pusher, dmClientX, 
-            dmSession, validatedStartPaths, modifiedDocumentsCheckpoint);
+        modifiedDocumentsCheckpoint = pushDocumentUpdates(pusher, dmSession,
+            modifiedDocumentsCheckpoint);
       } catch (DfException e) {
         savedException = e;
       }
@@ -597,16 +597,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       Principals principals = new Principals(dmSession, localNamespace,
           globalNamespace, windowsDomain);
       try {
-        modifiedAclsCheckpoint = pushAclUpdates(pusher, dmClientX, dmSession,
+        modifiedAclsCheckpoint = pushAclUpdates(pusher, dmSession,
           principals, modifiedAclsCheckpoint);
       } catch (DfException e) {
         savedException = e;
       }
 
       try {
-        modifiedGroupsCheckpoint = pushGroupUpdates(pusher, dmClientX,
-            dmSession, principals, pushLocalGroupsOnly, 
-            modifiedGroupsCheckpoint);
+        modifiedGroupsCheckpoint = pushGroupUpdates(pusher, dmSession,
+            principals, modifiedGroupsCheckpoint);
       } catch (DfException e) {
         savedException = e;
       }
@@ -623,8 +622,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   /**
    * Push ACL updates to GSA.
    */
-  private Checkpoint pushAclUpdates(DocIdPusher pusher, IDfClientX dmClientX,
-      IDfSession session, Principals principals, Checkpoint checkpoint)
+  private Checkpoint pushAclUpdates(DocIdPusher pusher, IDfSession session,
+      Principals principals, Checkpoint checkpoint)
       throws DfException, IOException, InterruptedException {
     DocumentumAcls dctmAcls =
         new DocumentumAcls(dmClientX, session, principals);
@@ -636,9 +635,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   /**
    * Push Document updates to GSA.
    */
-  @VisibleForTesting
-  Checkpoint pushDocumentUpdates(DocIdPusher pusher, IDfClientX dmClientX,
-      IDfSession session, List<String> startPaths, Checkpoint checkpoint)
+  private Checkpoint pushDocumentUpdates(DocIdPusher pusher, IDfSession session,
+      Checkpoint checkpoint)
       throws DfException, IOException, InterruptedException {
     String queryStr = makeUpdatedDocsQuery(startPaths, checkpoint);
     logger.log(Level.FINER, "Modified DocIds Query: {0}", queryStr);
@@ -724,12 +722,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   /**
    * Push Group updates to GSA.
    */
-  @VisibleForTesting
-  Checkpoint pushGroupUpdates(DocIdPusher pusher, IDfClientX dmClientX,
-      IDfSession session, Principals principals, boolean localGroupsOnly,
-      Checkpoint checkpoint)
+  private Checkpoint pushGroupUpdates(DocIdPusher pusher, IDfSession session,
+      Principals principals, Checkpoint checkpoint)
       throws DfException, IOException, InterruptedException {
-    String queryStr = makeUpdatedGroupsQuery(localGroupsOnly, checkpoint);
+    String queryStr = makeUpdatedGroupsQuery(checkpoint);
     logger.log(Level.FINER, "Modified Groups Query: {0}", queryStr);
     IDfQuery query = dmClientX.getQuery();
     query.setDQL(queryStr);
@@ -751,8 +747,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
   }
 
-  private String makeUpdatedGroupsQuery(boolean localGroupsOnly,
-      Checkpoint checkpoint) {
+  private String makeUpdatedGroupsQuery(Checkpoint checkpoint) {
     StringBuilder query = new StringBuilder();
     query.append("SELECT r_object_id, group_name, groups_names, users_names, ")
         .append("r_modify_date, ")
@@ -763,7 +758,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
             + "r_object_id > ''{1}'') OR (r_modify_date > DATE(''{0}'',"
             + "''yyyy-mm-dd hh:mi:ss'')))",
             checkpoint.getLastModified(), checkpoint.getObjectId()));
-    if (localGroupsOnly) {
+    if (pushLocalGroupsOnly) {
       query.append(" AND (group_source IS NULL OR group_source <> 'LDAP')");
     }
     return query.toString();

@@ -25,7 +25,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Multimap;
-import com.google.common.collect.Multimaps;
 import com.google.common.collect.TreeMultimap;
 import com.google.enterprise.adaptor.Acl;
 import com.google.enterprise.adaptor.Acl.InheritanceType;
@@ -85,14 +84,20 @@ import java.util.Date;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.Vector;
 
+// TODO(bmj): Add tests to test the exception handling.
+
+// TODO(bmj): Add tests that call getDocIds and getModifiedDocIds with 
+// expected returns for all three items: documents, groups, and ACLs.
+
 /** Unit tests for DocumentAdaptor class. */
 public class DocumentumAdaptorTest {
+
+  private static enum LocalGroupsOnly { TRUE, FALSE };
 
   private static final SimpleDateFormat dateFormat =
       new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
@@ -1349,7 +1354,7 @@ public class DocumentumAdaptorTest {
   }
 
   private void testDocContent(Date lastCrawled, Date lastModified,
-      boolean expectNotModified) throws Exception {
+      boolean expectNotModified) throws DfException, IOException, SQLException {
     String path = START_PATH + "/object1";
     String contentType = "crtext/html";
     String content = "<html><body>Hello</body></html>";
@@ -1372,7 +1377,8 @@ public class DocumentumAdaptorTest {
     }
   }
 
-  private MockResponse getDocContent(String path) throws Exception {
+  private MockResponse getDocContent(String path)
+      throws DfException, IOException {
     AdaptorContext context = ProxyAdaptorContext.getInstance();
     initTestAdaptorConfig(context);
     Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
@@ -1380,7 +1386,7 @@ public class DocumentumAdaptorTest {
   }
 
   private MockResponse getDocContent(AdaptorContext context, Request request)
-      throws Exception {
+      throws DfException, IOException {
     H2BackedTestProxies proxyCls = new H2BackedTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
@@ -1734,7 +1740,8 @@ public class DocumentumAdaptorTest {
   }
 
   private void testGetDocIds(List<String> startPaths,
-      List<Record> expectedRecords) throws Exception {
+      List<Record> expectedRecords)
+      throws DfException, IOException, InterruptedException {
     H2BackedTestProxies proxyCls = new H2BackedTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
@@ -1873,7 +1880,8 @@ public class DocumentumAdaptorTest {
     return getAllAcls("");
   }
 
-  private Map<DocId, Acl> getAllAcls(String windowsDomain) throws Exception {
+  private Map<DocId, Acl> getAllAcls(String windowsDomain)
+      throws DfException, IOException, InterruptedException {
     H2BackedTestProxies proxyCls = new H2BackedTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
@@ -2274,19 +2282,6 @@ public class DocumentumAdaptorTest {
             id, chronicleId, auditObjId, eventName, date));
   }
 
-  private DocumentumAcls getDocumentumAcls() throws DfException {
-    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(proxyCls.getProxyClientX());
-    Config config = getTestAdaptorConfig();
-    IDfSession session = proxyCls.getProxySessionManager().getSession("test");
-    DocumentumAcls dctmAcls =
-        new DocumentumAcls(proxyCls.getProxyClientX(), session, new Principals(
-            session, "localNS", config.getValue("adaptor.namespace"),
-            config.getValue("documentum.windowsDomain")));
-    return dctmAcls;
-  }
-
   /**
    * Returns date string for the given number of minutes into the future
    * or past.
@@ -2300,10 +2295,27 @@ public class DocumentumAdaptorTest {
     return dateFormat.format(calendar.getTime());
   }
 
+  private void testUpdateAcls(Checkpoint checkpoint, Set<DocId> expectedAclIds,
+      Checkpoint expectedCheckpoint)
+      throws DfException, IOException, InterruptedException {
+    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
+
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    initTestAdaptorConfig(context);
+    adaptor.init(context);
+
+    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
+    adaptor.modifiedAclsCheckpoint = checkpoint;
+    adaptor.getModifiedDocIds(pusher);
+
+    assertEquals(expectedAclIds, pusher.getNamedResources().keySet());
+    assertEquals(expectedCheckpoint, adaptor.modifiedAclsCheckpoint);
+  }
+
   @Test
   public void testUpdateAcls() throws Exception {
-    DocumentumAcls dctmAcls = getDocumentumAcls();
-
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     createAcl("4501081f80000102");
@@ -2312,22 +2324,16 @@ public class DocumentumAdaptorTest {
     insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "236", "4501081f80000102", "dm_destroy", dateStr);
 
-    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(new Checkpoint());
-    assertEquals(ImmutableSet.of(
-        new DocId("4501081f80000100"),
-        new DocId("4501081f80000101"),
-        new DocId("4501081f80000102")), aclMap.keySet());
-    assertEquals(new Checkpoint(dateStr, "125"),
-        dctmAcls.getUpdateAclsCheckpoint());
-
-    Acl acl = aclMap.get(new DocId("4501081f80000100"));
-    assertTrue(acl.getPermitUsers().isEmpty());
+    testUpdateAcls(new Checkpoint(),
+        ImmutableSet.of(
+            new DocId("4501081f80000100"),
+            new DocId("4501081f80000101"),
+            new DocId("4501081f80000102")),
+        new Checkpoint(dateStr, "125"));
   }
 
   @Test
   public void testUpdateAclsWithSameChronicleId() throws Exception {
-    DocumentumAcls dctmAcls = getDocumentumAcls();
-
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     createAcl("4501081f80000102");
@@ -2336,17 +2342,13 @@ public class DocumentumAdaptorTest {
     insertAclAudit("124", "234", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "234", "4501081f80000102", "dm_destroy", dateStr);
 
-    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(new Checkpoint());
-    assertEquals(ImmutableSet.of(new DocId("4501081f80000100")),
-        aclMap.keySet());
-    assertEquals(new Checkpoint(dateStr, "125"),
-        dctmAcls.getUpdateAclsCheckpoint());
+    testUpdateAcls(new Checkpoint(),
+        ImmutableSet.of(new DocId("4501081f80000100")),
+        new Checkpoint(dateStr, "125"));
   }
 
   @Test
   public void testPreviouslyUpdatedAcls() throws Exception {
-    DocumentumAcls dctmAcls = getDocumentumAcls();
-
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     createAcl("4501081f80000102");
@@ -2356,15 +2358,11 @@ public class DocumentumAdaptorTest {
     insertAclAudit("125", "236", "4501081f80000102", "dm_destroy", dateStr);
 
     Checkpoint checkpoint = new Checkpoint(getNowPlusMinutes(0), "0");
-    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(checkpoint);
-    assertEquals(ImmutableMap.of(), aclMap);
-    assertEquals(checkpoint, dctmAcls.getUpdateAclsCheckpoint());
+    testUpdateAcls(checkpoint, ImmutableSet.<DocId>of(), checkpoint);
   }
 
   @Test
   public void testMultiUpdateAcls() throws Exception {
-    DocumentumAcls dctmAcls = getDocumentumAcls();
-
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     createAcl("4501081f80000102");
@@ -2373,46 +2371,42 @@ public class DocumentumAdaptorTest {
     insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "236", "4501081f80000102", "dm_saveasnew", dateStr);
 
-    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(new Checkpoint());
-    assertEquals(ImmutableSet.of(
-        new DocId("4501081f80000100"),
-        new DocId("4501081f80000101"),
-        new DocId("4501081f80000102")), aclMap.keySet());
-    assertEquals(new Checkpoint(dateStr, "125"),
-        dctmAcls.getUpdateAclsCheckpoint());
+    Checkpoint firstCheckpoint = new Checkpoint(dateStr, "125");
+    testUpdateAcls(new Checkpoint(),
+        ImmutableSet.of(
+            new DocId("4501081f80000100"),
+            new DocId("4501081f80000101"),
+            new DocId("4501081f80000102")),
+        firstCheckpoint);
 
     dateStr = getNowPlusMinutes(15);
     insertAclAudit("126", "237", "4501081f80000103", "dm_saveasnew", dateStr);
     insertAclAudit("127", "238", "4501081f80000104", "dm_destroy", dateStr);
 
-    aclMap = dctmAcls.getUpdateAcls(dctmAcls.getUpdateAclsCheckpoint());
-    assertEquals(ImmutableSet.of(
-        new DocId("4501081f80000103"), 
-        new DocId("4501081f80000104")), aclMap.keySet());
-    assertEquals(new Checkpoint(dateStr, "127"),
-        dctmAcls.getUpdateAclsCheckpoint());
+    testUpdateAcls(firstCheckpoint,
+        ImmutableSet.of(
+            new DocId("4501081f80000103"),
+            new DocId("4501081f80000104")),
+        new Checkpoint(dateStr, "127"));
   }
 
   @Test
   public void testMultiUpdateAclsWithNoResults() throws Exception {
-    DocumentumAcls dctmAcls = getDocumentumAcls();
-
     createAcl("4501081f80000106");
     createAcl("4501081f80000107");
     String dateStr = getNowPlusMinutes(20);
     insertAclAudit("128", "234", "4501081f80000106", "dm_saveasnew", dateStr);
     insertAclAudit("129", "235", "4501081f80000107", "dm_saveasnew", dateStr);
 
-    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(new Checkpoint());
-    assertEquals(ImmutableSet.of(
-        new DocId("4501081f80000106"),
-        new DocId("4501081f80000107")), aclMap.keySet());
-    Checkpoint checkpoint = dctmAcls.getUpdateAclsCheckpoint();
-    assertEquals(new Checkpoint(dateStr, "129"), checkpoint);
+    Checkpoint expectedCheckpoint = new Checkpoint(dateStr, "129");
+    testUpdateAcls(new Checkpoint(),
+        ImmutableSet.of(
+            new DocId("4501081f80000106"),
+            new DocId("4501081f80000107")),
+        expectedCheckpoint);
 
-    aclMap = dctmAcls.getUpdateAcls(checkpoint);
-    assertEquals(ImmutableSet.of(), aclMap.keySet());
-    assertEquals(checkpoint, dctmAcls.getUpdateAclsCheckpoint());
+    testUpdateAcls(expectedCheckpoint, ImmutableSet.<DocId>of(),
+        expectedCheckpoint);
   }
 
   @Test
@@ -2434,18 +2428,20 @@ public class DocumentumAdaptorTest {
 
   private Map<GroupPrincipal, ? extends Collection<Principal>> getGroups()
        throws Exception {
-    return getGroups(false, "");
+    return getGroups(LocalGroupsOnly.FALSE, "");
   }
 
   private Map<GroupPrincipal, ? extends Collection<Principal>> getGroups(
-      boolean localGroupsOnly, String windowsDomain) throws Exception {
+      LocalGroupsOnly localGroupsOnly, String windowsDomain)
+      throws DfException, IOException, InterruptedException {
     H2BackedTestProxies proxyCls = new H2BackedTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
     AdaptorContext context = ProxyAdaptorContext.getInstance();
     Config config = initTestAdaptorConfig(context);
-    config.overrideKey("documentum.pushLocalGroupsOnly", "" + localGroupsOnly);
+    config.overrideKey("documentum.pushLocalGroupsOnly",
+        localGroupsOnly.toString());
     config.overrideKey("documentum.windowsDomain", windowsDomain);
     config.overrideKey("adaptor.namespace", "NS");
     config.overrideKey("documentum.docbaseName", "Local"); // Local Namespace
@@ -2640,7 +2636,7 @@ public class DocumentumAdaptorTest {
                            new UserPrincipal("TEST\\User5", "NS")));
 
     Map<GroupPrincipal, ? extends Collection<Principal>> groups =
-        getGroups(/* localGroupsOnly */ false, /* windowsDomain */ "TEST");
+        getGroups(LocalGroupsOnly.FALSE, "TEST");
 
     assertEquals(expected, filterDmWorld(groups));
   }
@@ -2696,7 +2692,7 @@ public class DocumentumAdaptorTest {
                            new UserPrincipal("User5", "NS")));
 
     Map<GroupPrincipal, ? extends Collection<Principal>> groups =
-        getGroups(/* localGroupsOnly */ true, "");
+        getGroups(LocalGroupsOnly.TRUE, "");
 
     assertEquals(expected, filterDmWorld(groups));
   }
@@ -2706,39 +2702,33 @@ public class DocumentumAdaptorTest {
     insertGroupEx(lastModified, "", groupName, members);
   }
 
-  /* TODO(bmj): This should create the adaptor, init it with config, then call
-   * its getModifiedDocIds method with a recording pusher.
-   */
-  private void checkModifiedGroupsPushed(Config config, Checkpoint checkpoint,
+  private void checkModifiedGroupsPushed(LocalGroupsOnly localGroupsOnly,
+      Checkpoint checkpoint,
       Map<GroupPrincipal, ? extends Collection<? extends Principal>>
       expectedGroups, Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
     H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
-    IDfSession session = 
-        sessionManager.getSession(config.getValue("documentum.docbaseName"));
-    Checkpoint endCheckpoint;
-    try {
-      Principals principals = new Principals(session, "localNS",
-          config.getValue("adaptor.namespace"),
-          config.getValue("documentum.windowsDomain"));
-      boolean localGroupsOnly = Boolean.parseBoolean(
-          config.getValue("documentum.pushLocalGroupsOnly"));
-      endCheckpoint = adaptor.pushGroupUpdates(pusher, dmClientX, session,
-          principals, localGroupsOnly, checkpoint);
-    } finally {
-      sessionManager.release(session);
-    }
+
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    Config config = initTestAdaptorConfig(context);
+    config.overrideKey("documentum.pushLocalGroupsOnly",
+        localGroupsOnly.toString());
+    config.overrideKey("adaptor.namespace", "NS");
+    config.overrideKey("documentum.docbaseName", "Local"); // Local Namespace
+    adaptor.init(context);
+
+    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
+    adaptor.modifiedGroupsCheckpoint = checkpoint;
+    adaptor.getModifiedDocIds(pusher);
+
     assertEquals(expectedGroups, pusher.getGroups());
-    assertEquals(expectedCheckpoint, endCheckpoint);
+    assertEquals(expectedCheckpoint, adaptor.modifiedGroupsCheckpoint);
   }
 
   @Test
   public void testGetGroupUpdatesNoDmWorld() throws Exception {
-    Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2", "User3", "User4", "User5");
 
     // The virtual group, dm_world, should not be pushed for updates.
@@ -2746,47 +2736,47 @@ public class DocumentumAdaptorTest {
       expected = ImmutableMap.<GroupPrincipal, Collection<Principal>>of();
 
     Checkpoint checkpoint = new Checkpoint();
-    checkModifiedGroupsPushed(config, checkpoint, expected, checkpoint);
+    checkModifiedGroupsPushed(LocalGroupsOnly.FALSE, checkpoint, expected,
+          checkpoint);
   }
 
   @Test
   public void testGetGroupUpdatesAllNew() throws Exception {
-    Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2");
     insertModifiedGroup(FEB_1970, "Group1", "User1");
     insertModifiedGroup(MAR_1970, "Group2", "User2");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-        expected = ImmutableMap.of(new GroupPrincipal("Group1", "localNS"),
-            ImmutableSet.of(new UserPrincipal("User1", "globalNS")),
-            new GroupPrincipal("Group2", "localNS"),
-            ImmutableSet.of(new UserPrincipal("User2", "globalNS")));
+        expected = ImmutableMap.of(new GroupPrincipal("Group1", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User1", "NS")),
+            new GroupPrincipal("Group2", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User2", "NS")));
 
-    checkModifiedGroupsPushed(config, new Checkpoint(JAN_1970, "0"),
-        expected, new Checkpoint(MAR_1970, "12Group2"));
+    checkModifiedGroupsPushed(LocalGroupsOnly.FALSE,
+        new Checkpoint(JAN_1970, "0"), expected,
+        new Checkpoint(MAR_1970, "12Group2"));
   }
 
   @Test
   public void testGetGroupUpdatesSomeNew() throws Exception {
-    Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2");
     insertModifiedGroup(JAN_1970, "Group1", "User1");
     insertModifiedGroup(FEB_1970, "Group2", "User2");
     insertModifiedGroup(MAR_1970, "Group3", "User2");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-        expected = ImmutableMap.of(new GroupPrincipal("Group2", "localNS"),
-            ImmutableSet.of(new UserPrincipal("User2", "globalNS")),
-            new GroupPrincipal("Group3", "localNS"),
-            ImmutableSet.of(new UserPrincipal("User2", "globalNS")));
+        expected = ImmutableMap.of(new GroupPrincipal("Group2", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User2", "NS")),
+            new GroupPrincipal("Group3", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User2", "NS")));
 
-    checkModifiedGroupsPushed(config, new Checkpoint(JAN_1970, "12Group1"),
-        expected, new Checkpoint(MAR_1970, "12Group3"));
+    checkModifiedGroupsPushed(LocalGroupsOnly.FALSE,
+        new Checkpoint(JAN_1970, "12Group1"), expected,
+        new Checkpoint(MAR_1970, "12Group3"));
   }
 
   @Test
   public void testGetGroupUpdatesNoneNew() throws Exception {
-    Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2");
     insertModifiedGroup(FEB_1970, "Group1", "User1");
     insertModifiedGroup(MAR_1970, "Group2", "User2");
@@ -2795,42 +2785,42 @@ public class DocumentumAdaptorTest {
       expected = ImmutableMap.<GroupPrincipal, Collection<Principal>>of();
 
     Checkpoint checkpoint = new Checkpoint(MAR_1970, "12Group2");
-    checkModifiedGroupsPushed(config, checkpoint, expected, checkpoint);
+    checkModifiedGroupsPushed(LocalGroupsOnly.FALSE, checkpoint, expected,
+         checkpoint);
   }
 
   @Test
   public void testGetGroupUpdatesSomeLdapGroups() throws Exception {
-    Config config = getTestAdaptorConfig();
     insertUsers("User1", "User2");
     insertModifiedGroup(JAN_1970, "Group1", "User1");
     insertModifiedGroup(FEB_1970, "Group2", "User2");
     insertGroupEx(MAR_1970, "LDAP", "GroupLDAP", "User2");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-        expected = ImmutableMap.of(new GroupPrincipal("Group2", "localNS"),
-            ImmutableSet.of(new UserPrincipal("User2", "globalNS")),
-            new GroupPrincipal("GroupLDAP", "globalNS"),
-            ImmutableSet.of(new UserPrincipal("User2", "globalNS")));
+        expected = ImmutableMap.of(new GroupPrincipal("Group2", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User2", "NS")),
+            new GroupPrincipal("GroupLDAP", "NS"),
+            ImmutableSet.of(new UserPrincipal("User2", "NS")));
 
-    checkModifiedGroupsPushed(config, new Checkpoint(JAN_1970, "12Group1"),
-        expected, new Checkpoint(MAR_1970, "12GroupLDAP"));
+    checkModifiedGroupsPushed(LocalGroupsOnly.FALSE,
+        new Checkpoint(JAN_1970, "12Group1"), expected,
+        new Checkpoint(MAR_1970, "12GroupLDAP"));
   }
 
   @Test
   public void testGetGroupUpdatesLocalGroupsOnly() throws Exception {
-    Config config = getTestAdaptorConfig();
-    config.overrideKey("documentum.pushLocalGroupsOnly", "true");
     insertUsers("User1", "User2");
     insertModifiedGroup(JAN_1970, "Group1", "User1");
     insertModifiedGroup(FEB_1970, "Group2", "User2");
     insertGroupEx(MAR_1970, "LDAP", "GroupLDAP", "User2");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-        expected = ImmutableMap.of(new GroupPrincipal("Group2", "localNS"),
-            ImmutableSet.of(new UserPrincipal("User2", "globalNS")));
+        expected = ImmutableMap.of(new GroupPrincipal("Group2", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User2", "NS")));
 
-    checkModifiedGroupsPushed(config, new Checkpoint(JAN_1970, "12Group1"),
-        expected, new Checkpoint(FEB_1970, "12Group2"));
+    checkModifiedGroupsPushed(LocalGroupsOnly.TRUE,
+        new Checkpoint(JAN_1970, "12Group1"), expected,
+        new Checkpoint(FEB_1970, "12Group2"));
   }
 
   /**
@@ -2860,33 +2850,32 @@ public class DocumentumAdaptorTest {
     return ImmutableList.copyOf(paths);
   }
 
-  /* TODO(bmj): This should create the adaptor, init it with config, then call
-   * its getModifiedDocIds method with a recording pusher.
-   */
   private void checkModifiedDocIdsPushed(List<String> startPaths,
       Checkpoint checkpoint, List<Record> expectedRecords,
       Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
     H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-    IDfSessionManager sessionManager = proxyCls.getProxySessionManager();
-    IDfSession session = sessionManager.getSession("foo");
-    Checkpoint endCheckpoint;
-    try {
-      endCheckpoint = adaptor.pushDocumentUpdates(pusher, dmClientX, session,
-          startPaths, checkpoint);
-    } finally {
-      sessionManager.release(session);
-    }
+
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    Config config = initTestAdaptorConfig(context);
+    config.overrideKey("documentum.src", Joiner.on(",").join(startPaths));
+    adaptor.init(context);
+
+    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
+    adaptor.modifiedDocumentsCheckpoint = checkpoint;
+    adaptor.getModifiedDocIds(pusher);
+
     assertEquals(expectedRecords, pusher.getRecords());
-    assertEquals(expectedCheckpoint, endCheckpoint);
+    assertEquals(expectedCheckpoint, adaptor.modifiedDocumentsCheckpoint);
   }
 
   @Test
   public void testNoDocuments() throws Exception {
+    String folderId = "0b01081f80001000";
     String folder = "/Folder1";
+    insertFolder(JAN_1970, folderId, folder);
     Checkpoint startCheckpoint = new Checkpoint();
     checkModifiedDocIdsPushed(startPaths(folder), startCheckpoint,
         ImmutableList.<Record>of(), startCheckpoint);
