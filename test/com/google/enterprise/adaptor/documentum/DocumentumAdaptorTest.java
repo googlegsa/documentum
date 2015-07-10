@@ -14,6 +14,10 @@
 
 package com.google.enterprise.adaptor.documentum;
 
+import static com.google.enterprise.adaptor.documentum.JdbcFixture.dropAllObjects;
+import static com.google.enterprise.adaptor.documentum.JdbcFixture.executeUpdate;
+import static com.google.enterprise.adaptor.documentum.JdbcFixture.getConnection;
+
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.*;
 
@@ -142,11 +146,9 @@ public class DocumentumAdaptorTest {
       // and to assist getObjectByPath.
       + "mock_content varchar, mock_object_path varchar)";
 
-  private JdbcFixture jdbcFixture = new JdbcFixture();
-
   @Before
   public void setUp() throws Exception {
-    jdbcFixture.executeUpdate(CREATE_TABLE_ACL, CREATE_TABLE_AUDITTRAIL_ACL,
+    executeUpdate(CREATE_TABLE_ACL, CREATE_TABLE_AUDITTRAIL_ACL,
         CREATE_TABLE_CABINET, CREATE_TABLE_FOLDER, CREATE_TABLE_GROUP,
         CREATE_TABLE_SYSOBJECT, CREATE_TABLE_USER);
 
@@ -156,7 +158,7 @@ public class DocumentumAdaptorTest {
 
   @After
   public void tearDown() throws Exception {
-    jdbcFixture.tearDown();
+    dropAllObjects();
   }
 
   private Config getTestAdaptorConfig() {
@@ -689,7 +691,7 @@ public class DocumentumAdaptorTest {
 
       public CollectionMock(String query) throws DfException {
         try {
-          stmt = jdbcFixture.getConnection().createStatement();
+          stmt = getConnection().createStatement();
           query = query.replace("DATETOSTRING", "FORMATDATETIME")
               .replace("DATE(", "PARSEDATETIME(")
               .replace("yyyy-mm-dd hh:mi:ss", "yyyy-MM-dd HH:mm:ss")
@@ -772,7 +774,8 @@ public class DocumentumAdaptorTest {
         String query = String.format(
             "SELECT *, mock_object_path AS r_folder_path "
             + "FROM dm_sysobject WHERE mock_object_path = '%s'", path);
-        try (Statement stmt = jdbcFixture.getConnection().createStatement();
+        try (Connection connection = getConnection();
+             Statement stmt = connection.createStatement();
              ResultSet rs = stmt.executeQuery(query)) {
           if (rs.first()) {
             if (rs.getString("r_object_type").startsWith("dm_folder")) {
@@ -793,7 +796,8 @@ public class DocumentumAdaptorTest {
         if (Strings.isNullOrEmpty(query)) {
           return null;
         }
-        try (Statement stmt = jdbcFixture.getConnection().createStatement();
+        try (Connection connection = getConnection();
+             Statement stmt = connection.createStatement();
              ResultSet rs = stmt.executeQuery("SELECT * FROM " + query)) {
           if (rs.first()) {
             if (query.toLowerCase().startsWith("dm_user ")) {
@@ -818,7 +822,8 @@ public class DocumentumAdaptorTest {
             "SELECT s.*, f.r_folder_path FROM dm_sysobject s "
             + "JOIN dm_folder f ON s.r_object_id = f.r_object_id "
             + "WHERE s.r_object_id = '%s'", spec);
-        try (Statement stmt = jdbcFixture.getConnection().createStatement();
+        try (Connection connection = getConnection();
+             Statement stmt = connection.createStatement();
              ResultSet rs = stmt.executeQuery(query)) {
           if (rs.first()) {
             return
@@ -942,7 +947,8 @@ public class DocumentumAdaptorTest {
       public VdocRootNodeMock(String vdocId) throws DfException {
         String query = String.format("SELECT mock_object_path "
             + "FROM dm_sysobject WHERE i_folder_id = '%s'", vdocId);
-        try (Statement stmt = jdbcFixture.getConnection().createStatement();
+        try (Connection connection = getConnection();
+             Statement stmt = connection.createStatement();
              ResultSet rs = stmt.executeQuery(query)) {
           while (rs.next()) {
             vdocChildren.add(rs.getString("mock_object_path"));
@@ -1144,8 +1150,9 @@ public class DocumentumAdaptorTest {
       }
 
       private void getAccessorInfo() throws SQLException {
-        try (Statement stmt = jdbcFixture.getConnection().createStatement();
-            ResultSet rs = stmt.executeQuery(
+        try (Connection connection = getConnection();
+             Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery(
                 "select r_accessor_name, r_accessor_permit, "
                 + "r_permit_type, r_is_group from dm_acl "
                 + "where r_object_id = '" + id + "'")) {
@@ -1188,7 +1195,7 @@ public class DocumentumAdaptorTest {
 
   private void insertCabinets(String... cabinets) throws SQLException {
     for (String cabinet : cabinets) {
-      jdbcFixture.executeUpdate(String.format("INSERT INTO dm_cabinet "
+      executeUpdate(String.format("INSERT INTO dm_cabinet "
           + "(r_object_id, r_folder_path, object_name) VALUES('%s','%s','%s')",
           "0c" + cabinet, "/" + cabinet, cabinet));
     }
@@ -1282,7 +1289,7 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testGetRootContentDefaultWhereClause() throws Exception {
-    jdbcFixture.executeUpdate(
+    executeUpdate(
         "CREATE TABLE dm_docbase_config (owner_name varchar)",
         "INSERT INTO dm_docbase_config (owner_name) VALUES('Owner')",
         "CREATE TABLE dm_server_config (r_install_owner varchar)",
@@ -1316,7 +1323,7 @@ public class DocumentumAdaptorTest {
   private void insertDocument(Date lastModified, String path,
        String contentType, String content) throws SQLException {
     String name = path.substring(path.lastIndexOf("/") + 1);
-    jdbcFixture.executeUpdate(String.format(
+    executeUpdate(String.format(
         "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
         + "r_object_type, a_content_type, mock_content, r_modify_date) "
         + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'})",
@@ -1332,7 +1339,7 @@ public class DocumentumAdaptorTest {
 
   private void insertFolder(String lastModified, String id, String... paths)
        throws SQLException {
-    jdbcFixture.executeUpdate(String.format(
+    executeUpdate(String.format(
         "insert into dm_folder(r_object_id, r_folder_path) values('%s', '%s')",
         id, Joiner.on(",").join(paths)));
     for (String path : paths) {
@@ -1343,7 +1350,7 @@ public class DocumentumAdaptorTest {
 
   private void insertSysObject(String lastModified, String id, String name,
       String path, String type, String... folderIds) throws SQLException {
-    jdbcFixture.executeUpdate(String.format(
+    executeUpdate(String.format(
         "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
         + "r_object_type, i_folder_id, r_modify_date) "
         + "values('%s', '%s', '%s', '%s', '%s', {ts '%s'})",
@@ -1518,11 +1525,11 @@ public class DocumentumAdaptorTest {
       ddl.append(", ").append(attr).append(" varchar");
     }
     ddl.append(")");
-    jdbcFixture.executeUpdate(ddl.toString());
+    executeUpdate(ddl.toString());
 
     for (String attr : attrs.keySet()) {
       for (String value : attrs.get(attr)) {
-        jdbcFixture.executeUpdate(String.format(
+        executeUpdate(String.format(
             "INSERT INTO attributes (r_object_id, %s) VALUES ('%s', '%s')",
             attr, objectId, value));
       }
@@ -1532,7 +1539,7 @@ public class DocumentumAdaptorTest {
   private Multimap<String, String> readAttributes(String objectId)
       throws SQLException {
     Multimap<String, String> attributes = TreeMultimap.create();
-    try (Connection connection = jdbcFixture.getConnection()) {
+    try (Connection connection = getConnection()) {
       DatabaseMetaData dbm = connection.getMetaData();
       try (ResultSet tables = dbm.getTables(null, null, "ATTRIBUTES", null)) {
         if (!tables.next()) {
@@ -1630,7 +1637,7 @@ public class DocumentumAdaptorTest {
     String name = vdocPath.substring(vdocPath.lastIndexOf("/") + 1);
     String vdocId = "09" + name;
     String now = getNowPlusMinutes(0);
-    jdbcFixture.executeUpdate(String.format(
+    executeUpdate(String.format(
         "INSERT INTO dm_sysobject(r_object_id, object_name, mock_object_path, "
         + "r_object_type, r_is_virtual_doc, a_content_type, mock_content, "
         + "r_modify_date) "
@@ -1789,7 +1796,7 @@ public class DocumentumAdaptorTest {
 
   private void insertUsers(String... names) throws SQLException {
     for (String name : names) {
-      jdbcFixture.executeUpdate(String.format(
+      executeUpdate(String.format(
           "insert into dm_user(user_name, user_login_name) values('%s', '%s')",
           name, name));
     }
@@ -1807,7 +1814,7 @@ public class DocumentumAdaptorTest {
 
   private void insertGroupEx(String lastModified, String source,
       String groupName, String... members) throws SQLException {
-    jdbcFixture.executeUpdate(String.format("INSERT INTO dm_user"
+    executeUpdate(String.format("INSERT INTO dm_user"
         + "(user_name, user_login_name, user_source, user_ldap_dn, r_is_group) "
         + "VALUES('%s', '%s', '%s', '%s', TRUE)", groupName, groupName,
         source, "LDAP".equals(source) ? ("CN=" + groupName) : ""));
@@ -1821,7 +1828,7 @@ public class DocumentumAdaptorTest {
       }
     }
     Joiner joiner = Joiner.on(',');
-    jdbcFixture.executeUpdate(String.format("INSERT INTO dm_group"
+    executeUpdate(String.format("INSERT INTO dm_group"
         + "(r_object_id, group_name, group_source, users_names, groups_names, "
         + "r_modify_date) VALUES('%s', '%s', '%s', '%s', '%s', {ts '%s'})",
          "12" + groupName, groupName, source, joiner.join(users),
@@ -1829,12 +1836,13 @@ public class DocumentumAdaptorTest {
   }
 
   private void createAcl(String id) throws SQLException {
-    jdbcFixture.executeUpdate(String.format(
+    executeUpdate(String.format(
         "insert into dm_acl(r_object_id) values('%s')", id));
   }
 
   private boolean isAccessorGroup(String accessorName) throws SQLException {
-    try (Statement stmt = jdbcFixture.getConnection().createStatement();
+    try (Connection connection = getConnection();
+         Statement stmt = connection.createStatement();
          ResultSet rs = stmt.executeQuery("select r_is_group from dm_user"
              + " where user_name = '" + accessorName + "'")) {
         if (rs.next()) {
@@ -1845,7 +1853,7 @@ public class DocumentumAdaptorTest {
   }
 
   private void grantPermit(String id, IDfPermit permit) throws SQLException {
-    jdbcFixture.executeUpdate(String.format(
+    executeUpdate(String.format(
         "insert into dm_acl(r_object_id, r_accessor_name, "
         + "r_accessor_permit, r_permit_type, r_is_group) values("
         + "'%s', '%s', '%s', '%s', '%s')",
@@ -2272,7 +2280,7 @@ public class DocumentumAdaptorTest {
 
   private void insertAclAudit(String id, String chronicleId, String auditObjId,
       String eventName, String date) throws SQLException {
-    jdbcFixture.executeUpdate(String.format(
+    executeUpdate(String.format(
         "insert into dm_audittrail_acl(r_object_id, chronicle_id, "
             + "audited_obj_id, event_name, time_stamp_utc) "
             + "values('%s', '%s', '%s', '%s', {ts '%s'})",
@@ -2549,7 +2557,7 @@ public class DocumentumAdaptorTest {
   @Test
   public void testGetGroupsDifferentMemberLoginName() throws Exception {
     insertUsers("User1", "User2");
-    jdbcFixture.executeUpdate("insert into dm_user(user_name, user_login_name) "
+    executeUpdate("insert into dm_user(user_name, user_login_name) "
         + "values('User3', 'UserTres')");
     insertGroup("Group1", "User1", "User2", "User3");
 
@@ -2565,10 +2573,10 @@ public class DocumentumAdaptorTest {
   @Test
   public void testGetGroupsDifferentGroupLoginName() throws Exception {
     insertUsers("User1", "User2");
-    jdbcFixture.executeUpdate(
+    executeUpdate(
         "insert into dm_user(user_name, user_login_name, r_is_group) "
         + "values('Group1', 'GroupUno', TRUE)");
-    jdbcFixture.executeUpdate(
+    executeUpdate(
         "insert into dm_group(group_name, users_names, groups_names) "
         + "values('Group1', 'User1,User2', '')");
 
@@ -2583,7 +2591,7 @@ public class DocumentumAdaptorTest {
   @Test
   public void testGetGroupsMemberLdapDn() throws Exception {
     insertUsers("User1", "User2");
-    jdbcFixture.executeUpdate("insert into dm_user(user_name, user_login_name, "
+    executeUpdate("insert into dm_user(user_name, user_login_name, "
         + "user_source, user_ldap_dn, r_is_group) values('User3', 'User3', "
         + "'LDAP', 'cn=User3,dc=test,dc=com', TRUE)");
     insertGroup("Group1", "User1", "User2", "User3");
@@ -2600,10 +2608,10 @@ public class DocumentumAdaptorTest {
   @Test
   public void testGetGroupsGroupLdapDn() throws Exception {
     insertUsers("User1", "User2");
-    jdbcFixture.executeUpdate("insert into dm_user(user_name, user_login_name, "
+    executeUpdate("insert into dm_user(user_name, user_login_name, "
         + "user_source, user_ldap_dn) values('Group1', 'Group1', 'LDAP', "
         + "'cn=Group1,dc=test,dc=com')");
-    jdbcFixture.executeUpdate("insert into dm_group(group_name, group_source, "
+    executeUpdate("insert into dm_group(group_name, group_source, "
         + "users_names, groups_names) values('Group1', 'LDAP', 'User1,User2', "
         + "'')");
 
@@ -3083,7 +3091,7 @@ public class DocumentumAdaptorTest {
   public void testModifiedDocumentsWithFolderSubtype() throws Exception {
     String folderId = "0b01081f80001000";
     String folder = "/Folder1";
-    jdbcFixture.executeUpdate(String.format(
+    executeUpdate(String.format(
         "insert into dm_folder(r_object_id, r_folder_path) values('%s', '%s')",
         folderId, folder));
     insertSysObject(FEB_1970, folderId, "Folder1", folder, "dm_folder_subtype",
