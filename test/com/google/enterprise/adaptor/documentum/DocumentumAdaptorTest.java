@@ -635,11 +635,6 @@ public class DocumentumAdaptorTest {
       return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
     }
 
-    public IDfSessionManager getProxySessionManager() {
-      return Proxies.newProxyInstance(IDfSessionManager.class,
-          new SessionManagerMock());
-    }
-
     private class ClientXMock {
       public String getDFCVersion() {
         return "1.0.0.000 (Mock DFC)";
@@ -661,7 +656,8 @@ public class DocumentumAdaptorTest {
 
     private class ClientMock {
       public IDfSessionManager newSessionManager() {
-        return getProxySessionManager();
+        return Proxies.newProxyInstance(IDfSessionManager.class,
+            new SessionManagerMock());
       }
     }
 
@@ -974,7 +970,8 @@ public class DocumentumAdaptorTest {
       }
 
       public IDfSysObject getSelectedObject() throws DfException {
-        IDfSessionManager sessionManager = getProxySessionManager();
+        IDfSessionManager sessionManager =
+            getProxyClientX().getLocalClient().newSessionManager();
         IDfSession session = sessionManager.getSession("foo");
         try {
           return (IDfSysObject) session.getObjectByPath(childPath);
