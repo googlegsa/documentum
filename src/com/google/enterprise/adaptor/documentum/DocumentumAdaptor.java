@@ -638,7 +638,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private Checkpoint pushDocumentUpdates(DocIdPusher pusher, IDfSession session,
       Checkpoint checkpoint)
       throws DfException, IOException, InterruptedException {
-    String queryStr = makeUpdatedDocsQuery(startPaths, checkpoint);
+    String queryStr = makeUpdatedDocsQuery(checkpoint);
     logger.log(Level.FINER, "Modified DocIds Query: {0}", queryStr);
     IDfQuery query = dmClientX.getQuery();
     query.setDQL(queryStr);
@@ -652,13 +652,13 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         objectId = result.getString("r_object_id");
         IDfType type = session.getType(result.getString("r_object_type"));
         if (type.isTypeOf("dm_folder")) {
-          addUpdatedDocIds(builder, session, startPaths, objectId, null);
+          addUpdatedDocIds(builder, session, objectId, null);
         } else if (type.isTypeOf("dm_document")) {
           String name = result.getString("object_name");
           int numFolders = result.getValueCount("i_folder_id");
           for (int i = 0; i < numFolders; i++) {
             String folderId = result.getRepeatingString("i_folder_id", i);
-            addUpdatedDocIds(builder, session, startPaths, folderId, name);
+            addUpdatedDocIds(builder, session, folderId, name);
           }
         }
       }
@@ -682,13 +682,12 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    *    paths for a document, or null for a folder
    */
   private void addUpdatedDocIds(ImmutableList.Builder<Record> builder,
-      IDfSession session, List<String> startPaths, String folderId, String name)
-      throws DfException {
+      IDfSession session, String folderId, String name) throws DfException {
     IDfFolder folder = session.getFolderBySpecification(folderId);
     if (folder != null) {
       for (int i = 0; i < folder.getFolderPathCount(); i++) {
         String path = folder.getFolderPath(i);
-        if (isUnderStartPath(path, startPaths)) {
+        if (isUnderStartPath(path, validatedStartPaths)) {
           builder.add(new Record.Builder(docIdFromPath(path, name))
               .setCrawlImmediately(true).build());
         }
@@ -696,8 +695,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
   }
 
-  private String makeUpdatedDocsQuery(List<String> startPaths,
-      Checkpoint checkpoint) {
+  private String makeUpdatedDocsQuery(Checkpoint checkpoint) {
     StringBuilder query = new StringBuilder();
     query.append("SELECT object_name, r_object_id, r_object_type, ")
         .append("i_folder_id, r_modify_date, ")
@@ -714,7 +712,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
     // Limit our search to modified docs under a start path.
     query.append(" AND (FOLDER('");
-    Joiner.on("',descend) OR FOLDER('").appendTo(query, startPaths);
+    Joiner.on("',descend) OR FOLDER('").appendTo(query, validatedStartPaths);
     query.append("',descend)) ORDER BY r_modify_date, r_object_id");
     return query.toString();
   }
