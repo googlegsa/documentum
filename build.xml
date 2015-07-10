@@ -130,7 +130,7 @@ lib/plexi submodule or add the the command line argument
            includeantruntime="false" encoding="utf-8"
            source="${compile.java.version}" target="${compile.java.version}">
       <bootclasspath path="${compile.java.bootclasspath}"/>
-      <compilerarg value="-Xlint:unchecked"/>
+      <compilerarg line="-Xlint -Xlint:-serial"/>
       <classpath refid="adaptor.build.classpath"/>
     </javac>
 
@@ -140,7 +140,7 @@ lib/plexi submodule or add the the command line argument
            includeantruntime="true" encoding="utf-8"
            source="${compile.java.version}" target="${compile.java.version}">
       <bootclasspath path="${compile.java.bootclasspath}"/>
-      <compilerarg value="-Xlint:unchecked"/>
+      <compilerarg line="-Xlint -Xlint:-serial"/>
       <classpath location="${junit.jar}"/>
       <include name="JUnitLogFixFormatter.java"/>
     </javac>
@@ -150,7 +150,7 @@ lib/plexi submodule or add the the command line argument
            includeantruntime="false" encoding="utf-8"
            source="${compile.java.version}" target="${compile.java.version}">
       <bootclasspath path="${compile.java.bootclasspath}"/>
-      <compilerarg value="-Xlint:unchecked"/>
+      <compilerarg line="-Xlint -Xlint:-serial"/>
       <classpath refid="adaptor.build.classpath"/>
       <classpath location="${build-src.dir}"/>
       <classpath location="${junit.jar}"/>
