@@ -194,10 +194,10 @@ class Principals {
       // the local namespace, neither should anyone else.
       return localNamespace;
     } else if (Strings.isNullOrEmpty(groupObj.getGroupSource())) {
-      logger.log(Level.FINER, "local namespace for group {0}", groupName);
+      logger.log(Level.FINEST, "local namespace for group {0}", groupName);
       return localNamespace;
     } else {
-      logger.log(Level.FINER, "global namespace for group {0}", groupName);
+      logger.log(Level.FINEST, "global namespace for group {0}", groupName);
       return globalNamespace;
     }
   }

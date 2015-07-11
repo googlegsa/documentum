@@ -89,14 +89,6 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   /** Charset used in generated HTML responses. */
   private static final Charset CHARSET = Charset.forName("UTF-8");
 
-  /** DQL Query to fetch all groups and their members. */
-  private static final String ALL_GROUPS_QUERY = 
-      "SELECT r_object_id, group_name, groups_names, users_names FROM dm_group";
-
-  /** DQL Query to fetch only the local groups and their members. */
-  private static final String LOCAL_GROUPS_QUERY = ALL_GROUPS_QUERY
-      + " WHERE group_source IS NULL OR group_source <> 'LDAP'";
-
   /** DQL Query to fetch all users for dm_world magic group. */
   // TODO(bmj): Filter out disabled users (and do so in getPrincipal, too),
   // with user_state = 0 "indicating a user who can log in".
@@ -505,18 +497,41 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     logger.exiting("DocumentumAdaptor", "getDocIds");
   }
 
-  /** Returns a map of groups and their members. */
+  /**
+   * Returns a map of groups and their members.
+   *
+   * DQL queries that return repeating attributes (in our case,
+   * users_names and groups_names) do not work properly on a DB2
+   * back-end. We use ENABLE(ROW_BASED) to explode the repeating
+   * attributes across several rows.
+   */
   private Map<GroupPrincipal, Collection<Principal>> getGroups(
       IDfSession session, Principals principals) throws DfException {
+    String queryStr = makeGroupsQuery(null);
+    logger.log(Level.FINER, "Get Groups Query: {0}", queryStr);
     IDfQuery query = dmClientX.getQuery();
-    query.setDQL(pushLocalGroupsOnly ? LOCAL_GROUPS_QUERY : ALL_GROUPS_QUERY);
+    query.setDQL(queryStr);
     IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
     try {
       ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups =
           ImmutableMap.builder();
+      ImmutableSet.Builder<Principal> members = null;
+      String groupName = "";
       while (result.next()) {
-        addGroup(groups, principals, result);
+        if (!groupName.equals(result.getString("group_name"))) {
+          // We have transitioned to a new group.
+          addGroup(groupName, groups, members, principals);
+          members = ImmutableSet.builder();
+          groupName = result.getString("group_name");
+          logger.log(Level.FINE, "Found Group: {0}", groupName);
+        }
+        addMemberPrincipal(members, principals,
+            result.getString("users_names"), false);
+        addMemberPrincipal(members, principals, 
+            result.getString("groups_names"), true);
       }
+      addGroup(groupName, groups, members, principals);
+
       // Add special dm_world group, which is all users.
       GroupPrincipal groupPrincipal = (GroupPrincipal)
           principals.getPrincipal("dm_world", "dm_world", true);
@@ -528,38 +543,34 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   }
 
   /** Adds a group and its members to the collection of groups. */
-  private void addGroup(
-      ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups,
-      Principals principals, IDfCollection result) throws DfException {
-    String groupName = result.getString("group_name");
-    logger.log(Level.FINE, "Found Group: {0}", groupName);
-    String principalName = principals.getPrincipalName(groupName);
-    if (principalName != null) {
-      GroupPrincipal groupPrincipal = (GroupPrincipal)
-          principals.getPrincipal(groupName, principalName, true);
-      ImmutableSet.Builder<Principal> builder = ImmutableSet.builder();
-      // All the member users are in one repeating value, all the member
-      // groups are in another repeating value.
-      addMemberPrincipals(builder, principals, result, "users_names", false);
-      addMemberPrincipals(builder, principals, result, "groups_names", true);
-      ImmutableSet<Principal> members = builder.build();
-      logger.log(Level.FINEST, "Pushing Group {0}: {1}",
-           new Object[] { principalName, members });
-      groups.put(groupPrincipal, members);
+  private void addGroup(String groupName,
+      ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groupsBuilder,
+      ImmutableSet.Builder<Principal> membersBuilder, Principals principals)
+      throws DfException {
+    if (membersBuilder == null) {
+      return;
     }
+    String principalName = principals.getPrincipalName(groupName);
+    if (principalName == null) {
+      return;
+    }
+    GroupPrincipal groupPrincipal = (GroupPrincipal)
+        principals.getPrincipal(groupName, principalName, true);
+    ImmutableSet<Principal> members = membersBuilder.build();
+    groupsBuilder.put(groupPrincipal, members);
+    logger.log(Level.FINEST, "Pushing Group {0}: {1}",
+        new Object[] { principalName, members });
   }
 
-  /** Adds Principals for all the users or groups to the set of members. */
-  // TODO(bmj): Apparently repeating values on DB2 backends may not work here.
-  private void addMemberPrincipals(ImmutableSet.Builder<Principal> members,
-      Principals principals, IDfCollection result, String attributeName,
-      boolean isGroup) throws DfException {
-    int numMembers = result.getValueCount(attributeName);
-    for (int i = 0; i < numMembers; i++) {
-      String member = result.getRepeatingString(attributeName, i);
-      String principalName = principals.getPrincipalName(member);
+  /** Adds a Principal for a user or group to the set of members. */
+  private void addMemberPrincipal(ImmutableSet.Builder<Principal> members,
+     Principals principals, String memberName, boolean isGroup)
+     throws DfException {
+   if (memberName != null) {
+      String principalName = principals.getPrincipalName(memberName);
       if (principalName != null) {
-        members.add(principals.getPrincipal(member, principalName, isGroup));
+        members.add(
+            principals.getPrincipal(memberName, principalName, isGroup));
       }
     }
   }
@@ -583,6 +594,30 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     } finally {
       result.close();
     }
+  }
+
+  /** Builds the DQL query to retrieve the groups. */
+  private String makeGroupsQuery(Checkpoint checkpoint) {
+    StringBuilder query = new StringBuilder();
+    query.append("SELECT r_object_id, group_name, groups_names, users_names");
+    if (checkpoint == null) {
+      query.append(" FROM dm_group");
+    } else {
+      query.append(", r_modify_date, ")
+          .append("DATETOSTRING(r_modify_date, 'yyyy-mm-dd hh:mi:ss') ")
+          .append("AS r_modify_date_str FROM dm_group WHERE ")
+          .append(MessageFormat.format(
+              "((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') AND "
+              + "r_object_id > ''{1}'') OR (r_modify_date > DATE(''{0}'',"
+              + "''yyyy-mm-dd hh:mi:ss'')))",
+              checkpoint.getLastModified(), checkpoint.getObjectId()));
+    }
+    if (pushLocalGroupsOnly) {
+      query.append((checkpoint == null) ? " WHERE " : " AND ")
+          .append("(group_source IS NULL OR group_source <> 'LDAP')");
+    }
+    query.append(" ENABLE(ROW_BASED)");
+    return query.toString();
   }
 
   @Override
@@ -736,43 +771,39 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private Checkpoint pushGroupUpdates(DocIdPusher pusher, IDfSession session,
       Principals principals, Checkpoint checkpoint)
       throws DfException, IOException, InterruptedException {
-    String queryStr = makeUpdatedGroupsQuery(checkpoint);
+    String queryStr = makeGroupsQuery(checkpoint);
     logger.log(Level.FINER, "Modified Groups Query: {0}", queryStr);
     IDfQuery query = dmClientX.getQuery();
     query.setDQL(queryStr);
     IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
     try {
-      String lastModified = checkpoint.getLastModified();
-      String objectId = checkpoint.getObjectId();
       ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups =
           ImmutableMap.builder();
+      ImmutableSet.Builder<Principal> members = null;
+      String groupName = "";
+      String lastModified = checkpoint.getLastModified();
+      String objectId = checkpoint.getObjectId();
       while (result.next()) {
-        lastModified = result.getString("r_modify_date_str");
-        objectId = result.getString("r_object_id");
-        addGroup(groups, principals, result);
+        if (!groupName.equals(result.getString("group_name"))) {
+          // We have transitioned to a new group.
+          addGroup(groupName, groups, members, principals);
+          members = ImmutableSet.builder();
+          groupName = result.getString("group_name");
+          lastModified = result.getString("r_modify_date_str");
+          objectId = result.getString("r_object_id");
+          logger.log(Level.FINE, "Found Group: {0}", groupName);
+        }
+        addMemberPrincipal(members, principals,
+            result.getString("users_names"), false);
+        addMemberPrincipal(members, principals, 
+            result.getString("groups_names"), true);
       }
+      addGroup(groupName, groups, members, principals);
       pusher.pushGroupDefinitions(groups.build(), /* case sensitive */ true);
       return new Checkpoint(lastModified, objectId);
     } finally {
       result.close();
     }
-  }
-
-  private String makeUpdatedGroupsQuery(Checkpoint checkpoint) {
-    StringBuilder query = new StringBuilder();
-    query.append("SELECT r_object_id, group_name, groups_names, users_names, ")
-        .append("r_modify_date, ")
-        .append("DATETOSTRING(r_modify_date, 'yyyy-mm-dd hh:mi:ss') ")
-        .append("AS r_modify_date_str FROM dm_group WHERE ")
-        .append(MessageFormat.format(
-            "((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') AND "
-            + "r_object_id > ''{1}'') OR (r_modify_date > DATE(''{0}'',"
-            + "''yyyy-mm-dd hh:mi:ss'')))",
-            checkpoint.getLastModified(), checkpoint.getObjectId()));
-    if (pushLocalGroupsOnly) {
-      query.append(" AND (group_source IS NULL OR group_source <> 'LDAP')");
-    }
-    return query.toString();
   }
 
   /** Gives the bytes of a document referenced with id. 

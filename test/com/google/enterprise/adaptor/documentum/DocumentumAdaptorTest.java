@@ -740,7 +740,8 @@ public class DocumentumAdaptorTest {
               .replace("TYPE(dm_document)", "r_object_type LIKE 'dm_document%'")
               .replace("TYPE(dm_folder)", "r_object_type LIKE 'dm_folder%'")
               .replace("FOLDER(", "(mock_object_path LIKE ")
-              .replace("',descend", "%'");
+              .replace("',descend", "%'")
+              .replace("ENABLE(ROW_BASED)", "");
           rs = stmt.executeQuery(query);
         } catch (SQLException e) {
           throw new DfException(e);
@@ -1862,12 +1863,17 @@ public class DocumentumAdaptorTest {
         users.add(member);
       }
     }
-    Joiner joiner = Joiner.on(',');
-    executeUpdate(String.format("INSERT INTO dm_group"
-        + "(r_object_id, group_name, group_source, users_names, groups_names, "
-        + "r_modify_date) VALUES('%s', '%s', '%s', '%s', '%s', {ts '%s'})",
-         "12" + groupName, groupName, source, joiner.join(users),
-        joiner.join(groups), lastModified));
+    // Emulate ROW_BASED retrieval by storing the values that way.
+    int numRows = Math.max(1, Math.max(users.size(), groups.size()));
+    for (int i = 0; i < numRows; i++) {
+      executeUpdate(String.format("INSERT INTO dm_group"
+          + "(r_object_id, group_name, group_source, r_modify_date, "
+          + "users_names, groups_names) VALUES('%s', '%s', '%s', {ts '%s'}, "
+          + "%s, %s)",
+          "12" + groupName, groupName, source, lastModified,
+          (i < users.size()) ? "'" + users.get(i) + "'" : "NULL",
+          (i < groups.size()) ? "'" + groups.get(i) + "'" : "NULL"));
+    }
   }
 
   private void createAcl(String id) throws SQLException {
@@ -2611,9 +2617,8 @@ public class DocumentumAdaptorTest {
     executeUpdate(
         "insert into dm_user(user_name, user_login_name, r_is_group) "
         + "values('Group1', 'GroupUno', TRUE)");
-    executeUpdate(
-        "insert into dm_group(group_name, users_names, groups_names) "
-        + "values('Group1', 'User1,User2', '')");
+    executeUpdate("insert into dm_group(group_name, users_names) "
+        + "values ('Group1', 'User1'), ('Group1', 'User2')");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
         expected = ImmutableMap.of(new GroupPrincipal("GroupUno", "NS_Local"),
@@ -2646,9 +2651,8 @@ public class DocumentumAdaptorTest {
     executeUpdate("insert into dm_user(user_name, user_login_name, "
         + "user_source, user_ldap_dn) values('Group1', 'Group1', 'LDAP', "
         + "'cn=Group1,dc=test,dc=com')");
-    executeUpdate("insert into dm_group(group_name, group_source, "
-        + "users_names, groups_names) values('Group1', 'LDAP', 'User1,User2', "
-        + "'')");
+    executeUpdate("insert into dm_group(group_name, group_source, users_names) "
+        + "values ('Group1', 'LDAP', 'User1'), ('Group1', 'LDAP', 'User2')");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
         expected =
