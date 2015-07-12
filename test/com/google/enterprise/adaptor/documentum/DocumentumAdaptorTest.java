@@ -17,9 +17,13 @@ package com.google.enterprise.adaptor.documentum;
 import static com.google.enterprise.adaptor.documentum.JdbcFixture.dropAllObjects;
 import static com.google.enterprise.adaptor.documentum.JdbcFixture.executeUpdate;
 import static com.google.enterprise.adaptor.documentum.JdbcFixture.getConnection;
-
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Predicate;
@@ -42,6 +46,7 @@ import com.google.enterprise.adaptor.Principal;
 import com.google.enterprise.adaptor.Request;
 import com.google.enterprise.adaptor.UserPrincipal;
 import com.google.enterprise.adaptor.documentum.DocumentumAdaptor.Checkpoint;
+
 import com.documentum.com.IDfClientX;
 import com.documentum.fc.client.DfPermit;
 import com.documentum.fc.client.IDfACL;

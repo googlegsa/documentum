@@ -16,9 +16,7 @@ package com.google.enterprise.adaptor.documentum;
 
 import static java.util.Collections.singletonList;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
-import com.google.common.base.Strings;
 import com.google.enterprise.adaptor.Acl;
 import com.google.enterprise.adaptor.DocId;
 import com.google.enterprise.adaptor.Principal;
@@ -35,7 +33,6 @@ import com.documentum.fc.common.DfId;
 
 import java.text.MessageFormat;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
