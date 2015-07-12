@@ -41,6 +41,7 @@ import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
 import com.google.enterprise.adaptor.DocIdEncoder;
 import com.google.enterprise.adaptor.DocIdPusher.Record;
+import com.google.enterprise.adaptor.InvalidConfigurationException;
 import com.google.enterprise.adaptor.GroupPrincipal;
 import com.google.enterprise.adaptor.Principal;
 import com.google.enterprise.adaptor.Request;
@@ -633,6 +634,42 @@ public class DocumentumAdaptorTest {
     String path3 = "/Folder3/path6";
 
     initValidStartPaths(adaptor, path1, path2, path3);
+  }
+
+  private void testValidateDisplayUrlPattern(String pattern)
+      throws DfException {
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(new InitTestProxies().getProxyClientX());
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    Config config = initTestAdaptorConfig(context);
+    config.overrideKey("documentum.displayUrlPattern", pattern);
+    adaptor.init(context);
+  }
+
+  @Test
+  public void testValidateDisplayUrlPatternObjectId() throws DfException {
+    testValidateDisplayUrlPattern("http://webtopurl/drl/{0}");
+  }
+
+  @Test
+  public void testValidateDisplayUrlPatternPath() throws DfException {
+    testValidateDisplayUrlPattern("http://webtopurl/drl{1}");
+  }
+
+  @Test(expected = InvalidConfigurationException.class)
+  public void testValidateDisplayUrlPatternEmptyPattern() throws DfException {
+    testValidateDisplayUrlPattern("");
+  }
+
+  @Test(expected = InvalidConfigurationException.class)
+  public void testValidateDisplayUrlPatternBadPattern() throws DfException {
+    testValidateDisplayUrlPattern("{0}tp://webtop/");
+  }
+
+  @Test(expected = InvalidConfigurationException.class)
+  public void testValidateDisplayUrlPatternNoSubstitutions()
+      throws DfException {
+    testValidateDisplayUrlPattern("http://webtop/");
   }
 
   /* Mock proxy classes backed by the H2 database tables. */
@@ -1488,13 +1525,6 @@ public class DocumentumAdaptorTest {
     String path = "/Folder1/path1/object1";
     assertEquals("/Folder1/path1/object1-http://webtopurl/09object1/drl/",
         getDisplayUrl("{1}-http://webtopurl/{0}/drl/", path));
-  }
-
-  @Test
-  public void testDisplayUrlNoIdOrPath() throws Exception {
-    String path = "/Folder1/path1/object1";
-    assertEquals("http://webtopurl/drl",
-        getDisplayUrl("http://webtopurl/drl", path));
   }
 
   /*

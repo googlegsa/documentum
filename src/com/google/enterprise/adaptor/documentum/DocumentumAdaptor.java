@@ -381,6 +381,19 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         .getValue("documentum.displayUrlPattern"))) {
       throw new InvalidConfigurationException(
           "documentum.displayUrlPattern is required");
+    } else {
+      String pattern = config.getValue("documentum.displayUrlPattern");
+      if (!(pattern.contains("{0}") || pattern.contains("{1}"))) {
+        throw new InvalidConfigurationException("documentum.displayUrlPattern "
+            + "must include the object ID as substitution parameter {0} "
+            + "and/or the object path as substitution parameter {1}");
+      }
+      try {
+        new URI(MessageFormat.format(pattern, "0", "/test"));
+      } catch (URISyntaxException e) {
+        throw new InvalidConfigurationException(
+            "documentum.displayUrlPattern does not produce valid URLs", e);
+      }
     }
     if (Strings.isNullOrEmpty(config.getValue("documentum.src"))) {
       throw new InvalidConfigurationException(
