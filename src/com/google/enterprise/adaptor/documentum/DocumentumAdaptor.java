@@ -354,6 +354,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       throw new IllegalStateException(
          "Failed to validate documentum.src paths.");
     }
+    context.setPollingIncrementalLister(this);
   }
 
   private static void validateConfig(Config config) {
