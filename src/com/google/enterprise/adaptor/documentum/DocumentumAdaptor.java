@@ -948,6 +948,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    * @throws URISyntaxException */
   private void getDocumentContent(Response resp, IDfSysObject dmSysbObj,
       DocId id) throws DfException, IOException, URISyntaxException {
+    getACL(resp, dmSysbObj, id);
     // Include document attributes as metadata.
     getMetadata(resp, dmSysbObj, id);
 
@@ -965,6 +966,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     try (InputStream inStream = dmSysbObj.getContent()) {
       IOHelper.copyStream(inStream, resp.getOutputStream());
     }
+  }
+
+  /** Supplies the document ACL in the response.
+   * @throws DfException */
+  private void getACL(Response resp, IDfSysObject dmSysbObj, DocId id)
+      throws DfException {
+    String aclId = dmSysbObj.getACL().getObjectId().toString();
+    logger.log(Level.FINER, "ACL for id {0} is {1}", new Object[] {id, aclId});
+    resp.setAcl(new Acl.Builder().setInheritFrom(new DocId(aclId)).build());
   }
 
   /** Supplies the document attributes as metadata in the response. */
@@ -1021,6 +1031,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   /** Returns the Folder's contents as links in a generated HTML document. */
   private void getFolderContent(Response resp, IDfFolder dmFolder, DocId id)
       throws DfException, IOException {
+    getACL(resp, dmFolder, id);
     // Include folder attributes as metadata.
     getMetadata(resp, dmFolder, id);
 

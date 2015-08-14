@@ -119,6 +119,8 @@ public class DocumentumAdaptorTest {
 
   private static final String START_PATH = "/Folder1/path1";
 
+  private static final String DEFAULT_ACL = "45DefaultACL";
+
   private static final String CREATE_TABLE_ACL = "create table dm_acl "
       + "(r_object_id varchar, r_accessor_name varchar, "
       + "r_accessor_permit int, r_permit_type int, r_is_group boolean)";
@@ -132,7 +134,9 @@ public class DocumentumAdaptorTest {
       + "(r_object_id varchar, r_folder_path varchar, object_name varchar)";
 
   private static final String CREATE_TABLE_FOLDER = "create table dm_folder "
-      + "(r_object_id varchar, r_folder_path varchar)";
+      // Note: mock_acl_id is ACL id for the folder, and is used to
+      // create AclMock.
+      + "(r_object_id varchar, r_folder_path varchar, mock_acl_id varchar)";
 
   private static final String CREATE_TABLE_GROUP = "create table dm_group "
       + "(r_object_id varchar, group_name varchar, group_source varchar, "
@@ -150,7 +154,10 @@ public class DocumentumAdaptorTest {
       // Note: mock_content ia an artifact that stores the content as a string,
       // and mock_object_path is an artifact used to emulate FOLDER predicate,
       // and to assist getObjectByPath.
-      + "mock_content varchar, mock_object_path varchar)";
+      + "mock_content varchar, mock_object_path varchar, "
+      // Note: mock_acl_id is ACL id for the document, and is used to
+      // create AclMock in SysObjectMock.
+      + "mock_acl_id varchar )";
 
   @Before
   public void setUp() throws Exception {
@@ -889,6 +896,7 @@ public class DocumentumAdaptorTest {
       private final String type;
       private final String contentType;
       private final String content;
+      private final String aclId;
       private final Date lastModified;
       private final boolean isVirtualDocument;
       private final Multimap<String, String> attributes;
@@ -899,6 +907,7 @@ public class DocumentumAdaptorTest {
         type = rs.getString("r_object_type");
         contentType = rs.getString("a_content_type");
         content = rs.getString("mock_content");
+        aclId = rs.getString("mock_acl_id");
         lastModified = new Date(rs.getTimestamp("r_modify_date").getTime());
         isVirtualDocument = rs.getBoolean("r_is_virtual_doc");
         attributes = readAttributes(id);
@@ -968,6 +977,11 @@ public class DocumentumAdaptorTest {
 
       public String getRepeatingString(String name, int index) {
         return new ArrayList<String>(attributes.get(name)).get(index);
+      }
+
+      public IDfACL getACL() {
+        return Proxies.newProxyInstance(IDfACL.class,
+            new AclMock(aclId.toString()));
       }
     }
 
@@ -1233,6 +1247,9 @@ public class DocumentumAdaptorTest {
         return accessorList.get(n).isGroup();
       }
 
+      public IDfId getObjectId() {
+        return Proxies.newProxyInstance(IDfId.class, new IdMock(id));
+      }
     }
   }
 
@@ -1368,10 +1385,11 @@ public class DocumentumAdaptorTest {
     String name = path.substring(path.lastIndexOf("/") + 1);
     executeUpdate(String.format(
         "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
-        + "r_object_type, a_content_type, mock_content, r_modify_date) "
-        + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'})",
+        + "r_object_type, a_content_type, mock_content, r_modify_date, "
+        + "mock_acl_id) "
+        + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'}, '%s')",
         "09" + name, name, path, "dm_document", contentType, content,
-        dateFormat.format(lastModified)));
+        dateFormat.format(lastModified), DEFAULT_ACL));
   }
 
   private void insertDocument(String lastModified, String id, String path,
@@ -1395,9 +1413,17 @@ public class DocumentumAdaptorTest {
       String path, String type, String... folderIds) throws SQLException {
     executeUpdate(String.format(
         "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
-        + "r_object_type, i_folder_id, r_modify_date) "
-        + "values('%s', '%s', '%s', '%s', '%s', {ts '%s'})",
-        id, name, path, type, Joiner.on(",").join(folderIds), lastModified));
+        + "r_object_type, i_folder_id, r_modify_date, mock_acl_id) "
+        + "values('%s', '%s', '%s', '%s', '%s', {ts '%s'}, '%s')",
+        id, name, path, type, Joiner.on(",").join(folderIds), lastModified,
+        DEFAULT_ACL));
+  }
+
+  private void setSysObjectACL(String path, String aclId)
+      throws SQLException {
+    executeUpdate(String.format(
+        "UPDATE dm_sysobject SET mock_acl_id = '%s' WHERE mock_object_path = "
+        + "'%s'", aclId, path));
   }
 
   private void testDocContent(Date lastCrawled, Date lastModified,
@@ -1526,6 +1552,42 @@ public class DocumentumAdaptorTest {
     String path = "/Folder1/path1/object1";
     assertEquals("/Folder1/path1/object1-http://webtopurl/09object1/drl/",
         getDisplayUrl("{1}-http://webtopurl/{0}/drl/", path));
+  }
+
+  private Acl getACL(String path) throws Exception {
+    assertTrue(path, path.startsWith(START_PATH));
+
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    initTestAdaptorConfig(context);
+    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
+    MockResponse response = getDocContent(context, request);
+
+    assertNotNull(response.toString(), response.acl);
+    return response.acl;
+  }
+
+  @Test
+  public void testDocumentACL() throws Exception {
+    String path = "/Folder1/path1/object1";
+    String documentACL = "45DocumentACL";
+    insertDocument(path);
+    setSysObjectACL(path, documentACL);
+
+    Acl acl = getACL(path);
+    assertEquals(new DocId(documentACL), acl.getInheritFrom());
+  }
+
+  @Test
+  public void testFolderACL() throws Exception {
+    String now = getNowPlusMinutes(0);
+    String folderId = "0b01081f80078d29";
+    String folder = START_PATH + "/path2";
+    String folderACL = "45FolderAcl";
+    insertFolder(now, folderId, folder);
+    setSysObjectACL(folder, folderACL);
+
+    Acl acl = getACL(folder);
+    assertEquals(new DocId(folderACL), acl.getInheritFrom());
   }
 
   /*
@@ -1676,10 +1738,10 @@ public class DocumentumAdaptorTest {
     executeUpdate(String.format(
         "INSERT INTO dm_sysobject(r_object_id, object_name, mock_object_path, "
         + "r_object_type, r_is_virtual_doc, a_content_type, mock_content, "
-        + "r_modify_date) "
-        + "VALUES('%s', '%s', '%s', '%s', TRUE, '%s', '%s', {ts '%s'})",
+        + "r_modify_date, mock_acl_id) "
+        + "VALUES('%s', '%s', '%s', '%s', TRUE, '%s', '%s', {ts '%s'}, '%s')",
         vdocId, name, vdocPath, "dm_document_virtual", contentType, content,
-        now));
+        now, DEFAULT_ACL));
     for (String child : children) {
       insertDocument(now, "09" + child, vdocPath + "/" + child, vdocId);
     }
