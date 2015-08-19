@@ -251,6 +251,8 @@ public class DocumentumAdaptorTest {
     List <String> methodCallSequence = new ArrayList<String>();
     Set <String> methodCalls = new HashSet<String>();
 
+    String serverVersion = "1.0.0.000 (Mock CS)";
+
     IDfClient client = getProxyClient();
     IDfLoginInfo loginInfo = getProxyLoginInfo();
     IDfSessionManager sessionManager = getProxySessionManager();
@@ -273,6 +275,10 @@ public class DocumentumAdaptorTest {
     String username;
     String password;
     String docbaseName;
+
+    public void setServerVersion(String serverVersion) {
+      this.serverVersion = serverVersion;
+    }
 
     public IDfClientX getProxyClientX() {
       return Proxies.newProxyInstance(IDfClientX.class, new ClientXMock());
@@ -354,7 +360,7 @@ public class DocumentumAdaptorTest {
     private class SessionMock {
       public String getServerVersion() {
         methodCalls.add(Proxies.getMethodName());
-        return "1.0.0.000 (Mock CS)";
+        return serverVersion;
       }
 
       public IDfSysObject getObjectByPath(String path) {
@@ -679,6 +685,41 @@ public class DocumentumAdaptorTest {
     testValidateDisplayUrlPattern("http://webtop/");
   }
 
+  private void testDateToString(String version, String expected)
+      throws DfException {
+    InitTestProxies initProxies = new InitTestProxies();
+    initProxies.setServerVersion(version);
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(initProxies.getProxyClientX());
+    initializeAdaptor(adaptor, "/Folder1/path1", ";");
+    assertEquals(expected, adaptor.dateToStringFunction);
+  }
+
+  @Test
+  public void testDateToString_version6() throws DfException {
+    testDateToString("6.5.0.033  Win32.SQLServer", "DATETOSTRING");
+  }
+
+  @Test
+  public void testDateToString_version7() throws DfException {
+    testDateToString("7.2.0000.0155  Win64.SQLServer", "DATETOSTRING_LOCAL");
+  }
+
+  @Test
+  public void testDateToString_version75() throws DfException {
+    testDateToString("7.5.0000.0100  Win32.SQLServer", "DATETOSTRING_LOCAL");
+  }
+
+  @Test
+  public void testDateToString_version8() throws DfException {
+    testDateToString("8.0.0000.0000  Win64.SQLServer", "DATETOSTRING_LOCAL");
+  }
+
+  @Test
+  public void testDateToString_version10() throws DfException {
+    testDateToString("10.0.0000.0010  Win64.SQLServer", "DATETOSTRING_LOCAL");
+  }
+
   /* Mock proxy classes backed by the H2 database tables. */
   private class H2BackedTestProxies {
 
@@ -741,7 +782,7 @@ public class DocumentumAdaptorTest {
       public CollectionMock(String query) throws DfException {
         try {
           stmt = getConnection().createStatement();
-          query = query.replace("DATETOSTRING", "FORMATDATETIME")
+          query = query.replaceAll("DATETOSTRING(_LOCAL)?", "FORMATDATETIME")
               .replace("DATE(", "PARSEDATETIME(")
               .replace("yyyy-mm-dd hh:mi:ss", "yyyy-MM-dd HH:mm:ss")
               .replace("TYPE(dm_document)", "r_object_type LIKE 'dm_document%'")

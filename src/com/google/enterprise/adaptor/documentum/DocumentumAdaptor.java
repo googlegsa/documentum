@@ -125,6 +125,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private int maxHtmlSize;
   private String cabinetWhereCondition;
 
+  /** "The DQL function that returns the time in the server timezone.*/
+  @VisibleForTesting String dateToStringFunction;
+
   @VisibleForTesting Checkpoint modifiedAclsCheckpoint = new Checkpoint();
   @VisibleForTesting Checkpoint modifiedDocumentsCheckpoint = new Checkpoint();
   @VisibleForTesting Checkpoint modifiedGroupsCheckpoint = new Checkpoint();
@@ -345,6 +348,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
     dmSessionManager = initDfc(context);
     IDfSession dmSession = dmSessionManager.getSession(docbase);
+    dateToStringFunction = dmSession.getServerVersion().matches("[456]\\..*")
+        ? "DATETOSTRING" : "DATETOSTRING_LOCAL";
     try {
       validateStartPaths(dmSession);
     } finally {
@@ -605,7 +610,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       query.append(" FROM dm_group");
     } else {
       query.append(", r_modify_date, ")
-          .append("DATETOSTRING(r_modify_date, 'yyyy-mm-dd hh:mi:ss') ")
+          .append(dateToStringFunction)
+          .append("(r_modify_date, 'yyyy-mm-dd hh:mi:ss') ")
           .append("AS r_modify_date_str FROM dm_group WHERE ")
           .append(MessageFormat.format(
               "((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') AND "
@@ -748,7 +754,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     StringBuilder query = new StringBuilder();
     query.append("SELECT object_name, r_object_id, r_object_type, ")
         .append("i_folder_id, r_modify_date, ")
-        .append("DATETOSTRING(r_modify_date, 'yyyy-mm-dd hh:mi:ss') ")
+        .append(dateToStringFunction)
+        .append("(r_modify_date, 'yyyy-mm-dd hh:mi:ss') ")
         .append("AS r_modify_date_str FROM dm_sysobject ")
         // Limit the returned object types to dm_document, dm_folder,
         // or any type that is a subtype of dm_document or dm_folder.
