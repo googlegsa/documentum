@@ -1820,7 +1820,7 @@ public class DocumentumAdaptorTest {
     for (String name : ImmutableList.of("object1", "object2", "object3")) {
       URI uri = response.anchors.get(name);
       assertNotNull(uri);
-      assertTrue(uri.toString().endsWith(path + "/" + name));
+      assertTrue(uri.toString().endsWith(path + "/" + name + ":09" + name));
     }
   }
 

@@ -50,6 +50,7 @@ import com.documentum.fc.client.IDfType;
 import com.documentum.fc.client.IDfVirtualDocument;
 import com.documentum.fc.client.IDfVirtualDocumentNode;
 import com.documentum.fc.common.DfException;
+import com.documentum.fc.common.DfId;
 import com.documentum.fc.common.IDfAttr;
 import com.documentum.fc.common.IDfId;
 import com.documentum.fc.common.IDfLoginInfo;
@@ -839,7 +840,19 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         return;
       }
 
-      IDfPersistentObject dmPersObj = dmSession.getObjectByPath(path);
+      IDfPersistentObject dmPersObj;
+      if (path.matches(".*:\\p{XDigit}{16}")) {
+        String objId = path.substring(path.length() - 16);
+        logger.log(Level.FINER, "VDoc Child Object Id: {0}", objId);
+        dmPersObj = dmSession.getObject(new DfId(objId));
+        // Check for a false positive regex match.
+        if (dmPersObj == null) {
+          dmPersObj = dmSession.getObjectByPath(path);
+        }
+      } else {
+        dmPersObj = dmSession.getObjectByPath(path);
+      }
+
       if (dmPersObj == null) {
         logger.log(Level.FINER, "Not found: {0}", id);
         resp.respondNotFound();
@@ -1030,7 +1043,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       String objName = child.getString("object_name");
       logger.log(Level.FINER, "VDoc Child Object Id: {0}; Name: {1}",
           new Object[] {objId, objName});
-      DocId childDocId = docIdFromPath(docIdToPath(id), objName);
+      DocId childDocId = docIdFromPath(docIdToPath(id), objName + ":" + objId);
+      logger.log(Level.FINER, "VDoc Child Object DocId: {0}",
+          childDocId.toString());
       resp.addAnchor(docIdEncoder.encodeDocId(childDocId), objName);
     }
   }
