@@ -70,27 +70,31 @@ class DocumentumAcls {
   }
 
   private IDfQuery makeAclQuery() {
-    // TODO(jlacey): We don't need the ORDER BY clause.
     IDfQuery query = dmClientX.getQuery();
-    query.setDQL("SELECT r_object_id FROM dm_acl ORDER BY r_object_id");
+    query.setDQL("SELECT r_object_id FROM dm_acl");
     return query;
   }
 
-  private IDfQuery makeUpdateAclQuery(Checkpoint checkpoint) {
-    StringBuilder queryStr = new StringBuilder(
-        "SELECT r_object_id, chronicle_id, audited_obj_id, event_name, "
-        + "time_stamp_utc, "
-        + "DATETOSTRING(time_stamp_utc, 'yyyy-mm-dd hh:mi:ss') "
-        + "AS time_stamp_utc_str "
-        + "FROM dm_audittrail_acl "
-        + "WHERE (event_name='dm_save' OR event_name='dm_saveasnew' "
-        + "OR event_name='dm_destroy')");
+  private IDfQuery makeUpdateAclQuery(Checkpoint checkpoint)
+      throws DfException {
+    //TODO(sveldurthi): Create utility function for getServerVersion().matches()
+    String dateToStringFunction =
+        dmSession.getServerVersion().matches("[456]\\..*")
+        ? "DATETOSTRING" : "DATETOSTRING_LOCAL";
+    StringBuilder queryStr = new StringBuilder()
+        .append("SELECT r_object_id, chronicle_id, audited_obj_id, ")
+        .append("event_name, time_stamp_utc, ")
+        .append(dateToStringFunction)
+        .append("(time_stamp_utc, 'yyyy-mm-dd hh:mi:ss') ")
+        .append("AS time_stamp_utc_str ")
+        .append("FROM dm_audittrail_acl ")
+        .append("WHERE (event_name='dm_save' OR event_name='dm_saveasnew' ")
+        .append("OR event_name='dm_destroy')");
 
     String whereBoundedClause = " and ((time_stamp_utc = "
         + "DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') AND (r_object_id > ''{1}'')) "
         + "OR (time_stamp_utc > DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'')))";
 
-    // TODO (Srinivas): Adjust modified date to server TZ offset
     Object[] arguments =
         { checkpoint.getLastModified(), checkpoint.getObjectId() };
     queryStr.append(MessageFormat.format(whereBoundedClause, arguments));
@@ -228,7 +232,12 @@ class DocumentumAcls {
       parentAclId = aclId;
     }
 
-    Acl acl = getBasicAcl(objectId, parentAclId, permits, denies);
+    if (parentAclId != null) {
+      logger.log(Level.FINE,
+          "ACL {0} has required groups or required group set", objectId);
+    }
+    Acl acl = getBasicAcl(parentAclId, permits, denies,
+        Acl.InheritanceType.PARENT_OVERRIDES);
     aclMap.put(new DocId(objectId), acl);
   }
 
@@ -244,15 +253,13 @@ class DocumentumAcls {
       throws DfException {
     Set<Principal> permits = new HashSet<Principal>();
     for (String name : groups) {
-      permits.add(principals.getPrincipal(name, name, true));
+      String principalName = principals.getPrincipalName(name);
+      if (principalName != null) {
+        permits.add(principals.getPrincipal(name, principalName, true));
+      }
     }
-    Acl.Builder builder = new Acl.Builder();
-    builder.setPermits(permits);
-    builder.setInheritanceType(Acl.InheritanceType.AND_BOTH_PERMIT);
-    if (parentAclId != null) {
-      builder.setInheritFrom(new DocId(parentAclId));
-    }
-    return builder.build();
+    return getBasicAcl(parentAclId, permits, new HashSet<Principal>(),
+        Acl.InheritanceType.AND_BOTH_PERMIT);
   }
 
   /**
@@ -273,7 +280,6 @@ class DocumentumAcls {
   private void processBasicPermissions(String accessorName, int permitType,
       int accessorPermit, boolean isGroup, Set<Principal> permits,
       Set<Principal> denies) throws DfException {
-    // TODO(jlacey): We need to call this for required groups, too.
     String principalName = principals.getPrincipalName(accessorName);
     if (principalName == null) {
       return;
@@ -303,22 +309,22 @@ class DocumentumAcls {
    * Creates an Adaptor Acl for the basic permissions in the ACL
    * object.
    *
-   * @param objectId Documentum ACL object ID
    * @param parentAclId the doc ID of the parent ACL in the chain
    * @param permits the principals permitted access
    * @param denies the principals denied access
+   * @param inheritanceType inheritance type for the Acl
    * @return Adaptor Acl object
    * @throws DfException if error in getting user or group information.
    */
-  private Acl getBasicAcl(String objectId, String parentAclId,
-      Set<Principal> permits, Set<Principal> denies) throws DfException {
+  private Acl getBasicAcl(String parentAclId,
+      Set<Principal> permits, Set<Principal> denies,
+      Acl.InheritanceType inheritanceType) throws DfException {
     Acl.Builder builder = new Acl.Builder()
-        .setPermits(permits).setDenies(denies)
+        .setPermits(permits)
+        .setDenies(denies)
         .setEverythingCaseSensitive()
-        .setInheritanceType(Acl.InheritanceType.PARENT_OVERRIDES);
+        .setInheritanceType(inheritanceType);
     if (parentAclId != null) {
-      logger.log(Level.FINE,
-          "ACL {0} has required groups or required group set", objectId);
       builder.setInheritFrom(new DocId(parentAclId));
     }
     return builder.build();

@@ -2405,14 +2405,12 @@ public class DocumentumAdaptorTest {
     Map<DocId, Acl> namedResources = getAllAcls();
     assertEquals(2, namedResources.size());
 
-    // TODO(srinivas): non-existent groups should be dropped from the ACL?
     Acl acl1 = namedResources.get(new DocId("45Acl0_GroupNotExists"));
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
-    assertEquals(
-        ImmutableSet.of(new GroupPrincipal("GroupNotExists", "NS_Local")),
-        acl1.getPermitGroups());
+    assertEquals(ImmutableSet.of(), acl1.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl1.getDenyGroups());
 
+    // Verify GroupNotExists group is not in permit or deny groups.
     Acl acl2 = namedResources.get(new DocId(id));
     assertEquals(new DocId("45Acl0_GroupNotExists"),
         acl2.getInheritFrom());
@@ -2429,6 +2427,38 @@ public class DocumentumAdaptorTest {
             + "audited_obj_id, event_name, time_stamp_utc) "
             + "values('%s', '%s', '%s', '%s', {ts '%s'})",
             id, chronicleId, auditObjId, eventName, date));
+  }
+
+  private Map<DocId, Acl> getAclMap() throws Exception {
+    IDfClientX dmClientX = new H2BackedTestProxies().getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
+
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    initTestAdaptorConfig(context);
+    adaptor.init(context);
+
+    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
+    adaptor.getDocIds(pusher);
+    return pusher.getNamedResources();
+  }
+
+  @Test
+  public void testAclCaseSensitivity_basic() throws Exception {
+    createAcl("4501081f80000100");
+    Map<DocId, Acl> aclMap = getAclMap();
+    Acl acl = aclMap.get(new DocId("4501081f80000100"));
+    assertTrue(acl.isEverythingCaseSensitive());
+  }
+
+  @Test
+  public void testAclCaseSensitivity_required() throws Exception {
+    insertUsers("User1", "User2", "User3");
+    insertGroup("Group1", "User2", "User3");
+    createAcl("4501081f80000100");
+    addRequiredGroupToAcl("4501081f80000100", "Group1");
+    Map<DocId, Acl> aclMap = getAclMap();
+    Acl acl = aclMap.get(new DocId("4501081f80000100_Group1"));
+    assertTrue(acl.isEverythingCaseSensitive());
   }
 
   /**
