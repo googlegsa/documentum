@@ -46,6 +46,7 @@ import com.google.enterprise.adaptor.GroupPrincipal;
 import com.google.enterprise.adaptor.Principal;
 import com.google.enterprise.adaptor.Request;
 import com.google.enterprise.adaptor.UserPrincipal;
+import com.google.enterprise.adaptor.documentum.DocumentumAdaptor.CaseSensitivityType;
 import com.google.enterprise.adaptor.documentum.DocumentumAdaptor.Checkpoint;
 
 import com.documentum.com.IDfClientX;
@@ -192,6 +193,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.pushLocalGroupsOnly", "false");
     config.addKey("documentum.maxHtmlSize", "1000");
     config.addKey("documentum.cabinetWhereCondition", "");
+    config.addKey("adaptor.caseSensitivityType", "");
     return config;
   }
 
@@ -2420,21 +2422,17 @@ public class DocumentumAdaptorTest {
     assertEquals(ImmutableSet.of(), acl2.getDenyGroups());
   }
 
-  private void insertAclAudit(String id, String chronicleId, String auditObjId,
-      String eventName, String date) throws SQLException {
-    executeUpdate(String.format(
-        "insert into dm_audittrail_acl(r_object_id, chronicle_id, "
-            + "audited_obj_id, event_name, time_stamp_utc) "
-            + "values('%s', '%s', '%s', '%s', {ts '%s'})",
-            id, chronicleId, auditObjId, eventName, date));
-  }
-
-  private Map<DocId, Acl> getAclMap() throws Exception {
+  private Map<DocId, Acl> getAclMap(CaseSensitivityType caseSensitivityType)
+      throws Exception {
     IDfClientX dmClientX = new H2BackedTestProxies().getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
     AdaptorContext context = ProxyAdaptorContext.getInstance();
     initTestAdaptorConfig(context);
+    if (caseSensitivityType != null) {
+      context.getConfig().overrideKey("adaptor.caseSensitivityType",
+          caseSensitivityType.toString());
+    }
     adaptor.init(context);
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
@@ -2442,12 +2440,17 @@ public class DocumentumAdaptorTest {
     return pusher.getNamedResources();
   }
 
+  private Map<DocId, Acl> getAclMap() throws Exception {
+    return getAclMap(null);
+  }
+
   @Test
   public void testAclCaseSensitivity_basic() throws Exception {
     createAcl("4501081f80000100");
     Map<DocId, Acl> aclMap = getAclMap();
     Acl acl = aclMap.get(new DocId("4501081f80000100"));
-    assertTrue(acl.isEverythingCaseSensitive());
+    assertTrue("Expected everything-case-sensitive",
+        acl.isEverythingCaseSensitive());
   }
 
   @Test
@@ -2458,7 +2461,50 @@ public class DocumentumAdaptorTest {
     addRequiredGroupToAcl("4501081f80000100", "Group1");
     Map<DocId, Acl> aclMap = getAclMap();
     Acl acl = aclMap.get(new DocId("4501081f80000100_Group1"));
-    assertTrue(acl.isEverythingCaseSensitive());
+    assertTrue("Expected everything-case-sensitive",
+        acl.isEverythingCaseSensitive());
+  }
+
+  @Test
+  public void testAclCaseSensitivity_sensitive() throws Exception {
+    createAcl("4501081f80000100");
+    Map<DocId, Acl> aclMap =
+        getAclMap(CaseSensitivityType.EVERYTHING_CASE_SENSITIVE);
+    Acl acl = aclMap.get(new DocId("4501081f80000100"));
+    assertTrue("Expected everything-case-sensitive",
+        acl.isEverythingCaseSensitive());
+  }
+
+  @Test
+  public void testAclCaseSensitivity_insensitive() throws Exception {
+    createAcl("4501081f80000100");
+    Map<DocId, Acl> aclMap =
+        getAclMap(CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE);
+    Acl acl = aclMap.get(new DocId("4501081f80000100"));
+    assertTrue("Expected everything-case-insensitive",
+        acl.isEverythingCaseInsensitive());
+  }
+
+  @Test
+  public void testAclCaseSensitivity_required_insensitive() throws Exception {
+    insertUsers("User1", "User2", "User3");
+    insertGroup("Group1", "User2", "User3");
+    createAcl("4501081f80000100");
+    addRequiredGroupToAcl("4501081f80000100", "Group1");
+    Map<DocId, Acl> aclMap =
+        getAclMap(CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE);
+    Acl acl = aclMap.get(new DocId("4501081f80000100_Group1"));
+    assertTrue("Expected everything-case-insensitive",
+        acl.isEverythingCaseInsensitive());
+  }
+
+  private void insertAclAudit(String id, String chronicleId, String auditObjId,
+      String eventName, String date) throws SQLException {
+    executeUpdate(String.format(
+        "insert into dm_audittrail_acl(r_object_id, chronicle_id, "
+            + "audited_obj_id, event_name, time_stamp_utc) "
+            + "values('%s', '%s', '%s', '%s', {ts '%s'})",
+            id, chronicleId, auditObjId, eventName, date));
   }
 
   /**

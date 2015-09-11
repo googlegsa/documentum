@@ -32,6 +32,11 @@ documentum.src =
 # “<adaptor.namespace>_<documentum.docbaseName>”.
 # adaptor.namespace = “Default”
 
+# Case sensitivity for ACL and Group feeds. Possible values are
+# everything-case-sensitive and everything-case-insensitive
+# Default is everything-case-sensitive.
+# adaptor.caseSensitivityType = everything-case-sensitive
+
 # When a non-empty value is specified for documentum.windowsDomain, the value
 # is used as domain for all the users and groups with no domain information
 # in the system. Default is empty “”.

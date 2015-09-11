@@ -20,6 +20,7 @@ import com.google.common.base.Preconditions;
 import com.google.enterprise.adaptor.Acl;
 import com.google.enterprise.adaptor.DocId;
 import com.google.enterprise.adaptor.Principal;
+import com.google.enterprise.adaptor.documentum.DocumentumAdaptor.CaseSensitivityType;
 import com.google.enterprise.adaptor.documentum.DocumentumAdaptor.Checkpoint;
 
 import com.documentum.com.IDfClientX;
@@ -56,17 +57,19 @@ class DocumentumAcls {
   private final IDfClientX dmClientX;
   private final IDfSession dmSession;
   private final Principals principals;
+  private final CaseSensitivityType caseSensitivityType;
 
   private Checkpoint aclUpdateCheckpoint;
 
   DocumentumAcls(IDfClientX dmClientX, IDfSession dmSession,
-      Principals principals) {
+      Principals principals, CaseSensitivityType caseSensitivityType) {
     Preconditions.checkNotNull(dmClientX, "dmClientX may not be null");
     Preconditions.checkNotNull(dmSession, "dmSession may not be null");
     Preconditions.checkNotNull(principals, "principals may not be null");
     this.dmClientX = dmClientX;
     this.dmSession = dmSession;
     this.principals = principals;
+    this.caseSensitivityType = caseSensitivityType;
   }
 
   private IDfQuery makeAclQuery() {
@@ -322,8 +325,13 @@ class DocumentumAcls {
     Acl.Builder builder = new Acl.Builder()
         .setPermits(permits)
         .setDenies(denies)
-        .setEverythingCaseSensitive()
         .setInheritanceType(inheritanceType);
+    if (caseSensitivityType
+        .equals(CaseSensitivityType.EVERYTHING_CASE_SENSITIVE)) {
+      builder.setEverythingCaseSensitive();
+    } else {
+      builder.setEverythingCaseInsensitive();
+    }
     if (parentAclId != null) {
       builder.setInheritFrom(new DocId(parentAclId));
     }

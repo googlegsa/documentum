@@ -125,6 +125,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private boolean pushLocalGroupsOnly;
   private int maxHtmlSize;
   private String cabinetWhereCondition;
+  private CaseSensitivityType caseSensitivityType;
 
   /** "The DQL function that returns the time in the server timezone.*/
   @VisibleForTesting String dateToStringFunction;
@@ -132,6 +133,22 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   @VisibleForTesting Checkpoint modifiedAclsCheckpoint = new Checkpoint();
   @VisibleForTesting Checkpoint modifiedDocumentsCheckpoint = new Checkpoint();
   @VisibleForTesting Checkpoint modifiedGroupsCheckpoint = new Checkpoint();
+
+  public enum CaseSensitivityType {
+    EVERYTHING_CASE_SENSITIVE("everything-case-sensitive"),
+    EVERYTHING_CASE_INSENSITIVE("everything-case-insensitive");
+
+    private final String tag;
+
+    private CaseSensitivityType(String tag) {
+      this.tag = tag;
+    }
+
+    @Override
+    public String toString() {
+      return tag;
+    }
+  }
 
   public static void main(String[] args) {
     AbstractAdaptor.main(new DocumentumAdaptor(), args);
@@ -279,6 +296,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     config.addKey("documentum.windowsDomain", "");
     config.addKey("documentum.pushLocalGroupsOnly", "false");
     config.addKey("documentum.maxHtmlSize", "1000");
+    config.addKey("adaptor.caseSensitivityType",
+        "everything-case-sensitive");
     // TODO(bmj): Do the system cabinet names need to be localizable?
     config.addKey("documentum.cabinetWhereCondition", "object_name NOT IN "
         + "('Integration', 'Resources', 'System', 'Temp', 'Templates') AND "
@@ -337,6 +356,14 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       throw new InvalidConfigurationException(
           "documentum.maxHtmlSize must be a positive integer.", e);
     }
+    if (config.getValue("adaptor.caseSensitivityType").equals(
+        CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE.toString())) {
+      caseSensitivityType = CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE;
+    } else {
+      caseSensitivityType = CaseSensitivityType.EVERYTHING_CASE_SENSITIVE;
+    }
+    logger.log(Level.CONFIG, "adaptor.caseSensitivityType: {0}",
+        caseSensitivityType);
     cabinetWhereCondition =
         config.getValue("documentum.cabinetWhereCondition");
     logger.log(Level.CONFIG, "documentum.cabinetWhereCondition: {0}", 
@@ -480,14 +507,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       Principals principals = new Principals(dmSession, localNamespace,
           globalNamespace, windowsDomain);
       try {
-        pusher.pushNamedResources(
-            new DocumentumAcls(dmClientX, dmSession, principals).getAcls());
+        pusher.pushNamedResources(new DocumentumAcls(dmClientX, dmSession,
+            principals, caseSensitivityType).getAcls());
       } catch (DfException e) {
         savedException = e;
       }
       try {
         pusher.pushGroupDefinitions(getGroups(dmSession, principals),
-            /* case sensitive */ true);
+            caseSensitivityType
+            == CaseSensitivityType.EVERYTHING_CASE_SENSITIVE);
       } catch (DfException e) {
         if (savedException == null) {
           savedException = e;
@@ -682,7 +710,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       Principals principals, Checkpoint checkpoint)
       throws DfException, IOException, InterruptedException {
     DocumentumAcls dctmAcls =
-        new DocumentumAcls(dmClientX, session, principals);
+        new DocumentumAcls(dmClientX, session, principals, caseSensitivityType);
     Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(checkpoint);
     pusher.pushNamedResources(aclMap);
     return dctmAcls.getUpdateAclsCheckpoint();
@@ -808,7 +836,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
             result.getString("groups_names"), true);
       }
       addGroup(groupName, groups, members, principals);
-      pusher.pushGroupDefinitions(groups.build(), /* case sensitive */ true);
+      pusher.pushGroupDefinitions(groups.build(),
+          caseSensitivityType == CaseSensitivityType.EVERYTHING_CASE_SENSITIVE);
       return new Checkpoint(lastModified, objectId);
     } finally {
       result.close();
