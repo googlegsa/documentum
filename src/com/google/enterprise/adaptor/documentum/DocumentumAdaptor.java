@@ -91,10 +91,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private static final Charset CHARSET = Charset.forName("UTF-8");
 
   /** DQL Query to fetch all users for dm_world magic group. */
-  // TODO(bmj): Filter out disabled users (and do so in getPrincipal, too),
-  // with user_state = 0 "indicating a user who can log in".
   private static final String ALL_USERS_QUERY = "SELECT user_name FROM dm_user"
-      + " WHERE r_is_group IS NULL OR r_is_group = FALSE";
+      + " WHERE user_state = 0 AND (r_is_group IS NULL OR r_is_group = FALSE)";
 
   private static final SimpleDateFormat dateFormat =
       new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");

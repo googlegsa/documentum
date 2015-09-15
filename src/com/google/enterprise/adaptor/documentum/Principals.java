@@ -97,7 +97,7 @@ class Principals {
 
     IDfUser userObj = (IDfUser) dmSession.getObjectByQualification(
         "dm_user where user_name = '" + singleQuoteEscapeString(accessorName)
-        + "'");
+        + "' and user_state = 0");
     if (userObj == null) {
       return null;
     }

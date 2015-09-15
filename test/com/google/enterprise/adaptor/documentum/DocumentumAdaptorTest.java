@@ -145,7 +145,8 @@ public class DocumentumAdaptorTest {
 
   private static final String CREATE_TABLE_USER = "create table dm_user "
       + "(user_name varchar primary key, user_login_name varchar, "
-      + "user_source varchar, user_ldap_dn varchar, r_is_group boolean)";
+      + "user_source varchar, user_ldap_dn varchar, r_is_group boolean, "
+      + "user_state int DEFAULT 0)";
 
   private static final String CREATE_TABLE_SYSOBJECT =
       "create table dm_sysobject "
@@ -1943,6 +1944,14 @@ public class DocumentumAdaptorTest {
     }
   }
 
+  private void disableUsers(String... names) throws SQLException {
+    // TODO(sveldurthi): modify query to use where user_name in ('u1', 'u2')
+    for (String name : names) {
+      executeUpdate(String.format(
+          "UPDATE dm_user SET user_state = 1 WHERE user_name = '%s'", name));
+    }
+  }
+
   private void insertGroup(String groupName, String... members)
       throws SQLException {
     insertGroupEx(getNowPlusMinutes(0), "", groupName, members);
@@ -2130,6 +2139,51 @@ public class DocumentumAdaptorTest {
     assertEquals(ImmutableSet.of(new UserPrincipal("User1", "NS"),
         new UserPrincipal("User2", "NS")),
         acl.getPermitUsers());
+    assertEquals(ImmutableSet.of(), acl.getDenyUsers());
+  }
+
+  @Test
+  public void testDisabledUserAcls() throws Exception {
+    insertUsers("User2", "User3", "User4", "User5");
+    disableUsers("User2", "User4");
+    String id = "4501081f80000100";
+    createAcl(id);
+    addAllowPermitToAcl(id, "User4", IDfACL.DF_PERMIT_WRITE);
+    addAllowPermitToAcl(id, "User5", IDfACL.DF_PERMIT_READ);
+    addDenyPermitToAcl(id, "User2", IDfACL.DF_PERMIT_READ);
+    addDenyPermitToAcl(id, "User3", IDfACL.DF_PERMIT_READ);
+
+    Map<DocId, Acl> namedResources = getAllAcls();
+    Acl acl = namedResources.get(new DocId(id));
+    assertEquals(ImmutableSet.of(new UserPrincipal("User5", "NS")),
+        acl.getPermitUsers());
+    assertEquals(ImmutableSet.of(new UserPrincipal("User3", "NS")),
+        acl.getDenyUsers());
+    assertEquals(ImmutableSet.of(), acl.getPermitGroups());
+    assertEquals(ImmutableSet.of(), acl.getDenyGroups());
+  }
+
+  @Test
+  public void testDisabledGroupAcls() throws Exception {
+    insertGroup("Group1", "User2", "User3");
+    insertGroup("Group2", "User4", "User5");
+    insertGroup("Group3", "User6", "User7");
+    insertGroup("Group4", "User8", "User9");
+    disableUsers("Group2", "Group3");
+    String id = "4501081f80000101";
+    createAcl(id);
+    addAllowPermitToAcl(id, "Group1", IDfACL.DF_PERMIT_READ);
+    addAllowPermitToAcl(id, "Group2", IDfACL.DF_PERMIT_WRITE);
+    addDenyPermitToAcl(id, "Group3", IDfACL.DF_PERMIT_READ);
+    addDenyPermitToAcl(id, "Group4", IDfACL.DF_PERMIT_READ);
+
+    Map<DocId, Acl> namedResources = getAllAcls();
+    Acl acl = namedResources.get(new DocId(id));
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "NS_Local")),
+        acl.getPermitGroups());
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group4", "NS_Local")),
+        acl.getDenyGroups());
+    assertEquals(ImmutableSet.of(), acl.getPermitUsers());
     assertEquals(ImmutableSet.of(), acl.getDenyUsers());
   }
 
@@ -2735,6 +2789,25 @@ public class DocumentumAdaptorTest {
             new GroupPrincipal("Group2", "NS_Local"),
             ImmutableSet.of(new UserPrincipal("User3", "NS"),
                             new UserPrincipal("User5", "NS")));
+
+    assertEquals(expected, filterDmWorld(getGroups()));
+  }
+
+  @Test
+  public void testGetGroupsDisabledMembers() throws Exception {
+    insertUsers("User1", "User2", "User3", "User4", "User5", "User6", "User7");
+    insertGroup("Group1", "User1", "User2", "User3");
+    insertGroup("Group2", "User3", "User4", "User5");
+    insertGroup("Group3", "User5", "User6", "User7");
+    disableUsers("User2", "User4", "User6", "Group2");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+        expected = ImmutableMap.of(new GroupPrincipal("Group1", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                            new UserPrincipal("User3", "NS")),
+            new GroupPrincipal("Group3", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User5", "NS"),
+                            new UserPrincipal("User7", "NS")));
 
     assertEquals(expected, filterDmWorld(getGroups()));
   }
