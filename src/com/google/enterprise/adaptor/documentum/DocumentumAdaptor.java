@@ -40,7 +40,9 @@ import com.google.enterprise.adaptor.Response;
 import com.documentum.com.DfClientX;
 import com.documentum.com.IDfClientX;
 import com.documentum.fc.client.IDfCollection;
+import com.documentum.fc.client.IDfEnumeration;
 import com.documentum.fc.client.IDfFolder;
+import com.documentum.fc.client.IDfObjectPath;
 import com.documentum.fc.client.IDfPersistentObject;
 import com.documentum.fc.client.IDfQuery;
 import com.documentum.fc.client.IDfSession;
@@ -71,6 +73,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -131,6 +134,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   @VisibleForTesting Checkpoint modifiedAclsCheckpoint = new Checkpoint();
   @VisibleForTesting Checkpoint modifiedDocumentsCheckpoint = new Checkpoint();
   @VisibleForTesting Checkpoint modifiedGroupsCheckpoint = new Checkpoint();
+  @VisibleForTesting Checkpoint modifiedPermissionsCheckpoint =
+      new Checkpoint();
 
   public enum CaseSensitivityType {
     EVERYTHING_CASE_SENSITIVE("everything-case-sensitive"),
@@ -675,7 +680,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       } catch (DfException e) {
         savedException = e;
       }
-      
+
       Principals principals = new Principals(dmSession, localNamespace,
           globalNamespace, windowsDomain);
       try {
@@ -688,6 +693,13 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       try {
         modifiedGroupsCheckpoint = pushGroupUpdates(pusher, dmSession,
             principals, modifiedGroupsCheckpoint);
+      } catch (DfException e) {
+        savedException = e;
+      }
+
+      try {
+        modifiedPermissionsCheckpoint = pushPermissionsUpdates(pusher,
+            dmSession, modifiedPermissionsCheckpoint);
       } catch (DfException e) {
         savedException = e;
       }
@@ -732,17 +744,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       while (result.next()) {
         lastModified = result.getString("r_modify_date_str");
         objectId = result.getString("r_object_id");
-        IDfType type = session.getType(result.getString("r_object_type"));
-        if (type.isTypeOf("dm_folder")) {
-          addUpdatedDocIds(builder, session, objectId, null);
-        } else if (type.isTypeOf("dm_document")) {
-          String name = result.getString("object_name");
-          int numFolders = result.getValueCount("i_folder_id");
-          for (int i = 0; i < numFolders; i++) {
-            String folderId = result.getRepeatingString("i_folder_id", i);
-            addUpdatedDocIds(builder, session, folderId, name);
-          }
-        }
+        String name = result.getString("object_name");
+        addUpdatedDocIds(builder, session, objectId, name);
       }
       List<Record> records = builder.build();
       logger.log(Level.FINER, "DocumentumAdaptor Modified DocIds: {0}",
@@ -755,24 +758,73 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   }
 
   /**
+   * Push Document ACL link updates to GSA.
+   */
+  private Checkpoint pushPermissionsUpdates(DocIdPusher pusher,
+      IDfSession session, Checkpoint checkpoint) throws DfException,
+      InterruptedException {
+    String queryStr = makeUpdatedPermissionsQuery(checkpoint);
+    logger.log(Level.FINER, "Modified permissions query: {0}", queryStr);
+    IDfQuery query = dmClientX.getQuery();
+    query.setDQL(queryStr);
+    IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
+    try {
+      HashSet<String> chronicleIds = new HashSet<>();
+      String eventDate = checkpoint.getLastModified();
+      String eventId = checkpoint.getObjectId();
+      ImmutableList.Builder<Record> builder = ImmutableList.builder();
+      while (result.next()) {
+        eventDate = result.getString("time_stamp_utc_str");
+        eventId = result.getString("r_object_id");
+        String objectId = result.getString("audited_obj_id");
+        String chronicleId = result.getString("chronicle_id");
+        String objectName = result.getString("object_name");
+
+        if (chronicleIds.contains(chronicleId)) {
+          logger.log(Level.FINEST,
+              "Skipping already processed event {0} for chronicle ID {1}",
+              new String[] {eventId, chronicleId});
+          continue;
+        }
+        logger.log(Level.FINER, "Processing permission changes "
+            + "time_stamp_utc: {0}, "
+            + "r_object_id: {1}, "
+            + "audited_obj_id: {2}, "
+            + "chronicle_id: {3}",
+            new String[] {eventDate, eventId, objectId, chronicleId});
+
+        addUpdatedDocIds(builder, session, objectId, objectName);
+        chronicleIds.add(chronicleId);
+      }
+      List<Record> records = builder.build();
+      logger.log(Level.FINER, "DocumentumAdaptor Modified ACL Links: {0}",
+          records);
+      pusher.pushRecords(records);
+      return new Checkpoint(eventDate, eventId);
+    } finally {
+      result.close();
+    }
+  }
+
+  /**
    * A document can reside under multiple folder paths.
    * Only push those paths that are under our start paths.
    *
    * @param builder builder for list of DocIds
-   * @param folderId the ID of a Documentum folder
+   * @param objectId the ID of a Documentum object
    * @param name the document name to append to the folder
    *    paths for a document, or null for a folder
    */
   private void addUpdatedDocIds(ImmutableList.Builder<Record> builder,
-      IDfSession session, String folderId, String name) throws DfException {
-    IDfFolder folder = session.getFolderBySpecification(folderId);
-    if (folder != null) {
-      for (int i = 0; i < folder.getFolderPathCount(); i++) {
-        String path = folder.getFolderPath(i);
-        if (isUnderStartPath(path, validatedStartPaths)) {
-          builder.add(new Record.Builder(docIdFromPath(path, name))
-              .setCrawlImmediately(true).build());
-        }
+      IDfSession session, String objectId, String name) throws DfException {
+    IDfEnumeration enumPaths = session.getObjectPaths(new DfId(objectId));
+    while (enumPaths.hasMoreElements()) {
+      IDfObjectPath objPath = (IDfObjectPath) enumPaths.nextElement();
+      String path = objPath.getFullPath();
+      DocId docId = docIdFromPath(path, name);
+      if (isUnderStartPath(docIdToPath(docId), validatedStartPaths)) {
+        builder.add(new Record.Builder(docId)
+            .setCrawlImmediately(true).build());
       }
     }
   }
@@ -797,6 +849,28 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     query.append(" AND (FOLDER('");
     Joiner.on("',descend) OR FOLDER('").appendTo(query, validatedStartPaths);
     query.append("',descend)) ORDER BY r_modify_date, r_object_id");
+    return query.toString();
+  }
+
+  private String makeUpdatedPermissionsQuery(Checkpoint checkpoint) {
+    StringBuilder query = new StringBuilder();
+    query.append("SELECT ")
+        .append(dateToStringFunction)
+        .append("(a.time_stamp_utc, 'yyyy-mm-dd hh:mi:ss') ")
+        .append("AS time_stamp_utc_str, ")
+        .append("a.r_object_id, a.audited_obj_id, a.chronicle_id, ")
+        .append("s.object_name FROM dm_sysobject s, dm_audittrail a ")
+        .append("WHERE a.audited_obj_id = s.r_object_id ")
+        .append("AND (FOLDER('");
+    Joiner.on("',descend) OR FOLDER('").appendTo(query, validatedStartPaths);
+    query.append("',descend)) ")
+        .append("AND a.event_name = 'dm_save' AND a.attribute_list ")
+        .append("LIKE 'acl_name=%' AND ")
+        .append(MessageFormat.format("((a.time_stamp_utc = DATE(''{0}'', "
+            + "''yyyy-mm-dd hh:mi:ss'') AND (a.r_object_id > ''{1}'')) "
+            + "OR (a.time_stamp_utc > DATE(''{0}'', ''yyyy-mm-dd hh:mi:ss''))) "
+            + "ORDER BY a.time_stamp_utc, a.r_object_id",
+            checkpoint.getLastModified(), checkpoint.getObjectId()));
     return query.toString();
   }
 
