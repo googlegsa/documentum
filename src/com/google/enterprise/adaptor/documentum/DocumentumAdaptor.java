@@ -73,6 +73,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -127,6 +128,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private int maxHtmlSize;
   private String cabinetWhereCondition;
   private CaseSensitivityType caseSensitivityType;
+
+  /* Cache to store all types */
+  private final Map<String, IDfType> superTypeCache =
+      new HashMap<String, IDfType>();
 
   /** "The DQL function that returns the time in the server timezone.*/
   @VisibleForTesting String dateToStringFunction;
@@ -1104,6 +1109,20 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     Set<String> attributeNames = getAttributeNames(dmSysbObj);
     for (String name : attributeNames) {
       if (!excludedAttributes.contains(name)) {
+        if ("r_object_id".equals(name)) {
+          String value = dmSysbObj.getObjectId().toString();
+          resp.addMetadata(name, value);
+          continue;
+        } else if ("r_object_type".equals(name)) {
+          // Retrieves object type and its super type(s).
+          for (IDfType type = dmSysbObj.getType();
+               type != null;
+               type = getSuperType(type)) {
+            resp.addMetadata(name, type.getName());
+          }
+          continue;
+        }
+
         int count = dmSysbObj.getValueCount(name);
         for (int i = 0; i < count; i++) {
           String value = dmSysbObj.getRepeatingString(name, i);
@@ -1126,10 +1145,31 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     @SuppressWarnings("unchecked")
     Enumeration<IDfAttr> e = sysObject.enumAttrs();
     ImmutableSet.Builder<String> builder = ImmutableSet.builder();
+    builder.add("r_object_id");
     while (e.hasMoreElements()) {
       builder.add(e.nextElement().getName());
     }
     return builder.build();
+  }
+
+  /**
+   * Return the supertype for the supplied type. Caches result to
+   * avoid frequent round-trips to server.
+   *
+   * @return superType for supplied type, or null if type is root type.
+   */
+  private IDfType getSuperType(IDfType type) throws DfException {
+    if (type == null) {
+      return null;
+    }
+    String typeName = type.getName();
+    if (superTypeCache.containsKey(typeName))
+      return superTypeCache.get(typeName);
+    else {
+      IDfType superType = type.getSuperType();
+      superTypeCache.put(typeName, superType);
+      return superType;
+    }
   }
 
   /** Supplies VDoc children as external link metadata in the response. */

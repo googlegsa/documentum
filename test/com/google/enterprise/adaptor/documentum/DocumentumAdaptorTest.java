@@ -1141,6 +1141,8 @@ public class DocumentumAdaptorTest {
 
     private class TypeMock {
       private final String type;
+      private final ImmutableMap<String, String> superTypes =
+          ImmutableMap.of("dm_document", "dm_sysobject");
 
       public TypeMock(String type) {
         this.type = type;
@@ -1152,6 +1154,15 @@ public class DocumentumAdaptorTest {
 
       public String getName() {
         return type;
+      }
+
+      public IDfType getSuperType() {
+        if (superTypes.containsKey(type)) {
+          return Proxies.newProxyInstance(IDfType.class,
+              new TypeMock(superTypes.get(type)));
+        } else {
+          return null;
+        }
       }
     }
 
@@ -1788,8 +1799,9 @@ public class DocumentumAdaptorTest {
     return attributes;
   }
 
-  private void testMetadata(TreeMultimap<String, String> attrs,
-      TreeMultimap<String, String> expected) throws Exception {
+  private void testExcludeMetadata(TreeMultimap<String, String> attrs,
+      String excludedAttrs, TreeMultimap<String, String> expected)
+      throws Exception {
     String path = START_PATH + "/object1";
     String objectId = "09object1";
     insertDocument(path);
@@ -1797,12 +1809,19 @@ public class DocumentumAdaptorTest {
 
     AdaptorContext context = ProxyAdaptorContext.getInstance();
     Config config = initTestAdaptorConfig(context);
-    config.overrideKey("documentum.excludedAttributes", "foo, bar");
+    if (excludedAttrs != null ) {
+      config.overrideKey("documentum.excludedAttributes", excludedAttrs);
+    }
 
     Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
     MockResponse response = getDocContent(context, request);
 
     assertEquals(expected, response.metadata);
+  }
+
+  private void testMetadata(TreeMultimap<String, String> attrs,
+      TreeMultimap<String, String> expected) throws Exception {
+    testExcludeMetadata(attrs, null, expected);
   }
 
   @Test
@@ -1811,7 +1830,9 @@ public class DocumentumAdaptorTest {
     attributes.put("attr1", "value1");
     attributes.put("attr2", "value2");
     attributes.put("attr3", "value3");
-    testMetadata(attributes, attributes);
+    TreeMultimap<String, String> expected = TreeMultimap.create(attributes);
+    expected.put("r_object_id", "09object1");
+    testMetadata(attributes, expected);
   }
 
   @Test
@@ -1822,7 +1843,9 @@ public class DocumentumAdaptorTest {
     attributes.put("attr1", "value3");
     assertEquals(1, attributes.keySet().size());
     assertEquals(3, attributes.get("attr1").size());
-    testMetadata(attributes, attributes);
+    TreeMultimap<String, String> expected = TreeMultimap.create(attributes);
+    expected.put("r_object_id", "09object1");
+    testMetadata(attributes, expected);
   }
 
   @Test
@@ -1832,7 +1855,9 @@ public class DocumentumAdaptorTest {
     attributes.put("attr2", "value2");
     attributes.put("attr2", "");
     attributes.put("attr3", "");
-    testMetadata(attributes, attributes);
+    TreeMultimap<String, String> expected = TreeMultimap.create(attributes);
+    expected.put("r_object_id", "09object1");
+    testMetadata(attributes, expected);
   }
 
   @Test
@@ -1844,8 +1869,23 @@ public class DocumentumAdaptorTest {
     attributes.put("foo", "foo1");
     attributes.put("bar", "bar1");
     TreeMultimap<String, String> expected = TreeMultimap.create(attributes);
-    expected.removeAll("foo");  // In the excludedAttributes set.
-    expected.removeAll("bar");  // In the excludedAttributes set.
+    String excluded = "foo, bar, r_object_id";
+    expected.removeAll("foo");
+    expected.removeAll("bar");
+    expected.removeAll("r_object_id");
+    testExcludeMetadata(attributes, excluded, expected);
+  }
+
+  @Test
+  public void testObjectTypeMetadata() throws Exception {
+    TreeMultimap<String, String> attributes = TreeMultimap.create();
+    attributes.put("r_object_type", "dm_document");
+    attributes.put("attr2", "value2");
+    TreeMultimap<String, String> expected = TreeMultimap.create(attributes);
+    expected.put("r_object_id", "09object1");
+    expected.removeAll("r_object_type");
+    expected.put("r_object_type", "dm_document");
+    expected.put("r_object_type", "dm_sysobject");
     testMetadata(attributes, expected);
   }
 
