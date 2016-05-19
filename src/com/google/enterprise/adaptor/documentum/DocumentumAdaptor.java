@@ -1163,9 +1163,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       return null;
     }
     String typeName = type.getName();
-    if (superTypeCache.containsKey(typeName))
+    if (superTypeCache.containsKey(typeName)) {
       return superTypeCache.get(typeName);
-    else {
+    } else {
       IDfType superType = type.getSuperType();
       superTypeCache.put(typeName, superType);
       return superType;

@@ -1872,7 +1872,6 @@ public class DocumentumAdaptorTest {
     String excluded = "foo, bar, r_object_id";
     expected.removeAll("foo");
     expected.removeAll("bar");
-    expected.removeAll("r_object_id");
     testExcludeMetadata(attributes, excluded, expected);
   }
 
