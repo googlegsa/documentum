@@ -46,8 +46,8 @@ documentum.src =
 # are pushed to GSA.
 # documentum.pushLocalGroupsOnly = false
 
-# The where clause to be used when documentum.src value contains 
-# the start path "/".
+# The where clause matching all the cabinets to be indexed when the
+# documentum.src value contains the start path "/".
 # documentum.cabinetWhereCondition = object_name NOT IN ('Integration', \
 #     ’Resources', 'System', 'Temp', 'Templates') AND object_name \
 #     NOT IN (SELECT r_install_owner FROM dm_server_config) AND \
