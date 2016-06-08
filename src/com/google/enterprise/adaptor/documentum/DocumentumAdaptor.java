@@ -110,7 +110,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
   private final IDfClientX dmClientX;
   private List<String> startPaths;
+  private List<String> documentTypes;
   private CopyOnWriteArrayList<String> validatedStartPaths =
+      new CopyOnWriteArrayList<String>();
+  private CopyOnWriteArrayList<String> validatedDocumentTypes =
       new CopyOnWriteArrayList<String>();
 
   // The object attributes that should not be supplied as metadata.
@@ -300,6 +303,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     config.addKey("documentum.displayUrlPattern", null);
     config.addKey("documentum.src", null);
     config.addKey("documentum.src.separator", ",");
+    config.addKey("documentum.documentTypes", "dm_document");
     config.addKey("adaptor.namespace", Principal.DEFAULT_NAMESPACE);
     config.addKey("documentum.windowsDomain", "");
     config.addKey("documentum.pushLocalGroupsOnly", "false");
@@ -356,6 +360,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     logger.log(Level.CONFIG, "documentum.src.separator: {0}", separator);
     startPaths = parseStartPaths(src, separator);
     logger.log(Level.CONFIG, "start paths: {0}", startPaths);
+    String types = config.getValue("documentum.documentTypes");
+    logger.log(Level.CONFIG, "documentum.documentTypes: {0}", types);
+    documentTypes = ImmutableList.copyOf(Splitter.on(',').trimResults()
+        .omitEmptyStrings().split(types));
+    logger.log(Level.CONFIG, "document types: {0}", documentTypes);
     try {
       maxHtmlSize = Math.max(0, 
           Integer.parseInt(config.getValue("documentum.maxHtmlSize").trim()));
@@ -388,6 +397,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         ? "DATETOSTRING" : "DATETOSTRING_LOCAL";
     try {
       validateStartPaths(dmSession);
+      validateDocumentTypes(dmSession);
     } finally {
       dmSessionManager.release(dmSession);
     }
@@ -433,6 +443,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       throw new InvalidConfigurationException(
           "documentum.src is required");
     }
+    if (Strings.isNullOrEmpty(config.getValue("documentum.documentTypes"))) {
+      throw new InvalidConfigurationException(
+          "documentum.documentTypes is required");
+    }
   }
 
   @VisibleForTesting
@@ -476,6 +490,33 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     validatedStartPaths.addAllAbsent(validStartPaths);
   }
 
+  private void validateDocumentTypes(IDfSession dmSession) {
+    List<String> validTypes = new ArrayList<String>(documentTypes.size());
+    for (String typeName : documentTypes) {
+      logger.log(Level.INFO, "Validating document type {0}", typeName);
+      try {
+        IDfType typeObj = dmSession.getType(typeName);
+        if (typeObj.isTypeOf("dm_folder")) {
+          logger.log(Level.WARNING,
+              "Ignoring {0} which is a subtype of dm_folder", typeName);
+        } else if (typeObj.isTypeOf("dm_sysobject")) {
+          validTypes.add(typeName);
+        } else {
+          logger.log(Level.WARNING, "Invalid document type {0}", typeName);
+        }
+      } catch (DfException e) {
+        logger.log(Level.WARNING, "Error validating document type {0}: {1}",
+            new Object[] {typeName, e});
+      }
+    }
+
+    if (validTypes.isEmpty()) {
+      logger.log(Level.SEVERE,
+          "No valid document types, at least one is required.");
+    }
+    validatedDocumentTypes.addAllAbsent(validTypes);
+  }
+
   @VisibleForTesting
   List<String> getStartPaths() {
     return Collections.unmodifiableList(startPaths);
@@ -484,6 +525,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   @VisibleForTesting
   List<String> getValidatedStartPaths() {
     return Collections.unmodifiableList(validatedStartPaths);
+  }
+
+  @VisibleForTesting
+  List<String> getValidatedDocumentTypes() {
+    return Collections.unmodifiableList(validatedDocumentTypes);
   }
 
   /** Get all doc ids from Documentum repository. 
@@ -503,6 +549,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     try {
       // Push the start paths to initiate crawl.
       validateStartPaths(dmSession);
+      validateDocumentTypes(dmSession);
       ArrayList<DocId> docIds = new ArrayList<DocId>();
       for (String startPath : validatedStartPaths) {
         docIds.add(docIdFromPath(startPath));
@@ -680,6 +727,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       // Push modified documents.
       try {
         validateStartPaths(dmSession);
+        validateDocumentTypes(dmSession);
         modifiedDocumentsCheckpoint = pushDocumentUpdates(pusher, dmSession,
             modifiedDocumentsCheckpoint);
       } catch (DfException e) {
@@ -841,9 +889,13 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         .append(dateToStringFunction)
         .append("(r_modify_date, 'yyyy-mm-dd hh:mi:ss') ")
         .append("AS r_modify_date_str FROM dm_sysobject ")
-        // Limit the returned object types to dm_document, dm_folder,
-        // or any type that is a subtype of dm_document or dm_folder.
-       .append("WHERE (TYPE(dm_document) OR TYPE(dm_folder)) AND ")
+        // Limit the returned object types to types specified in
+        // documentum.documentTypes config property or dm_folder.
+        .append("WHERE (");
+    for (String typeName : validatedDocumentTypes) {
+      query.append("TYPE(").append(typeName).append(") OR ");
+    }
+    query.append("TYPE(dm_folder)) AND ")
        .append(MessageFormat.format(
             "((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') AND "
             + "r_object_id > ''{1}'') OR (r_modify_date > DATE(''{0}'',"
@@ -986,7 +1038,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         }
       }
 
-      if (type.isTypeOf("dm_document")) {
+      if (isValidatedDocumentType(type)) {
         getDocumentContent(resp, (IDfSysObject) dmPersObj, id);
       } else if (type.isTypeOf("dm_folder")) {
         getFolderContent(resp, (IDfFolder) dmPersObj, id);
@@ -1013,6 +1065,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         return true;
       }
       if (startPath.equals(path) || path.startsWith(startPath + "/")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private boolean isValidatedDocumentType(IDfType type) throws DfException {
+    for (String typeName : validatedDocumentTypes) {
+      if (type.isTypeOf(typeName)) {
         return true;
       }
     }

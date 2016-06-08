@@ -197,6 +197,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.displayUrlPattern", "http://webtop/drl/{0}");
     config.addKey("documentum.src", START_PATH);
     config.addKey("documentum.src.separator", ",");
+    config.addKey("documentum.documentTypes", "dm_document");
     config.addKey("documentum.excludedAttributes", "");
     config.addKey("adaptor.namespace", "globalNS");
     config.addKey("documentum.windowsDomain", "");
@@ -384,6 +385,10 @@ public class DocumentumAdaptorTest {
           return null;
         }
       }
+
+      public IDfType getType(String type) {
+        return Proxies.newProxyInstance(IDfType.class, new TypeMock(type));
+      }
     }
 
     private class SysObjectMock {
@@ -408,6 +413,31 @@ public class DocumentumAdaptorTest {
 
       public String toString() {
         return objectId;
+      }
+    }
+
+    private class TypeMock {
+      private final String type;
+      private final ImmutableMap<String, String> superTypes =
+          ImmutableMap.of("dm_document", "dm_sysobject");
+
+      public TypeMock(String type) {
+        this.type = type;
+      }
+
+      public boolean isTypeOf(String otherType) {
+        if (type.startsWith(otherType)) {
+          return true;
+        }
+
+        String parent = superTypes.get(type);
+        while (parent != null) {
+          if (superTypes.get(type).startsWith(otherType)) {
+            return true;
+          }
+          parent = superTypes.get(parent);
+        }
+        return false;
       }
     }
   }
@@ -520,6 +550,7 @@ public class DocumentumAdaptorTest {
     if (separator != null) {
       config.overrideKey("documentum.src.separator", separator);
     }
+    config.overrideKey("documentum.documentTypes", "dm_document");
 
     adaptor.init(context);
   }
@@ -797,8 +828,8 @@ public class DocumentumAdaptorTest {
           query = query.replaceAll("DATETOSTRING(_LOCAL)?", "FORMATDATETIME")
               .replace("DATE(", "PARSEDATETIME(")
               .replace("yyyy-mm-dd hh:mi:ss", "yyyy-MM-dd HH:mm:ss")
-              .replace("TYPE(dm_document)", "r_object_type LIKE 'dm_document%'")
-              .replace("TYPE(dm_folder)", "r_object_type LIKE 'dm_folder%'")
+              .replaceAll("TYPE\\((dm_document_subtype|dm_sysobject_subtype|"
+                  + "dm_document|dm_folder)\\)", "r_object_type LIKE '$1%'")
               .replace("FOLDER(", "(mock_object_path LIKE ")
               .replace("',descend", "%'")
               .replace("ENABLE(ROW_BASED)", "");
@@ -1142,14 +1173,29 @@ public class DocumentumAdaptorTest {
     private class TypeMock {
       private final String type;
       private final ImmutableMap<String, String> superTypes =
-          ImmutableMap.of("dm_document", "dm_sysobject");
+          ImmutableMap.of("dm_document_subtype", "dm_document",
+                          "dm_document", "dm_sysobject",
+                          "dm_sysobject_subtype", "dm_sysobject",
+                          "dm_folder_subtype", "dm_folder",
+                          "dm_folder", "dm_sysobject");
 
       public TypeMock(String type) {
         this.type = type;
       }
 
       public boolean isTypeOf(String otherType) {
-        return type.startsWith(otherType);
+        if (type.startsWith(otherType)) {
+          return true;
+        }
+
+        String parent = superTypes.get(type);
+        while (!Strings.isNullOrEmpty(parent)) {
+          if (parent.startsWith(otherType)) {
+            return true;
+          }
+          parent = superTypes.get(parent);
+        }
+        return false;
       }
 
       public String getName() {
@@ -3741,5 +3787,136 @@ public class DocumentumAdaptorTest {
         new Checkpoint(FEB_1970, folder),
         makeExpectedDocIds(folder, "foo", "bar", "baz"),
         new Checkpoint(MAR_1970, "0b01081f80001003"));
+  }
+
+  private void initValidDocumentTypes(DocumentumAdaptor adaptor,
+      String... types) throws DfException {
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    Config config = initTestAdaptorConfig(context);
+    config.overrideKey("documentum.documentTypes", Joiner.on(',').join(types));
+    adaptor.init(context);
+  }
+
+  @Test
+  public void testValidateDocumentTypes() throws DfException {
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(new H2BackedTestProxies().getProxyClientX());
+    String type1 = "dm_document";
+    String type2 = "dm_document_subtype";
+
+    initValidDocumentTypes(adaptor, type1, type2);
+    assertEquals(ImmutableList.of(type1, type2),
+        adaptor.getValidatedDocumentTypes());
+  }
+
+  @Test
+  public void testValidateDocumentTypesSomeValid() throws DfException {
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(new H2BackedTestProxies().getProxyClientX());
+    String type1 = "dm_document_subtype";
+    String type2 = "dm_my_type";
+    String type3 = "dm_document";
+    String type4 = "dm_folder";
+    String type5 = "dm_folder_subtype";
+
+    initValidDocumentTypes(adaptor, type1, type2, type3, type4, type5);
+    assertEquals(ImmutableList.of(type1, type3),
+        adaptor.getValidatedDocumentTypes());
+  }
+
+  @Test
+  public void testValidateDocumentSysobjectSubtype() throws DfException {
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(new H2BackedTestProxies().getProxyClientX());
+    String type = "dm_sysobject_subtype";
+
+    initValidDocumentTypes(adaptor, type);
+    assertEquals(ImmutableList.of(type),
+        adaptor.getValidatedDocumentTypes());
+  }
+
+  @Test
+  public void testValidateDocumentTypesNoneValid() throws DfException {
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(new H2BackedTestProxies().getProxyClientX());
+    String type1 = "dm_some_type";
+    String type2 = "dm_my_type";
+    String type3 = "dm_any_type";
+
+    initValidDocumentTypes(adaptor, type1, type2, type3);
+    assertTrue(adaptor.getValidatedDocumentTypes().isEmpty());
+  }
+
+  @Test (expected=InvalidConfigurationException.class)
+  public void testValidateDocumentTypesEmpty() throws DfException {
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(new H2BackedTestProxies().getProxyClientX());
+    String type1 = "";
+
+    initValidDocumentTypes(adaptor, type1);
+  }
+
+  private void checkTypedDocIdsPushed(List<String> startPaths, String docTypes,
+      Checkpoint checkpoint, List<Record> expectedRecords)
+      throws DfException, IOException, InterruptedException {
+    DocumentumAdaptor adaptor =
+        new DocumentumAdaptor(new H2BackedTestProxies().getProxyClientX());
+
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    Config config = initTestAdaptorConfig(context);
+    config.overrideKey("documentum.src", Joiner.on(",").join(startPaths));
+    config.overrideKey("documentum.documentTypes", docTypes);
+    adaptor.init(context);
+
+    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
+    adaptor.modifiedDocumentsCheckpoint = checkpoint;
+    adaptor.getModifiedDocIds(pusher);
+
+    assertEquals(expectedRecords, pusher.getRecords());
+  }
+
+  private void testCustomType(String docTypes, String... expect)
+      throws Exception {
+    String folderId = "0b001";
+    String folder = "/Folder1";
+    insertFolder(JAN_1970, folderId, folder);
+    insertSysObject(MAR_1970, "09001", "foo", folder + "/foo",
+        "dm_document", folderId);
+    insertSysObject(MAR_1970, "09002", "bar", folder + "/bar",
+        "dm_document_subtype", folderId);
+    insertSysObject(MAR_1970, "09003", "baz", folder + "/baz",
+        "dm_sysobject_subtype", folderId);
+
+    checkTypedDocIdsPushed(startPaths(folder),
+        docTypes,
+        new Checkpoint(FEB_1970, folder),
+        makeExpectedDocIds(folder, expect));
+  }
+
+  @Test
+  public void testCustomType_all() throws Exception {
+    testCustomType("dm_document, dm_document_subtype, dm_sysobject_subtype",
+        "foo", "bar", "baz");
+  }
+
+  @Test
+  public void testCustomType_skip() throws Exception {
+    testCustomType("dm_document, dm_document_subtype", "foo", "bar");
+  }
+
+  @Test
+  public void testCustomType_NonSysobject() throws Exception {
+    String folderId = "0b001";
+    String folder = "/Folder1";
+    insertFolder(JAN_1970, folderId, folder);
+    insertSysObject(MAR_1970, "09001", "foo", folder + "/foo",
+        "dm_document", folderId);
+    insertSysObject(MAR_1970, "09002", "bar", folder + "/bar",
+        "dm_store", folderId);
+
+    checkTypedDocIdsPushed(startPaths(folder),
+        "dm_document, dm_store",
+        new Checkpoint(FEB_1970, folder),
+        makeExpectedDocIds(folder, "foo"));
   }
 }

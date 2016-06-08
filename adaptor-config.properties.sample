@@ -28,6 +28,10 @@ documentum.src =
 # Delimiter used to separate paths in documentum.src.
 # documentum.src.separator = ,
 
+# List of document types separated by comma. At least one type is required.
+# Only sub types of dm_sysobject are supported.
+# documentum.documentTypes = dm_document
+
 # Global namespace. Local namespace is computed to be
 # “<adaptor.namespace>_<documentum.docbaseName>”.
 # adaptor.namespace = “Default”
