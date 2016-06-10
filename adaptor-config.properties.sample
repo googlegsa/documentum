@@ -29,7 +29,8 @@ documentum.src =
 # documentum.src.separator = ,
 
 # List of document types separated by comma. At least one type is required.
-# Only sub types of dm_sysobject are supported.
+# Only subtypes of dm_sysobject are supported, and not dm_folder or
+# its subtypes.
 # documentum.documentTypes = dm_document
 
 # Global namespace. Local namespace is computed to be
