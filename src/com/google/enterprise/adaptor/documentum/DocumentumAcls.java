@@ -60,6 +60,7 @@ class DocumentumAcls {
   private final Principals principals;
   private final CaseSensitivityType caseSensitivityType;
 
+  private String aclIdCheckpoint;
   private Checkpoint aclUpdateCheckpoint;
 
   DocumentumAcls(IDfClientX dmClientX, IDfSession dmSession,
@@ -73,9 +74,15 @@ class DocumentumAcls {
     this.caseSensitivityType = caseSensitivityType;
   }
 
-  private IDfQuery makeAclQuery() {
+  private IDfQuery makeAclQuery(String aclId) {
     IDfQuery query = dmClientX.getQuery();
-    query.setDQL("SELECT r_object_id FROM dm_acl");
+    StringBuilder queryStr = new StringBuilder()
+      .append("SELECT r_object_id FROM dm_acl");
+    if (aclId != null) {
+      queryStr.append(" WHERE r_object_id > '").append(aclId).append("'");
+    }
+    queryStr.append(" ORDER BY r_object_id");
+    query.setDQL(queryStr.toString());
     return query;
   }
 
@@ -119,17 +126,19 @@ class DocumentumAcls {
    * can have its own individual ACL applied to it. So need to send all
    * the ACLs in Documentum to GSA.
    * 
-   * @return a map of Adaptor Acls for all Documentum ACLs
+   * @param aclMap a map of Adaptor Acls for all Documentum ACLs.
+   * @param aclId last checkpoint.
    * @throws DfException if error in getting ACL information.
    */
-  public Map<DocId, Acl> getAcls() throws DfException {
-    IDfQuery query = makeAclQuery();
+  public void getAcls(String aclId, Map<DocId, Acl> aclMap) throws DfException {
+    aclIdCheckpoint = aclId;
+    IDfQuery query = makeAclQuery(aclId);
     IDfCollection dmAclCollection =
         query.execute(dmSession, IDfQuery.DF_EXECREAD_QUERY);
     try {
-      Map<DocId, Acl> aclMap = new HashMap<DocId, Acl>();
       while (dmAclCollection.next()) {
         String objectId = dmAclCollection.getString("r_object_id");
+        logger.log(Level.FINE, "ACL ID: {0}", objectId);
         IDfACL dmAcl;
         try {
           dmAcl = (IDfACL) dmSession.getObject(new DfId(objectId));
@@ -139,8 +148,10 @@ class DocumentumAcls {
           continue;
         }
         addAclChainToMap(dmAcl, objectId, aclMap);
+        aclIdCheckpoint = objectId;
       }
-      return aclMap;
+      // for a successful completion, set to null.
+      aclIdCheckpoint = null;
     } finally {
       try {
         dmAclCollection.close();
@@ -182,6 +193,9 @@ class DocumentumAcls {
               "Skipping redundant modify of: {0}", chronicleId);
           continue;
         }
+        logger.log(Level.FINE, "Updated ACL ID: {0}, chronicle ID: {1}",
+            new String[] {modifyObjectId, chronicleId});
+
         IDfACL dmAcl;
         try {
           dmAcl = (IDfACL) dmSession.getObject(new DfId(modifyObjectId));
@@ -202,6 +216,13 @@ class DocumentumAcls {
         logger.log(Level.WARNING, "Error closing collection", e);
       }
     }
+  }
+
+  /**
+   * Returns the ACL ID processed in the last call to {@link getAcls}.
+   */
+  public String getAclsCheckpoint() {
+    return aclIdCheckpoint;
   }
 
   /**

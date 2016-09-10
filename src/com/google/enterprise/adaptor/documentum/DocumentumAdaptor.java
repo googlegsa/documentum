@@ -140,8 +140,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   /** "The DQL function that returns the time in the server timezone.*/
   @VisibleForTesting String dateToStringFunction;
 
+  private String aclIdCheckpoint = null;
   @VisibleForTesting Checkpoint modifiedAclsCheckpoint = new Checkpoint();
   @VisibleForTesting Checkpoint modifiedDocumentsCheckpoint = new Checkpoint();
+  private String groupsCheckpoint = null;
   @VisibleForTesting Checkpoint modifiedGroupsCheckpoint = new Checkpoint();
   @VisibleForTesting Checkpoint modifiedPermissionsCheckpoint =
       new Checkpoint();
@@ -533,6 +535,14 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     return Collections.unmodifiableList(validatedDocumentTypes);
   }
 
+  private IDfSession getDfSession() throws IOException {
+    try {
+      return dmSessionManager.newSession(docbase);
+    } catch (DfException e) {
+      throw new IOException("Failed to get Documentum Session", e);
+    }
+  }
+
   /** Get all doc ids from Documentum repository. 
    * @throws InterruptedException if pusher is interrupted in sending Doc Ids.
    * @throws IOException if error in getting Acl information.
@@ -541,12 +551,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   public void getDocIds(DocIdPusher pusher) throws InterruptedException,
       IOException {
     logger.entering("DocumentumAdaptor", "getDocIds");
-    IDfSession dmSession;
-    try {
-      dmSession = dmSessionManager.getSession(docbase);
-    } catch (DfException e) {
-      throw new IOException("Failed to get Documentum Session", e);
-    }
+
+    IDfSession dmSession = getDfSession();
     try {
       // Push the start paths to initiate crawl.
       validateStartPaths(dmSession);
@@ -557,61 +563,80 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       }
       logger.log(Level.FINER, "DocumentumAdaptor DocIds: {0}", docIds);
       pusher.pushDocIds(docIds);
+    } finally {
+      dmSessionManager.release(dmSession);
+    }
 
-      // Push the ACLs and Groups.
-      DfException savedException = null;
+    // Push the ACLs.
+    DfException savedException = null;
+    Map<DocId, Acl> aclMap = new HashMap<>();
+    DocumentumAcls dctmAcls = null;
+    dmSession = getDfSession();
+    try {
       Principals principals = new Principals(dmSession, localNamespace,
           globalNamespace, windowsDomain);
-      try {
-        pusher.pushNamedResources(new DocumentumAcls(dmClientX, dmSession,
-            principals, caseSensitivityType).getAcls());
-      } catch (DfException e) {
+      dctmAcls = new DocumentumAcls(dmClientX, dmSession,
+          principals, caseSensitivityType);
+      dctmAcls.getAcls(aclIdCheckpoint, aclMap);
+    } catch (DfException e) {
+      savedException = e;
+    } finally {
+      dmSessionManager.release(dmSession);
+    }
+    pusher.pushNamedResources(aclMap);
+    aclIdCheckpoint = dctmAcls.getAclsCheckpoint();
+
+    // Push the Groups.
+    ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups =
+        ImmutableMap.builder();
+    dmSession = getDfSession();
+    try {
+      Principals principals = new Principals(dmSession, localNamespace,
+          globalNamespace, windowsDomain);
+      getGroups(dmSession, principals, groups);
+    } catch (DfException e) {
+      if (savedException == null) {
         savedException = e;
-      }
-      try {
-        pusher.pushGroupDefinitions(getGroups(dmSession, principals),
-            caseSensitivityType
-            == CaseSensitivityType.EVERYTHING_CASE_SENSITIVE);
-      } catch (DfException e) {
-        if (savedException == null) {
-          savedException = e;
-        } else {
-          savedException.addSuppressed(e);
-        }
-      }
-      if (savedException != null) {
-        throw new IOException(savedException);
+      } else {
+        savedException.addSuppressed(e);
       }
     } finally {
       dmSessionManager.release(dmSession);
     }
+    pusher.pushGroupDefinitions(groups.build(),
+        caseSensitivityType == CaseSensitivityType.EVERYTHING_CASE_SENSITIVE);
+
+    if (savedException != null) {
+      throw new IOException(savedException);
+    }
+
     logger.exiting("DocumentumAdaptor", "getDocIds");
   }
 
   /**
-   * Returns a map of groups and their members.
+   * Adds groups and their members to the map builder.
    *
    * DQL queries that return repeating attributes (in our case,
    * users_names and groups_names) do not work properly on a DB2
    * back-end. We use ENABLE(ROW_BASED) to explode the repeating
    * attributes across several rows.
    */
-  private Map<GroupPrincipal, Collection<Principal>> getGroups(
-      IDfSession session, Principals principals) throws DfException {
+  private void getGroups(IDfSession session, Principals principals,
+      ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups)
+      throws DfException {
     String queryStr = makeGroupsQuery(null);
     logger.log(Level.FINER, "Get Groups Query: {0}", queryStr);
     IDfQuery query = dmClientX.getQuery();
     query.setDQL(queryStr);
     IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
     try {
-      ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups =
-          ImmutableMap.builder();
       ImmutableSet.Builder<Principal> members = null;
       String groupName = "";
       while (result.next()) {
         if (!groupName.equals(result.getString("group_name"))) {
           // We have transitioned to a new group.
           addGroup(groupName, groups, members, principals);
+          groupsCheckpoint = groupName;
           members = ImmutableSet.builder();
           groupName = result.getString("group_name");
           logger.log(Level.FINE, "Found Group: {0}", groupName);
@@ -622,12 +647,13 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
             result.getString("groups_names"), true);
       }
       addGroup(groupName, groups, members, principals);
+      // for a successful completion, set to null.
+      groupsCheckpoint = null;
 
       // Add special dm_world group, which is all users.
       GroupPrincipal groupPrincipal = (GroupPrincipal)
           principals.getPrincipal("dm_world", "dm_world", true);
       groups.put(groupPrincipal, getDmWorldPrincipals(session, principals));
-      return groups.build();
     } finally {
       result.close();
     }
@@ -708,6 +734,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       query.append((checkpoint == null) ? " WHERE " : " AND ")
           .append("(group_source IS NULL OR group_source <> 'LDAP')");
     }
+    if (groupsCheckpoint != null && checkpoint == null) {
+      query.append(pushLocalGroupsOnly ? " AND " : " WHERE ")
+          .append("group_name > '").append(groupsCheckpoint).append("'");
+    }
     query.append(" ORDER BY group_name ENABLE(ROW_BASED)");
     return query.toString();
   }
@@ -716,54 +746,75 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   public void getModifiedDocIds(DocIdPusher pusher) throws IOException,
       InterruptedException {
     logger.entering("DocumentumAdaptor", "getModifiedDocIds");
-    IDfSession dmSession;
+
+    DfException savedException = null;
+
+    // Push modified documents.
+    IDfSession dmSession = getDfSession();
     try {
-      dmSession = dmSessionManager.getSession(docbase);
+      validateStartPaths(dmSession);
+      validateDocumentTypes(dmSession);
+      modifiedDocumentsCheckpoint = pushDocumentUpdates(pusher, dmSession,
+          modifiedDocumentsCheckpoint);
     } catch (DfException e) {
-      throw new IOException("Failed to get Documentum Session", e);
+      savedException = e;
+    } finally {
+      dmSessionManager.release(dmSession);
     }
+
+    // Push modified ACLs.
+    dmSession = getDfSession();
     try {
-      DfException savedException = null;
-
-      // Push modified documents.
-      try {
-        validateStartPaths(dmSession);
-        validateDocumentTypes(dmSession);
-        modifiedDocumentsCheckpoint = pushDocumentUpdates(pusher, dmSession,
-            modifiedDocumentsCheckpoint);
-      } catch (DfException e) {
-        savedException = e;
-      }
-
       Principals principals = new Principals(dmSession, localNamespace,
           globalNamespace, windowsDomain);
-      try {
-        modifiedAclsCheckpoint = pushAclUpdates(pusher, dmSession,
-          principals, modifiedAclsCheckpoint);
-      } catch (DfException e) {
+      modifiedAclsCheckpoint =
+          pushAclUpdates(pusher, dmSession, principals, modifiedAclsCheckpoint);
+    } catch (DfException e) {
+      if (savedException == null) {
         savedException = e;
-      }
-
-      try {
-        modifiedGroupsCheckpoint = pushGroupUpdates(pusher, dmSession,
-            principals, modifiedGroupsCheckpoint);
-      } catch (DfException e) {
-        savedException = e;
-      }
-
-      try {
-        modifiedPermissionsCheckpoint = pushPermissionsUpdates(pusher,
-            dmSession, modifiedPermissionsCheckpoint);
-      } catch (DfException e) {
-        savedException = e;
-      }
-
-      if (savedException != null) {
-        throw new IOException(savedException);
+      } else {
+        savedException.addSuppressed(e);
       }
     } finally {
       dmSessionManager.release(dmSession);
     }
+
+    // Push modified Groups.
+    dmSession = getDfSession();
+    try {
+      Principals principals = new Principals(dmSession, localNamespace,
+          globalNamespace, windowsDomain);
+      modifiedGroupsCheckpoint = pushGroupUpdates(pusher, dmSession, principals,
+          modifiedGroupsCheckpoint);
+    } catch (DfException e) {
+      if (savedException == null) {
+        savedException = e;
+      } else {
+        savedException.addSuppressed(e);
+      }
+    } finally {
+      dmSessionManager.release(dmSession);
+    }
+
+    // Push modified document permissions.
+    dmSession = getDfSession();
+    try {
+      modifiedPermissionsCheckpoint = pushPermissionsUpdates(pusher, dmSession,
+          modifiedPermissionsCheckpoint);
+    } catch (DfException e) {
+      if (savedException == null) {
+        savedException = e;
+      } else {
+        savedException.addSuppressed(e);
+      }
+    } finally {
+      dmSessionManager.release(dmSession);
+    }
+
+    if (savedException != null) {
+      throw new IOException(savedException);
+    }
+
     logger.exiting("DocumentumAdaptor", "getModifiedDocIds");
   }
 
