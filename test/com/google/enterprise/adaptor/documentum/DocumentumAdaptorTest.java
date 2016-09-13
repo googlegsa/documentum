@@ -832,7 +832,7 @@ public class DocumentumAdaptorTest {
                   + "dm_document|dm_folder)\\)", "r_object_type LIKE '$1%'")
               .replace("FOLDER(", "(mock_object_path LIKE ")
               .replace("',descend", "%'")
-              .replace("ENABLE(ROW_BASED)", "");
+              .replace("ORDER BY group_name ENABLE(ROW_BASED)", "");
           rs = stmt.executeQuery(query);
         } catch (SQLException e) {
           throw new DfException(e);

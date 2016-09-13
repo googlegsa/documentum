@@ -23,6 +23,7 @@ import com.google.enterprise.adaptor.UserPrincipal;
 import com.documentum.fc.client.IDfGroup;
 import com.documentum.fc.client.IDfSession;
 import com.documentum.fc.client.IDfUser;
+import com.documentum.fc.client.impl.typeddata.NoSuchAttributeException;
 import com.documentum.fc.common.DfException;
 
 import java.util.ArrayList;
@@ -95,9 +96,17 @@ class Principals {
       return accessorName;
     }
 
-    IDfUser userObj = (IDfUser) dmSession.getObjectByQualification(
+    IDfUser userObj;
+    try {
+        userObj = (IDfUser) dmSession.getObjectByQualification(
         "dm_user where user_name = '" + singleQuoteEscapeString(accessorName)
         + "' and user_state = 0");
+    } catch (NoSuchAttributeException e) {
+      logger.log(Level.FINE,
+          "Skipping invalid user object: " + accessorName, e);
+      return null;
+    }
+
     if (userObj == null) {
       return null;
     }
@@ -105,24 +114,21 @@ class Principals {
     if ("ldap".equalsIgnoreCase(userObj.getUserSourceAsString())) {
       String dnName = userObj.getUserDistinguishedLDAPName();
       if (Strings.isNullOrEmpty(dnName)) {
-        // TODO(jlacey): This is inconsistent with authN, which
-        // matches such users against windows_domain. This case
-        // probably can't happen, so I don't think it's important.
         logger.log(Level.FINE, "Missing DN for user: {0}", accessorName);
-        return null;
-      }
-
-      try {
-        LdapName dnDomain = getDomainComponents(dnName);
-        if (!dnDomain.isEmpty()) {
-          return getFirstDomainFromDN(dnDomain) + "\\"
-              + userObj.getUserLoginName();
+        // Fall-through to use windowsDomain.
+      } else {
+        try {
+          LdapName dnDomain = getDomainComponents(dnName);
+          if (!dnDomain.isEmpty()) {
+            return getFirstDomainFromDN(dnDomain) + "\\"
+                + userObj.getUserLoginName();
+          }
+          // Fall-through to use windowsDomain.
+        } catch (InvalidNameException e) {
+          logger.log(Level.FINE,
+              "Invalid DN " + dnName + " for user: " + accessorName, e);
+          return null;
         }
-        // Else fall-through to use windows_domain.
-      } catch (InvalidNameException e) {
-        logger.log(Level.FINE,
-            "Invalid DN " + dnName + " for user: " + accessorName, e);
-        return null;
       }
     }
 

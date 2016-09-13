@@ -24,6 +24,7 @@ import com.google.enterprise.adaptor.documentum.DocumentumAdaptor.CaseSensitivit
 import com.google.enterprise.adaptor.documentum.DocumentumAdaptor.Checkpoint;
 
 import com.documentum.com.IDfClientX;
+import com.documentum.fc.client.DfIdNotFoundException;
 import com.documentum.fc.client.IDfACL;
 import com.documentum.fc.client.IDfCollection;
 import com.documentum.fc.client.IDfPermitType;
@@ -129,7 +130,14 @@ class DocumentumAcls {
       Map<DocId, Acl> aclMap = new HashMap<DocId, Acl>();
       while (dmAclCollection.next()) {
         String objectId = dmAclCollection.getString("r_object_id");
-        IDfACL dmAcl = (IDfACL) dmSession.getObject(new DfId(objectId));
+        IDfACL dmAcl;
+        try {
+          dmAcl = (IDfACL) dmSession.getObject(new DfId(objectId));
+        } catch (DfIdNotFoundException e) {
+          logger.log(Level.FINE,
+              "Skipping ACL {0}: {1}", new Object[] {objectId, e});
+          continue;
+        }
         addAclChainToMap(dmAcl, objectId, aclMap);
       }
       return aclMap;
@@ -174,7 +182,14 @@ class DocumentumAcls {
               "Skipping redundant modify of: {0}", chronicleId);
           continue;
         }
-        IDfACL dmAcl = (IDfACL) dmSession.getObject(new DfId(modifyObjectId));
+        IDfACL dmAcl;
+        try {
+          dmAcl = (IDfACL) dmSession.getObject(new DfId(modifyObjectId));
+        } catch (DfIdNotFoundException e) {
+          logger.log(Level.FINE,
+              "Skipping ACL {0}: {1}", new Object[] {modifyObjectId, e});
+          continue;
+        }
         addAclChainToMap(dmAcl, modifyObjectId, aclMap);
         aclModifiedIds.add(chronicleId);
       }

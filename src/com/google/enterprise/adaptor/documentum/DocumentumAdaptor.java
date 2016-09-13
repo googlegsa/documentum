@@ -707,7 +707,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       query.append((checkpoint == null) ? " WHERE " : " AND ")
           .append("(group_source IS NULL OR group_source <> 'LDAP')");
     }
-    query.append(" ENABLE(ROW_BASED)");
+    query.append(" ORDER BY group_name ENABLE(ROW_BASED)");
     return query.toString();
   }
 
@@ -988,7 +988,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       return;
     }
 
-    IDfSession dmSession;
+    IDfSession dmSession = null;
     try {
       dmSession = dmSessionManager.getSession(docbase);
 
@@ -1050,6 +1050,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       throw new IOException("Error getting content:", e);
     } catch (URISyntaxException e) {
       throw new IOException("Error getting URI:", e);
+    } finally {
+      if (dmSession != null) {
+        dmSessionManager.release(dmSession);
+      }
     }
   }
 
