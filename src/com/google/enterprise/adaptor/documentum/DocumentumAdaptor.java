@@ -39,6 +39,7 @@ import com.google.enterprise.adaptor.Response;
 
 import com.documentum.com.DfClientX;
 import com.documentum.com.IDfClientX;
+import com.documentum.fc.client.DfIdNotFoundException;
 import com.documentum.fc.client.IDfCollection;
 import com.documentum.fc.client.IDfEnumeration;
 import com.documentum.fc.client.IDfFolder;
@@ -1002,9 +1003,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       if (path.matches(".*:\\p{XDigit}{16}")) {
         String objId = path.substring(path.length() - 16);
         logger.log(Level.FINER, "VDoc Child Object Id: {0}", objId);
-        dmPersObj = dmSession.getObject(new DfId(objId));
-        // Check for a false positive regex match.
-        if (dmPersObj == null) {
+        try {
+          dmPersObj = dmSession.getObject(new DfId(objId));
+        } catch (DfIdNotFoundException e) {
+          // Check for a false positive regex match.
           dmPersObj = dmSession.getObjectByPath(path);
         }
       } else {
