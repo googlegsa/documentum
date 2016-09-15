@@ -81,6 +81,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -567,44 +568,79 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       dmSessionManager.release(dmSession);
     }
 
+    int sleepDuration = 5;
+    TimeUnit sleepUnit = TimeUnit.SECONDS;
+
     // Push the ACLs.
     DfException savedException = null;
-    Map<DocId, Acl> aclMap = new HashMap<>();
-    DocumentumAcls dctmAcls = null;
-    dmSession = getDfSession();
-    try {
-      Principals principals = new Principals(dmSession, localNamespace,
-          globalNamespace, windowsDomain);
-      dctmAcls = new DocumentumAcls(dmClientX, dmSession,
-          principals, caseSensitivityType);
-      dctmAcls.getAcls(aclIdCheckpoint, aclMap);
-    } catch (DfException e) {
-      savedException = e;
-    } finally {
-      dmSessionManager.release(dmSession);
-    }
-    pusher.pushNamedResources(aclMap);
-    aclIdCheckpoint = dctmAcls.getAclsCheckpoint();
+    String prevAclIdCheckpoint = aclIdCheckpoint;
+    do {
+      Map<DocId, Acl> aclMap = new HashMap<>();
+      DocumentumAcls dctmAcls = null;
+      dmSession = getDfSession();
+      try {
+        Principals principals = new Principals(dmSession, localNamespace,
+            globalNamespace, windowsDomain);
+        dctmAcls = new DocumentumAcls(dmClientX, dmSession,
+            principals, caseSensitivityType);
+        dctmAcls.getAcls(aclIdCheckpoint, aclMap);
+      } catch (DfException e) {
+        savedException = e;
+      } finally {
+        dmSessionManager.release(dmSession);
+      }
+      pusher.pushNamedResources(aclMap);
+      aclIdCheckpoint = dctmAcls.getAclsCheckpoint();
+
+      if (savedException != null) {
+        if (aclIdCheckpoint != null
+            && !aclIdCheckpoint.equals(prevAclIdCheckpoint)) {
+          prevAclIdCheckpoint = aclIdCheckpoint;
+          logger.log(Level.FINE, "Waiting for {0} {1}",
+              new Object[] {sleepDuration, sleepUnit});
+          sleepUnit.sleep(sleepDuration);
+        } else {
+          break;
+        }
+      }
+    } while (aclIdCheckpoint != null);
 
     // Push the Groups.
-    ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups =
-        ImmutableMap.builder();
-    dmSession = getDfSession();
-    try {
-      Principals principals = new Principals(dmSession, localNamespace,
-          globalNamespace, windowsDomain);
-      getGroups(dmSession, principals, groups);
-    } catch (DfException e) {
-      if (savedException == null) {
-        savedException = e;
-      } else {
-        savedException.addSuppressed(e);
+    boolean thrownException = false;
+    String prevGroupsCheckpoint = groupsCheckpoint;
+    do {
+      ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups =
+          ImmutableMap.builder();
+      dmSession = getDfSession();
+      try {
+        Principals principals = new Principals(dmSession, localNamespace,
+            globalNamespace, windowsDomain);
+        getGroups(dmSession, principals, groups);
+      } catch (DfException e) {
+        thrownException = true;
+        if (savedException == null) {
+          savedException = e;
+        } else {
+          savedException.addSuppressed(e);
+        }
+      } finally {
+        dmSessionManager.release(dmSession);
       }
-    } finally {
-      dmSessionManager.release(dmSession);
-    }
-    pusher.pushGroupDefinitions(groups.build(),
-        caseSensitivityType == CaseSensitivityType.EVERYTHING_CASE_SENSITIVE);
+      pusher.pushGroupDefinitions(groups.build(),
+          caseSensitivityType == CaseSensitivityType.EVERYTHING_CASE_SENSITIVE);
+
+      if (thrownException) {
+        if (groupsCheckpoint != null
+            && !groupsCheckpoint.equals(prevGroupsCheckpoint)) {
+          prevGroupsCheckpoint = groupsCheckpoint;
+          logger.log(Level.FINE, "Waiting for {0} {1}",
+              new Object[] {sleepDuration, sleepUnit});
+          sleepUnit.sleep(sleepDuration);
+        } else {
+          break;
+        }
+      }
+    } while (groupsCheckpoint != null);
 
     if (savedException != null) {
       throw new IOException(savedException);
