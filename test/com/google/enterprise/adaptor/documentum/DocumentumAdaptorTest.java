@@ -42,9 +42,10 @@ import com.google.enterprise.adaptor.AdaptorContext;
 import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
 import com.google.enterprise.adaptor.DocIdEncoder;
+import com.google.enterprise.adaptor.DocIdPusher;
 import com.google.enterprise.adaptor.DocIdPusher.Record;
-import com.google.enterprise.adaptor.InvalidConfigurationException;
 import com.google.enterprise.adaptor.GroupPrincipal;
+import com.google.enterprise.adaptor.InvalidConfigurationException;
 import com.google.enterprise.adaptor.Principal;
 import com.google.enterprise.adaptor.Request;
 import com.google.enterprise.adaptor.UserPrincipal;
@@ -91,6 +92,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.text.SimpleDateFormat;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
@@ -531,7 +533,6 @@ public class DocumentumAdaptorTest {
     assertEquals(root, DocumentumAdaptor.docIdToPath(docid));
     assertEquals("/foo", DocumentumAdaptor.docIdToPath(
         DocumentumAdaptor.docIdFromPath(root, "foo")));
-    
   }
 
   private void initializeAdaptor(DocumentumAdaptor adaptor, String src,
@@ -1426,6 +1427,25 @@ public class DocumentumAdaptorTest {
     }
   }
 
+  private DocumentumAdaptor getObjectUnderTest() throws DfException {
+    return getObjectUnderTest(ImmutableMap.<String, String>of());
+  }
+
+  private DocumentumAdaptor getObjectUnderTest(Map<String, String> configMap)
+      throws DfException {
+    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
+
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    Config config = initTestAdaptorConfig(context);
+    for (Map.Entry<String, String> entry : configMap.entrySet()) {
+      config.overrideKey(entry.getKey(), entry.getValue());
+    }
+    adaptor.init(context);
+    return adaptor;
+  }
+
   private void insertCabinets(String... cabinets) throws SQLException {
     for (String cabinet : cabinets) {
       executeUpdate(String.format("INSERT INTO dm_cabinet "
@@ -1859,7 +1879,7 @@ public class DocumentumAdaptorTest {
 
     AdaptorContext context = ProxyAdaptorContext.getInstance();
     Config config = initTestAdaptorConfig(context);
-    if (excludedAttrs != null ) {
+    if (excludedAttrs != null) {
       config.overrideKey("documentum.excludedAttributes", excludedAttrs);
     }
 
@@ -2052,14 +2072,8 @@ public class DocumentumAdaptorTest {
   private void testGetDocIds(List<String> startPaths,
       List<Record> expectedRecords)
       throws DfException, IOException, InterruptedException {
-    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = initTestAdaptorConfig(context);
-    config.overrideKey("documentum.src", Joiner.on(",").join(startPaths));
-    adaptor.init(context);
+    DocumentumAdaptor adaptor = getObjectUnderTest(
+        ImmutableMap.of("documentum.src", Joiner.on(",").join(startPaths)));
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.getDocIds(pusher);
@@ -2098,6 +2112,117 @@ public class DocumentumAdaptorTest {
 
     testGetDocIds(startPaths(START_PATH, path2, path3),
         expectedRecordsFor(START_PATH, path3));
+  }
+
+  /**
+   * A traversal action includes an expected input checkpoint, an
+   * exception to throw, and a final checkpoint to return. All fields
+   * are optional and may be null.
+   */
+  private static class Action {
+    public final String input;
+    public final DfException error;
+    public final String output;
+
+    public Action(String input, DfException error, String output) {
+      this.input = input;
+      this.error = error;
+      this.output = output;
+    }
+  }
+
+  /**
+   * Tests the traversers by replaying a sequence of actions. An
+   * assertion will fail if the traverser loops more or fewer times
+   * than the given number of actions, or if the checkpoints or thrown
+   * exceptions do not match.
+   */
+  private void testTraverserTemplate(Action... actionArray) throws Exception {
+    // The actions are removed from the deque as they are performed.
+    final ArrayDeque<Action> actions =
+        new ArrayDeque<>(Arrays.asList(actionArray));
+
+    DocumentumAdaptor adaptor = getObjectUnderTest();
+    DocumentumAdaptor.TraverserTemplate template =
+        adaptor.new TraverserTemplate() {
+            @Override protected void createCollection() {}
+
+            @Override
+            protected void fillCollection(IDfSession dmSession,
+                Principals principals, String checkpoint) throws DfException {
+              assertEquals(actions.getFirst().input, checkpoint);
+              if (actions.getFirst().error != null) {
+                throw actions.getFirst().error;
+              }
+            }
+
+            @Override
+            protected String pushCollection(DocIdPusher pusher) {
+              return actions.removeFirst().output;
+            }
+
+            @Override protected void sleep() {}
+          };
+
+    // We only expect an exception if the last loop iteration throws.
+    ArrayList<DfException> expectedExceptions = new ArrayList<>();
+    if (actions.getLast().error != null) {
+      expectedExceptions.add(actions.getLast().error);
+    }
+
+    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
+    ArrayList<DfException> savedExceptions = new ArrayList<>();
+    template.run(pusher, savedExceptions);
+    assertTrue(actions.toString(), actions.isEmpty());
+    assertEquals(expectedExceptions, savedExceptions);
+  }
+
+  private static final String C = "non-null checkpoint";
+  private static final String D = "another checkpoint";
+  private static final DfException E = new DfException("first error");
+  private static final DfException F = new DfException("second error");
+
+  @Test
+  public void testTraverserTemplate_noProgress() throws Exception {
+    testTraverserTemplate(
+        new Action(null, E, null));
+  }
+
+  @Test
+  public void testTraverserTemplate_completeTraversal() throws Exception {
+    testTraverserTemplate(
+        new Action(null, null, null));
+  }
+
+  @Test
+  public void testTraverserTemplate_impossible() throws Exception {
+    // If no exception is thrown, the checkpoint should be null.
+    // But if it happens, we expect a second call.
+    testTraverserTemplate(
+        new Action(null, null, C),
+        new Action(C, null, null));
+  }
+
+  @Test
+  public void testTraverserTemplate_throwThenNoProgress() throws Exception {
+    testTraverserTemplate(
+        new Action(null, E, C),
+        new Action(C, F, C));
+  }
+
+  @Test
+  public void testTraverserTemplate_throwThenProgress() throws Exception {
+    testTraverserTemplate(
+        new Action(null, E, C),
+        new Action(C, F, D),
+        new Action(D, null, null));
+  }
+
+  @Test
+  public void testTraverserTemplate_throwThenComplete() throws Exception {
+    testTraverserTemplate(
+        new Action(null, E, C),
+        new Action(C, null, null));
   }
 
   private void insertUsers(String... names) throws SQLException {
@@ -2206,16 +2331,12 @@ public class DocumentumAdaptorTest {
 
   private Map<DocId, Acl> getAllAcls(String windowsDomain)
       throws DfException, IOException, InterruptedException {
-    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = initTestAdaptorConfig(context);
-    config.overrideKey("documentum.windowsDomain", windowsDomain);
-    config.overrideKey("adaptor.namespace", "NS");
-    config.overrideKey("documentum.docbaseName", "Local"); // Local Namespace
-    adaptor.init(context);
+    DocumentumAdaptor adaptor = getObjectUnderTest(
+        ImmutableMap.<String, String>builder()
+        .put("documentum.windowsDomain", windowsDomain)
+        .put("adaptor.namespace", "NS")
+        .put("documentum.docbaseName", "Local") // Local Namespace
+        .build());
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.getDocIds(pusher);
@@ -2741,13 +2862,7 @@ public class DocumentumAdaptorTest {
   private void testUpdateAcls(Checkpoint checkpoint, Set<DocId> expectedAclIds,
       Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
-    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
-    initTestAdaptorConfig(context);
-    adaptor.init(context);
+    DocumentumAdaptor adaptor = getObjectUnderTest();
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.modifiedAclsCheckpoint = checkpoint;
@@ -2878,13 +2993,7 @@ public class DocumentumAdaptorTest {
       Checkpoint permissionsCheckpoint, List<Record> expectedDocIdlist,
       Checkpoint expectedCheckpoint)
           throws DfException, IOException, InterruptedException {
-    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
-    initTestAdaptorConfig(context);
-    adaptor.init(context);
+    DocumentumAdaptor adaptor = getObjectUnderTest();
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.modifiedDocumentsCheckpoint = docCheckpoint;
@@ -3013,7 +3122,7 @@ public class DocumentumAdaptorTest {
     String dateStr = getNowPlusMinutes(5);
     insertAuditTrailAclEvent(dateStr, "5f123", "09514");
 
-    testUpdatedPermissions( new Checkpoint(min5back, "0bd32"), new Checkpoint(),
+    testUpdatedPermissions(new Checkpoint(min5back, "0bd32"), new Checkpoint(),
         makeExpectedDocIds(START_PATH, "folder1/file1", "folder2/file1"),
         new Checkpoint(dateStr, "5f123"));
   }
@@ -3079,18 +3188,13 @@ public class DocumentumAdaptorTest {
   private Map<GroupPrincipal, ? extends Collection<Principal>> getGroups(
       LocalGroupsOnly localGroupsOnly, String windowsDomain)
       throws DfException, IOException, InterruptedException {
-    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = initTestAdaptorConfig(context);
-    config.overrideKey("documentum.pushLocalGroupsOnly",
-        localGroupsOnly.toString());
-    config.overrideKey("documentum.windowsDomain", windowsDomain);
-    config.overrideKey("adaptor.namespace", "NS");
-    config.overrideKey("documentum.docbaseName", "Local"); // Local Namespace
-    adaptor.init(context);
+    DocumentumAdaptor adaptor = getObjectUnderTest(
+        ImmutableMap.<String, String>builder()
+        .put("documentum.pushLocalGroupsOnly", localGroupsOnly.toString())
+        .put("documentum.windowsDomain", windowsDomain)
+        .put("adaptor.namespace", "NS")
+        .put("documentum.docbaseName", "Local") // Local Namespace
+        .build());
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.getDocIds(pusher);
@@ -3369,17 +3473,12 @@ public class DocumentumAdaptorTest {
       Map<GroupPrincipal, ? extends Collection<? extends Principal>>
       expectedGroups, Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
-    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = initTestAdaptorConfig(context);
-    config.overrideKey("documentum.pushLocalGroupsOnly",
-        localGroupsOnly.toString());
-    config.overrideKey("adaptor.namespace", "NS");
-    config.overrideKey("documentum.docbaseName", "Local"); // Local Namespace
-    adaptor.init(context);
+    DocumentumAdaptor adaptor = getObjectUnderTest(
+        ImmutableMap.<String, String>builder()
+        .put("documentum.pushLocalGroupsOnly", localGroupsOnly.toString())
+        .put("adaptor.namespace", "NS")
+        .put("documentum.docbaseName", "Local") // Local Namespace
+        .build());
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.modifiedGroupsCheckpoint = checkpoint;
@@ -3516,14 +3615,8 @@ public class DocumentumAdaptorTest {
       Checkpoint checkpoint, List<Record> expectedRecords,
       Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
-    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = initTestAdaptorConfig(context);
-    config.overrideKey("documentum.src", Joiner.on(",").join(startPaths));
-    adaptor.init(context);
+    DocumentumAdaptor adaptor = getObjectUnderTest(
+        ImmutableMap.of("documentum.src", Joiner.on(",").join(startPaths)));
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.modifiedDocumentsCheckpoint = checkpoint;
@@ -3851,7 +3944,7 @@ public class DocumentumAdaptorTest {
     assertTrue(adaptor.getValidatedDocumentTypes().isEmpty());
   }
 
-  @Test (expected=InvalidConfigurationException.class)
+  @Test(expected = InvalidConfigurationException.class)
   public void testValidateDocumentTypesEmpty() throws DfException {
     DocumentumAdaptor adaptor =
         new DocumentumAdaptor(new H2BackedTestProxies().getProxyClientX());

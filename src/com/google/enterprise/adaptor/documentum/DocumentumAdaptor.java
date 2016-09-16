@@ -69,6 +69,7 @@ import java.net.URISyntaxException;
 import java.nio.charset.Charset;
 import java.text.MessageFormat;
 import java.text.SimpleDateFormat;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -79,6 +80,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -141,14 +143,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   /** "The DQL function that returns the time in the server timezone.*/
   @VisibleForTesting String dateToStringFunction;
 
-  private String aclIdCheckpoint = null;
+  private AclTraverser aclTraverser = new AclTraverser();
   @VisibleForTesting Checkpoint modifiedAclsCheckpoint = new Checkpoint();
   @VisibleForTesting Checkpoint modifiedDocumentsCheckpoint = new Checkpoint();
-  private String groupsCheckpoint = null;
+  private GroupTraverser groupTraverser = new GroupTraverser();
   @VisibleForTesting Checkpoint modifiedGroupsCheckpoint = new Checkpoint();
   @VisibleForTesting Checkpoint modifiedPermissionsCheckpoint =
       new Checkpoint();
 
+  /** Case-sensitivity of user and group names. */
   public enum CaseSensitivityType {
     EVERYTHING_CASE_SENSITIVE("everything-case-sensitive"),
     EVERYTHING_CASE_INSENSITIVE("everything-case-insensitive");
@@ -568,136 +571,179 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       dmSessionManager.release(dmSession);
     }
 
-    int sleepDuration = 5;
-    TimeUnit sleepUnit = TimeUnit.SECONDS;
+    // Push the ACLs and groups.
+    ArrayDeque<DfException> savedExceptions = new ArrayDeque<>();
+    aclTraverser.run(pusher, savedExceptions);
+    groupTraverser.run(pusher, savedExceptions);
 
-    // Push the ACLs.
-    DfException savedException = null;
-    String prevAclIdCheckpoint = aclIdCheckpoint;
-    do {
-      Map<DocId, Acl> aclMap = new HashMap<>();
-      DocumentumAcls dctmAcls = null;
-      dmSession = getDfSession();
-      try {
-        Principals principals = new Principals(dmSession, localNamespace,
-            globalNamespace, windowsDomain);
-        dctmAcls = new DocumentumAcls(dmClientX, dmSession,
-            principals, caseSensitivityType);
-        dctmAcls.getAcls(aclIdCheckpoint, aclMap);
-      } catch (DfException e) {
-        savedException = e;
-      } finally {
-        dmSessionManager.release(dmSession);
+    if (!savedExceptions.isEmpty()) {
+      DfException cause = savedExceptions.removeFirst();
+      for (DfException e : savedExceptions) {
+        cause.addSuppressed(e);
       }
-      pusher.pushNamedResources(aclMap);
-      aclIdCheckpoint = dctmAcls.getAclsCheckpoint();
-
-      if (savedException != null) {
-        if (aclIdCheckpoint != null
-            && !aclIdCheckpoint.equals(prevAclIdCheckpoint)) {
-          prevAclIdCheckpoint = aclIdCheckpoint;
-          logger.log(Level.WARNING, "Error processing an ACL:", savedException);
-          logger.log(Level.FINE, "Waiting for {0} {1}",
-              new Object[] {sleepDuration, sleepUnit});
-          savedException = null;
-          sleepUnit.sleep(sleepDuration);
-        } else {
-          break;
-        }
-      }
-    } while (aclIdCheckpoint != null);
-
-    // Push the Groups.
-    boolean thrownException = false;
-    String prevGroupsCheckpoint = groupsCheckpoint;
-    do {
-      ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups =
-          ImmutableMap.builder();
-      dmSession = getDfSession();
-      try {
-        Principals principals = new Principals(dmSession, localNamespace,
-            globalNamespace, windowsDomain);
-        getGroups(dmSession, principals, groups);
-      } catch (DfException e) {
-        thrownException = true;
-        if (savedException == null) {
-          savedException = e;
-        } else {
-          savedException.addSuppressed(e);
-        }
-      } finally {
-        dmSessionManager.release(dmSession);
-      }
-      pusher.pushGroupDefinitions(groups.build(),
-          caseSensitivityType == CaseSensitivityType.EVERYTHING_CASE_SENSITIVE);
-
-      if (thrownException) {
-        if (groupsCheckpoint != null
-            && !groupsCheckpoint.equals(prevGroupsCheckpoint)) {
-          prevGroupsCheckpoint = groupsCheckpoint;
-          logger.log(Level.WARNING, "Error processing a Group:",
-              savedException);
-          logger.log(Level.FINE, "Waiting for {0} {1}",
-              new Object[] {sleepDuration, sleepUnit});
-          thrownException = false;
-          savedException = null;
-          sleepUnit.sleep(sleepDuration);
-        } else {
-          break;
-        }
-      }
-    } while (groupsCheckpoint != null);
-
-    if (savedException != null) {
-      throw new IOException(savedException);
+      throw new IOException(cause);
     }
 
     logger.exiting("DocumentumAdaptor", "getDocIds");
   }
 
   /**
-   * Adds groups and their members to the map builder.
-   *
-   * DQL queries that return repeating attributes (in our case,
-   * users_names and groups_names) do not work properly on a DB2
-   * back-end. We use ENABLE(ROW_BASED) to explode the repeating
-   * attributes across several rows.
+   * A template method for traversing ACLs and groups. Each subclass
+   * must implement methods to create a collection of objects, to fill
+   * the collection from the repository, and to push the collection to
+   * the GSA. Each instance is long-lived and encapsulates a checkpoint.
    */
-  private void getGroups(IDfSession session, Principals principals,
-      ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups)
-      throws DfException {
-    String queryStr = makeGroupsQuery(null);
-    logger.log(Level.FINER, "Get Groups Query: {0}", queryStr);
-    IDfQuery query = dmClientX.getQuery();
-    query.setDQL(queryStr);
-    IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
-    try {
-      ImmutableSet.Builder<Principal> members = null;
-      String groupName = "";
-      while (result.next()) {
-        if (!groupName.equals(result.getString("group_name"))) {
-          // We have transitioned to a new group.
-          addGroup(groupName, groups, members, principals);
-          groupsCheckpoint = groupName;
-          members = ImmutableSet.builder();
-          groupName = result.getString("group_name");
-          logger.log(Level.FINE, "Found Group: {0}", groupName);
-        }
-        addMemberPrincipal(members, principals,
-            result.getString("users_names"), false);
-        addMemberPrincipal(members, principals, 
-            result.getString("groups_names"), true);
-      }
-      addGroup(groupName, groups, members, principals);
-      // for a successful completion, set to null.
-      groupsCheckpoint = null;
+  @VisibleForTesting
+  abstract class TraverserTemplate {
+    private final int sleepDuration = 5;
+    private final TimeUnit sleepUnit = TimeUnit.SECONDS;
 
-      // Add special dm_world group, which is all users.
-      GroupPrincipal groupPrincipal = (GroupPrincipal)
-          principals.getPrincipal("dm_world", "dm_world", true);
-      groups.put(groupPrincipal, getDmWorldPrincipals(session, principals));
-    } finally {
-      result.close();
+    private String checkpoint;
+
+    protected abstract void createCollection();
+
+    /** @param checkpoint the object to start traversing from */
+    protected abstract void fillCollection(IDfSession dmSession,
+        Principals principals, String checkpoint) throws DfException;
+
+    /** @return a checkpoint for the last object pushed */
+    protected abstract String pushCollection(DocIdPusher pusher)
+        throws InterruptedException;
+
+    public void run(DocIdPusher pusher, Collection<DfException> savedExceptions)
+        throws IOException, InterruptedException {
+      do {
+        logger.log(Level.FINE, "{0} running from checkpoint {1}",
+            new Object[] {getClass().getSimpleName(), checkpoint});
+        String previousCheckpoint = checkpoint;
+        DfException caughtException = null;
+        createCollection();
+        IDfSession dmSession = getDfSession();
+        try {
+          Principals principals = new Principals(dmSession, localNamespace,
+              globalNamespace, windowsDomain);
+          fillCollection(dmSession, principals, checkpoint);
+        } catch (DfException e) {
+          logger.log(Level.FINER, "Caught exception: " + e);
+          caughtException = e;
+        } finally {
+          dmSessionManager.release(dmSession);
+        }
+        checkpoint = pushCollection(pusher);
+
+        if (caughtException != null) {
+          if (!Objects.equals(checkpoint, previousCheckpoint)) {
+            logger.log(Level.WARNING, "Error in traversal", caughtException);
+            logger.log(Level.FINEST, "Waiting for {0} {1}",
+                new Object[] {sleepDuration, sleepUnit});
+            sleep();
+          } else {
+            logger.log(Level.FINE, "Error with no progress at checkpoint {0}",
+                checkpoint);
+            savedExceptions.add(caughtException);
+            break;
+          }
+        }
+      } while (checkpoint != null);
+    }
+
+    @VisibleForTesting
+    protected void sleep() throws InterruptedException {
+      sleepUnit.sleep(sleepDuration);
+    }
+  }
+
+  private class AclTraverser extends TraverserTemplate {
+    private Map<DocId, Acl> aclMap;
+    private DocumentumAcls dctmAcls;
+
+    @Override
+    protected void createCollection() {
+      aclMap = new HashMap<>();
+    }
+
+    @Override
+    protected void fillCollection(IDfSession dmSession, Principals principals,
+        String checkpoint) throws DfException {
+      dctmAcls = new DocumentumAcls(dmClientX, dmSession, principals,
+          caseSensitivityType);
+      dctmAcls.getAcls(checkpoint, aclMap);
+    }
+
+    @Override
+    protected String pushCollection(DocIdPusher pusher)
+        throws InterruptedException {
+      pusher.pushNamedResources(aclMap);
+      return dctmAcls.getAclsCheckpoint();
+    }
+  }
+
+  private class GroupTraverser extends TraverserTemplate {
+    private ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups;
+    private String groupsCheckpoint;
+
+    @Override
+    protected void createCollection() {
+      groups = ImmutableMap.builder();
+    }
+
+    @Override
+    protected void fillCollection(IDfSession dmSession, Principals principals,
+        String checkpoint) throws DfException {
+      getGroups(dmSession, principals);
+    }
+
+    @Override
+    protected String pushCollection(DocIdPusher pusher)
+        throws InterruptedException {
+      pusher.pushGroupDefinitions(groups.build(),
+          caseSensitivityType == CaseSensitivityType.EVERYTHING_CASE_SENSITIVE);
+      return groupsCheckpoint;
+    }
+
+    /**
+     * Adds groups and their members to the map builder.
+     *
+     * DQL queries that return repeating attributes (in our case,
+     * users_names and groups_names) do not work properly on a DB2
+     * back-end. We use ENABLE(ROW_BASED) to explode the repeating
+     * attributes across several rows.
+     */
+    private void getGroups(IDfSession session, Principals principals)
+        throws DfException {
+      String queryStr = makeGroupsQuery(groupsCheckpoint, null);
+      logger.log(Level.FINER, "Get Groups Query: {0}", queryStr);
+      IDfQuery query = dmClientX.getQuery();
+      query.setDQL(queryStr);
+      IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
+      try {
+        ImmutableSet.Builder<Principal> members = null;
+        String groupName = null;
+        while (result.next()) {
+          if (!Objects.equals(groupName, result.getString("group_name"))) {
+            // We have transitioned to a new group.
+            addGroup(groupName, groups, members, principals);
+            groupsCheckpoint = groupName;
+            members = ImmutableSet.builder();
+            groupName = result.getString("group_name");
+            logger.log(Level.FINE, "Found Group: {0}", groupName);
+          }
+          addMemberPrincipal(members, principals,
+              result.getString("users_names"), false);
+          addMemberPrincipal(members, principals,
+              result.getString("groups_names"), true);
+        }
+        addGroup(groupName, groups, members, principals);
+        // for a successful completion, set to null.
+        groupsCheckpoint = null;
+
+        // Add special dm_world group, which is all users.
+        GroupPrincipal groupPrincipal = (GroupPrincipal)
+            principals.getPrincipal("dm_world", "dm_world", true);
+        groups.put(groupPrincipal, getDmWorldPrincipals(session, principals));
+      } finally {
+        result.close();
+      }
     }
   }
 
@@ -756,7 +802,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   }
 
   /** Builds the DQL query to retrieve the groups. */
-  private String makeGroupsQuery(Checkpoint checkpoint) {
+  private String makeGroupsQuery(String groupsCheckpoint,
+      Checkpoint checkpoint) {
     StringBuilder query = new StringBuilder();
     query.append("SELECT r_object_id, group_name, groups_names, users_names");
     if (checkpoint == null) {
@@ -789,7 +836,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       InterruptedException {
     logger.entering("DocumentumAdaptor", "getModifiedDocIds");
 
-    DfException savedException = null;
+    ArrayDeque<DfException> savedExceptions = new ArrayDeque<>();
 
     // Push modified documents.
     IDfSession dmSession = getDfSession();
@@ -799,7 +846,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       modifiedDocumentsCheckpoint = pushDocumentUpdates(pusher, dmSession,
           modifiedDocumentsCheckpoint);
     } catch (DfException e) {
-      savedException = e;
+      savedExceptions.add(e);
     } finally {
       dmSessionManager.release(dmSession);
     }
@@ -812,11 +859,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       modifiedAclsCheckpoint =
           pushAclUpdates(pusher, dmSession, principals, modifiedAclsCheckpoint);
     } catch (DfException e) {
-      if (savedException == null) {
-        savedException = e;
-      } else {
-        savedException.addSuppressed(e);
-      }
+      savedExceptions.add(e);
     } finally {
       dmSessionManager.release(dmSession);
     }
@@ -829,11 +872,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       modifiedGroupsCheckpoint = pushGroupUpdates(pusher, dmSession, principals,
           modifiedGroupsCheckpoint);
     } catch (DfException e) {
-      if (savedException == null) {
-        savedException = e;
-      } else {
-        savedException.addSuppressed(e);
-      }
+      savedExceptions.add(e);
     } finally {
       dmSessionManager.release(dmSession);
     }
@@ -844,17 +883,17 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       modifiedPermissionsCheckpoint = pushPermissionsUpdates(pusher, dmSession,
           modifiedPermissionsCheckpoint);
     } catch (DfException e) {
-      if (savedException == null) {
-        savedException = e;
-      } else {
-        savedException.addSuppressed(e);
-      }
+      savedExceptions.add(e);
     } finally {
       dmSessionManager.release(dmSession);
     }
 
-    if (savedException != null) {
-      throw new IOException(savedException);
+    if (!savedExceptions.isEmpty()) {
+      DfException cause = savedExceptions.removeFirst();
+      for (DfException e : savedExceptions) {
+        cause.addSuppressed(e);
+      }
+      throw new IOException(cause);
     }
 
     logger.exiting("DocumentumAdaptor", "getModifiedDocIds");
@@ -1031,7 +1070,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private Checkpoint pushGroupUpdates(DocIdPusher pusher, IDfSession session,
       Principals principals, Checkpoint checkpoint)
       throws DfException, IOException, InterruptedException {
-    String queryStr = makeGroupsQuery(checkpoint);
+    String queryStr = makeGroupsQuery(null, checkpoint);
     logger.log(Level.FINER, "Modified Groups Query: {0}", queryStr);
     IDfQuery query = dmClientX.getQuery();
     query.setDQL(queryStr);
@@ -1040,11 +1079,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups =
           ImmutableMap.builder();
       ImmutableSet.Builder<Principal> members = null;
-      String groupName = "";
+      String groupName = null;
       String lastModified = checkpoint.getLastModified();
       String objectId = checkpoint.getObjectId();
       while (result.next()) {
-        if (!groupName.equals(result.getString("group_name"))) {
+        if (!Objects.equals(groupName, result.getString("group_name"))) {
           // We have transitioned to a new group.
           addGroup(groupName, groups, members, principals);
           members = ImmutableSet.builder();
