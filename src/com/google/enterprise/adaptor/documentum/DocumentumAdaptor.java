@@ -596,8 +596,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         if (aclIdCheckpoint != null
             && !aclIdCheckpoint.equals(prevAclIdCheckpoint)) {
           prevAclIdCheckpoint = aclIdCheckpoint;
+          logger.log(Level.WARNING, "Error processing an ACL:", savedException);
           logger.log(Level.FINE, "Waiting for {0} {1}",
               new Object[] {sleepDuration, sleepUnit});
+          savedException = null;
           sleepUnit.sleep(sleepDuration);
         } else {
           break;
@@ -633,8 +635,12 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         if (groupsCheckpoint != null
             && !groupsCheckpoint.equals(prevGroupsCheckpoint)) {
           prevGroupsCheckpoint = groupsCheckpoint;
+          logger.log(Level.WARNING, "Error processing a Group:",
+              savedException);
           logger.log(Level.FINE, "Waiting for {0} {1}",
               new Object[] {sleepDuration, sleepUnit});
+          thrownException = false;
+          savedException = null;
           sleepUnit.sleep(sleepDuration);
         } else {
           break;

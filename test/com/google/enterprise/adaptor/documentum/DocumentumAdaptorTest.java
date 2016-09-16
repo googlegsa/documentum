@@ -883,8 +883,12 @@ public class DocumentumAdaptorTest {
     }
 
     private class SessionManagerMock {
-      public IDfSession getSession(String docbaseName) {
+      public IDfSession newSession(String docbaseName) {
         return Proxies.newProxyInstance(IDfSession.class, new SessionMock());
+      }
+
+      public IDfSession getSession(String docbaseName) {
+        return newSession(docbaseName);
       }
 
       public void release(IDfSession session) {
