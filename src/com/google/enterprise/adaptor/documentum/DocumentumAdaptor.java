@@ -107,8 +107,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
   private static final long ONE_DAY_MILLIS = 24 * 60 * 60 * 1000L;
 
-  // Initial checkpoints will have timestamps 24 hours in the past,
-  // because Documentum timestamps are local server time.
+  // Initial incremental checkpoints will have timestamps 24 hours in
+  // the past, because Documentum timestamps are local server time.
   private static final String YESTERDAY = dateFormat.format(
       new Date(System.currentTimeMillis() - ONE_DAY_MILLIS));
 
@@ -144,12 +144,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   @VisibleForTesting String dateToStringFunction;
 
   private AclTraverser aclTraverser = new AclTraverser();
-  @VisibleForTesting Checkpoint modifiedAclsCheckpoint = new Checkpoint();
-  @VisibleForTesting Checkpoint modifiedDocumentsCheckpoint = new Checkpoint();
+  @VisibleForTesting Checkpoint modifiedAclsCheckpoint =
+      Checkpoint.incremental();
+  @VisibleForTesting Checkpoint modifiedDocumentsCheckpoint =
+      Checkpoint.incremental();
   private GroupTraverser groupTraverser = new GroupTraverser();
-  @VisibleForTesting Checkpoint modifiedGroupsCheckpoint = new Checkpoint();
+  @VisibleForTesting Checkpoint modifiedGroupsCheckpoint =
+      Checkpoint.incremental();
   @VisibleForTesting Checkpoint modifiedPermissionsCheckpoint =
-      new Checkpoint();
+      Checkpoint.incremental();
 
   /** Case-sensitivity of user and group names. */
   public enum CaseSensitivityType {
@@ -179,8 +182,16 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     private final String lastModified;
     private final String objectId;
 
-    public Checkpoint() {
-      this(YESTERDAY, "0");
+    public static Checkpoint full() {
+      return new Checkpoint(null, null);
+    }
+
+    public static Checkpoint incremental() {
+      return new Checkpoint(YESTERDAY, "0");
+    }
+
+    public Checkpoint(String objectId) {
+      this(null, objectId);
     }
 
     public Checkpoint(String lastModified, String objectId) {
@@ -598,16 +609,16 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     private final int sleepDuration = 5;
     private final TimeUnit sleepUnit = TimeUnit.SECONDS;
 
-    private String checkpoint;
+    private Checkpoint checkpoint = Checkpoint.full();
 
     protected abstract void createCollection();
 
     /** @param checkpoint the object to start traversing from */
     protected abstract void fillCollection(IDfSession dmSession,
-        Principals principals, String checkpoint) throws DfException;
+        Principals principals, Checkpoint checkpoint) throws DfException;
 
     /** @return a checkpoint for the last object pushed */
-    protected abstract String pushCollection(DocIdPusher pusher)
+    protected abstract Checkpoint pushCollection(DocIdPusher pusher)
         throws InterruptedException;
 
     public void run(DocIdPusher pusher, Collection<DfException> savedExceptions)
@@ -615,7 +626,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       do {
         logger.log(Level.FINE, "{0} running from checkpoint {1}",
             new Object[] {getClass().getSimpleName(), checkpoint});
-        String previousCheckpoint = checkpoint;
+        Checkpoint previousCheckpoint = checkpoint;
         DfException caughtException = null;
         createCollection();
         IDfSession dmSession = getDfSession();
@@ -644,7 +655,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
             break;
           }
         }
-      } while (checkpoint != null);
+      } while (checkpoint.getObjectId() != null);
     }
 
     @VisibleForTesting
@@ -664,23 +675,23 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
     @Override
     protected void fillCollection(IDfSession dmSession, Principals principals,
-        String checkpoint) throws DfException {
+        Checkpoint checkpoint) throws DfException {
       dctmAcls = new DocumentumAcls(dmClientX, dmSession, principals,
           caseSensitivityType);
-      dctmAcls.getAcls(checkpoint, aclMap);
+      dctmAcls.getAcls(checkpoint.getObjectId(), aclMap);
     }
 
     @Override
-    protected String pushCollection(DocIdPusher pusher)
+    protected Checkpoint pushCollection(DocIdPusher pusher)
         throws InterruptedException {
       pusher.pushNamedResources(aclMap);
-      return dctmAcls.getAclsCheckpoint();
+      return new Checkpoint(dctmAcls.getAclsCheckpoint());
     }
   }
 
   private class GroupTraverser extends TraverserTemplate {
     private ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups;
-    private String groupsCheckpoint;
+    private Checkpoint groupsCheckpoint = Checkpoint.full();
 
     @Override
     protected void createCollection() {
@@ -689,12 +700,12 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
     @Override
     protected void fillCollection(IDfSession dmSession, Principals principals,
-        String checkpoint) throws DfException {
+        Checkpoint checkpoint) throws DfException {
       getGroups(dmSession, principals);
     }
 
     @Override
-    protected String pushCollection(DocIdPusher pusher)
+    protected Checkpoint pushCollection(DocIdPusher pusher)
         throws InterruptedException {
       pusher.pushGroupDefinitions(groups.build(),
           caseSensitivityType == CaseSensitivityType.EVERYTHING_CASE_SENSITIVE);
@@ -711,7 +722,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
      */
     private void getGroups(IDfSession session, Principals principals)
         throws DfException {
-      String queryStr = makeGroupsQuery(groupsCheckpoint, null);
+      String queryStr = makeGroupsQuery(groupsCheckpoint);
       logger.log(Level.FINER, "Get Groups Query: {0}", queryStr);
       IDfQuery query = dmClientX.getQuery();
       query.setDQL(queryStr);
@@ -723,7 +734,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
           if (!Objects.equals(groupName, result.getString("group_name"))) {
             // We have transitioned to a new group.
             addGroup(groupName, groups, members, principals);
-            groupsCheckpoint = groupName;
+            groupsCheckpoint = new Checkpoint(groupName);
             members = ImmutableSet.builder();
             groupName = result.getString("group_name");
             logger.log(Level.FINE, "Found Group: {0}", groupName);
@@ -735,7 +746,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         }
         addGroup(groupName, groups, members, principals);
         // for a successful completion, set to null.
-        groupsCheckpoint = null;
+        groupsCheckpoint = Checkpoint.full();
 
         // Add special dm_world group, which is all users.
         GroupPrincipal groupPrincipal = (GroupPrincipal)
@@ -802,12 +813,20 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   }
 
   /** Builds the DQL query to retrieve the groups. */
-  private String makeGroupsQuery(String groupsCheckpoint,
-      Checkpoint checkpoint) {
+  private String makeGroupsQuery(Checkpoint checkpoint) {
     StringBuilder query = new StringBuilder();
     query.append("SELECT r_object_id, group_name, groups_names, users_names");
-    if (checkpoint == null) {
+    boolean hasWhere;
+    if (checkpoint.getLastModified() == null) {
       query.append(" FROM dm_group");
+      if (checkpoint.getObjectId() == null) {
+        hasWhere = false;
+      } else {
+        query.append(" WHERE group_name > '")
+            .append(checkpoint.getObjectId())
+            .append("'");
+        hasWhere = true;
+      }
     } else {
       query.append(", r_modify_date, ")
           .append(dateToStringFunction)
@@ -818,14 +837,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
               + "r_object_id > ''{1}'') OR (r_modify_date > DATE(''{0}'',"
               + "''yyyy-mm-dd hh:mi:ss'')))",
               checkpoint.getLastModified(), checkpoint.getObjectId()));
+      hasWhere = true;
     }
     if (pushLocalGroupsOnly) {
-      query.append((checkpoint == null) ? " WHERE " : " AND ")
+      query.append(hasWhere ? " AND " : " WHERE ")
           .append("(group_source IS NULL OR group_source <> 'LDAP')");
-    }
-    if (groupsCheckpoint != null && checkpoint == null) {
-      query.append(pushLocalGroupsOnly ? " AND " : " WHERE ")
-          .append("group_name > '").append(groupsCheckpoint).append("'");
     }
     query.append(" ORDER BY group_name ENABLE(ROW_BASED)");
     return query.toString();
@@ -1070,7 +1086,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private Checkpoint pushGroupUpdates(DocIdPusher pusher, IDfSession session,
       Principals principals, Checkpoint checkpoint)
       throws DfException, IOException, InterruptedException {
-    String queryStr = makeGroupsQuery(null, checkpoint);
+    String queryStr = makeGroupsQuery(checkpoint);
     logger.log(Level.FINER, "Modified Groups Query: {0}", queryStr);
     IDfQuery query = dmClientX.getQuery();
     query.setDQL(queryStr);

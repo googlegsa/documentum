@@ -2149,16 +2149,17 @@ public class DocumentumAdaptorTest {
 
             @Override
             protected void fillCollection(IDfSession dmSession,
-                Principals principals, String checkpoint) throws DfException {
-              assertEquals(actions.getFirst().input, checkpoint);
+                Principals principals, Checkpoint checkpoint)
+                throws DfException {
+              assertEquals(actions.getFirst().input, checkpoint.getObjectId());
               if (actions.getFirst().error != null) {
                 throw actions.getFirst().error;
               }
             }
 
             @Override
-            protected String pushCollection(DocIdPusher pusher) {
-              return actions.removeFirst().output;
+            protected Checkpoint pushCollection(DocIdPusher pusher) {
+              return new Checkpoint(actions.removeFirst().output);
             }
 
             @Override protected void sleep() {}
@@ -2882,7 +2883,7 @@ public class DocumentumAdaptorTest {
     insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "236", "4501081f80000102", "dm_destroy", dateStr);
 
-    testUpdateAcls(new Checkpoint(),
+    testUpdateAcls(Checkpoint.incremental(),
         ImmutableSet.of(
             new DocId("4501081f80000100"),
             new DocId("4501081f80000101"),
@@ -2900,7 +2901,7 @@ public class DocumentumAdaptorTest {
     insertAclAudit("124", "234", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "234", "4501081f80000102", "dm_destroy", dateStr);
 
-    testUpdateAcls(new Checkpoint(),
+    testUpdateAcls(Checkpoint.incremental(),
         ImmutableSet.of(new DocId("4501081f80000100")),
         new Checkpoint(dateStr, "125"));
   }
@@ -2930,7 +2931,7 @@ public class DocumentumAdaptorTest {
     insertAclAudit("125", "236", "4501081f80000102", "dm_saveasnew", dateStr);
 
     Checkpoint firstCheckpoint = new Checkpoint(dateStr, "125");
-    testUpdateAcls(new Checkpoint(),
+    testUpdateAcls(Checkpoint.incremental(),
         ImmutableSet.of(
             new DocId("4501081f80000100"),
             new DocId("4501081f80000101"),
@@ -2957,7 +2958,7 @@ public class DocumentumAdaptorTest {
     insertAclAudit("129", "235", "4501081f80000107", "dm_saveasnew", dateStr);
 
     Checkpoint expectedCheckpoint = new Checkpoint(dateStr, "129");
-    testUpdateAcls(new Checkpoint(),
+    testUpdateAcls(Checkpoint.incremental(),
         ImmutableSet.of(
             new DocId("4501081f80000106"),
             new DocId("4501081f80000107")),
@@ -3027,7 +3028,7 @@ public class DocumentumAdaptorTest {
     insertAuditTrailAclEvent(dateStr, "5f124", "09515");
     insertAuditTrailAclEvent(dateStr, "5f125", "09516");
 
-    testUpdatedPermissions(docCheckpoint, new Checkpoint(),
+    testUpdatedPermissions(docCheckpoint, Checkpoint.incremental(),
         makeExpectedDocIds(START_PATH, "file1", "file2", "file3"),
         new Checkpoint(dateStr, "5f125"));
   }
@@ -3056,7 +3057,7 @@ public class DocumentumAdaptorTest {
     insertAuditTrailAclEvent(getNowPlusMinutes(5), "5f125", "09514");
     insertAuditTrailAclEvent(getNowPlusMinutes(5), "5f126", "09515");
 
-    testUpdatedPermissions(docCheckpoint, new Checkpoint(),
+    testUpdatedPermissions(docCheckpoint, Checkpoint.incremental(),
         makeExpectedDocIds(START_PATH, "file1", "file2"),
         new Checkpoint(dateStr, "5f126"));
   }
@@ -3070,7 +3071,7 @@ public class DocumentumAdaptorTest {
     insertAuditTrailAclEvent(dateStr, "5f124", "09515", "09234");
     insertAuditTrailAclEvent(dateStr, "5f125", "09516", "09234");
 
-    testUpdatedPermissions(docCheckpoint, new Checkpoint(),
+    testUpdatedPermissions(docCheckpoint, Checkpoint.incremental(),
         makeExpectedDocIds(START_PATH, "file1"),
         new Checkpoint(dateStr, "5f125"));
   }
@@ -3103,7 +3104,8 @@ public class DocumentumAdaptorTest {
     String dateStr = getNowPlusMinutes(5);
     insertAuditTrailAclEvent(dateStr, "5f123", "09514");
 
-    testUpdatedPermissions(new Checkpoint(min5back, "0bd32"), new Checkpoint(),
+    testUpdatedPermissions(new Checkpoint(min5back, "0bd32"),
+        Checkpoint.incremental(),
         makeExpectedDocIds(START_PATH, "folder1/file1", "folder2/file1",
             "folder/folder3/file1"), new Checkpoint(dateStr, "5f123"));
   }
@@ -3122,7 +3124,8 @@ public class DocumentumAdaptorTest {
     String dateStr = getNowPlusMinutes(5);
     insertAuditTrailAclEvent(dateStr, "5f123", "09514");
 
-    testUpdatedPermissions(new Checkpoint(min5back, "0bd32"), new Checkpoint(),
+    testUpdatedPermissions(new Checkpoint(min5back, "0bd32"),
+        Checkpoint.incremental(),
         makeExpectedDocIds(START_PATH, "folder1/file1", "folder2/file1"),
         new Checkpoint(dateStr, "5f123"));
   }
@@ -3138,7 +3141,7 @@ public class DocumentumAdaptorTest {
         "dm_document", "0bd29");
     insertAuditTrailAclEvent(dateStr, "5f123", "09514");
 
-    testUpdatedPermissions(docCheckpoint, new Checkpoint(),
+    testUpdatedPermissions(docCheckpoint, Checkpoint.incremental(),
         makeExpectedDocIds(START_PATH, "file1", "file1"),
         new Checkpoint(dateStr, "5f123"));
   }
@@ -3157,7 +3160,7 @@ public class DocumentumAdaptorTest {
     insertAuditTrailEvent(dateStr, "5f126", "dm_link", "object_name=",
         "09517", "09517");
 
-    Checkpoint checkPoint = new Checkpoint();
+    Checkpoint checkPoint = Checkpoint.incremental();
     testUpdatedPermissions(docCheckpoint, checkPoint,
         makeExpectedDocIds(START_PATH, "file1"),
         new Checkpoint(dateStr, "5f123"));
@@ -3165,7 +3168,7 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testCheckpoint() throws Exception {
-    Checkpoint checkpoint = new Checkpoint();
+    Checkpoint checkpoint = Checkpoint.incremental();
     assertEquals("0", checkpoint.getObjectId());
     assertNotNull(checkpoint.getLastModified());
     assertTrue(checkpoint.equals(checkpoint));
@@ -3176,7 +3179,7 @@ public class DocumentumAdaptorTest {
     assertTrue(checkpoint.equals(checkpoint));
     assertTrue(checkpoint.equals(new Checkpoint("foo", "bar")));
     assertFalse(checkpoint.equals(null));
-    assertFalse(checkpoint.equals(new Checkpoint()));
+    assertFalse(checkpoint.equals(Checkpoint.incremental()));
     assertFalse(checkpoint.equals(new Checkpoint("foo", "xyzzy")));
   }
 
@@ -3496,7 +3499,7 @@ public class DocumentumAdaptorTest {
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
       expected = ImmutableMap.<GroupPrincipal, Collection<Principal>>of();
 
-    Checkpoint checkpoint = new Checkpoint();
+    Checkpoint checkpoint = Checkpoint.incremental();
     checkModifiedGroupsPushed(LocalGroupsOnly.FALSE, checkpoint, expected,
           checkpoint);
   }
@@ -3631,7 +3634,7 @@ public class DocumentumAdaptorTest {
     String folderId = "0b01081f80001000";
     String folder = "/Folder1";
     insertFolder(JAN_1970, folderId, folder);
-    Checkpoint startCheckpoint = new Checkpoint();
+    Checkpoint startCheckpoint = Checkpoint.incremental();
     checkModifiedDocIdsPushed(startPaths(folder), startCheckpoint,
         ImmutableList.<Record>of(), startCheckpoint);
   }
@@ -3644,7 +3647,7 @@ public class DocumentumAdaptorTest {
     insertDocument(JAN_1970, "0b01081f80001001", folder + "/foo", folderId);
     insertDocument(JAN_1970, "0b01081f80001002", folder + "/bar", folderId);
 
-    Checkpoint startCheckpoint = new Checkpoint();
+    Checkpoint startCheckpoint = Checkpoint.incremental();
     checkModifiedDocIdsPushed(startPaths(folder), startCheckpoint,
         ImmutableList.<Record>of(), startCheckpoint);
   }
