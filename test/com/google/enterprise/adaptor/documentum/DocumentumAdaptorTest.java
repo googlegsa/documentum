@@ -2144,17 +2144,18 @@ public class DocumentumAdaptorTest {
 
     DocumentumAdaptor adaptor = getObjectUnderTest();
     DocumentumAdaptor.TraverserTemplate template =
-        adaptor.new TraverserTemplate() {
+        adaptor.new TraverserTemplate(Checkpoint.full()) {
             @Override protected void createCollection() {}
 
             @Override
-            protected void fillCollection(IDfSession dmSession,
+            protected boolean fillCollection(IDfSession dmSession,
                 Principals principals, Checkpoint checkpoint)
                 throws DfException {
               assertEquals(actions.getFirst().input, checkpoint.getObjectId());
               if (actions.getFirst().error != null) {
                 throw actions.getFirst().error;
               }
+              return actions.getFirst().output == null;
             }
 
             @Override
@@ -3484,11 +3485,12 @@ public class DocumentumAdaptorTest {
         .build());
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
-    adaptor.modifiedGroupsCheckpoint = checkpoint;
+    adaptor.modifiedGroupTraverser.groupsCheckpoint = checkpoint;
     adaptor.getModifiedDocIds(pusher);
 
     assertEquals(expectedGroups, pusher.getGroups());
-    assertEquals(expectedCheckpoint, adaptor.modifiedGroupsCheckpoint);
+    assertEquals(expectedCheckpoint,
+        adaptor.modifiedGroupTraverser.groupsCheckpoint);
   }
 
   @Test

@@ -149,8 +149,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   @VisibleForTesting Checkpoint modifiedDocumentsCheckpoint =
       Checkpoint.incremental();
   private GroupTraverser groupTraverser = new GroupTraverser();
-  @VisibleForTesting Checkpoint modifiedGroupsCheckpoint =
-      Checkpoint.incremental();
+  @VisibleForTesting ModifiedGroupTraverser modifiedGroupTraverser =
+      new ModifiedGroupTraverser();
   @VisibleForTesting Checkpoint modifiedPermissionsCheckpoint =
       Checkpoint.incremental();
 
@@ -609,12 +609,20 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     private final int sleepDuration = 5;
     private final TimeUnit sleepUnit = TimeUnit.SECONDS;
 
-    private Checkpoint checkpoint = Checkpoint.full();
+    private Checkpoint checkpoint;
+
+    protected TraverserTemplate(Checkpoint checkpoint) {
+      this.checkpoint = checkpoint;
+    }
 
     protected abstract void createCollection();
 
-    /** @param checkpoint the object to start traversing from */
-    protected abstract void fillCollection(IDfSession dmSession,
+    /**
+     * @param checkpoint the object to start traversing from
+     * @return {@code true} if the traversal is complete,
+     *     or {@code false} otherwise
+     */
+    protected abstract boolean fillCollection(IDfSession dmSession,
         Principals principals, Checkpoint checkpoint) throws DfException;
 
     /** @return a checkpoint for the last object pushed */
@@ -623,6 +631,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
     public void run(DocIdPusher pusher, Collection<DfException> savedExceptions)
         throws IOException, InterruptedException {
+      boolean isComplete;
       do {
         logger.log(Level.FINE, "{0} running from checkpoint {1}",
             new Object[] {getClass().getSimpleName(), checkpoint});
@@ -633,9 +642,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         try {
           Principals principals = new Principals(dmSession, localNamespace,
               globalNamespace, windowsDomain);
-          fillCollection(dmSession, principals, checkpoint);
+          isComplete = fillCollection(dmSession, principals, checkpoint);
         } catch (DfException e) {
           logger.log(Level.FINER, "Caught exception: " + e);
+          isComplete = false;
           caughtException = e;
         } finally {
           dmSessionManager.release(dmSession);
@@ -655,7 +665,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
             break;
           }
         }
-      } while (checkpoint.getObjectId() != null);
+      } while (!isComplete);
     }
 
     @VisibleForTesting
@@ -668,17 +678,22 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     private Map<DocId, Acl> aclMap;
     private DocumentumAcls dctmAcls;
 
+    protected AclTraverser() {
+      super(Checkpoint.full());
+    }
+
     @Override
     protected void createCollection() {
       aclMap = new HashMap<>();
     }
 
     @Override
-    protected void fillCollection(IDfSession dmSession, Principals principals,
-        Checkpoint checkpoint) throws DfException {
+    protected boolean fillCollection(IDfSession dmSession,
+        Principals principals, Checkpoint checkpoint) throws DfException {
       dctmAcls = new DocumentumAcls(dmClientX, dmSession, principals,
           caseSensitivityType);
       dctmAcls.getAcls(checkpoint.getObjectId(), aclMap);
+      return true;
     }
 
     @Override
@@ -689,9 +704,20 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
   }
 
-  private class GroupTraverser extends TraverserTemplate {
-    private ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups;
-    private Checkpoint groupsCheckpoint = Checkpoint.full();
+  @VisibleForTesting
+  class GroupTraverser extends TraverserTemplate {
+    protected ImmutableMap.Builder<GroupPrincipal, Collection<Principal>>
+        groups;
+    protected Checkpoint groupsCheckpoint;
+
+    protected GroupTraverser() {
+      this(Checkpoint.full());
+    }
+
+    protected GroupTraverser(Checkpoint checkpoint) {
+      super(checkpoint);
+      groupsCheckpoint = checkpoint;
+    }
 
     @Override
     protected void createCollection() {
@@ -699,9 +725,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
 
     @Override
-    protected void fillCollection(IDfSession dmSession, Principals principals,
-        Checkpoint checkpoint) throws DfException {
-      getGroups(dmSession, principals);
+    protected boolean fillCollection(IDfSession dmSession,
+        Principals principals, Checkpoint checkpoint) throws DfException {
+      return getGroups(dmSession, principals);
     }
 
     @Override
@@ -720,7 +746,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
      * back-end. We use ENABLE(ROW_BASED) to explode the repeating
      * attributes across several rows.
      */
-    private void getGroups(IDfSession session, Principals principals)
+    protected boolean getGroups(IDfSession session, Principals principals)
         throws DfException {
       String queryStr = makeGroupsQuery(groupsCheckpoint);
       logger.log(Level.FINER, "Get Groups Query: {0}", queryStr);
@@ -745,16 +771,18 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
               result.getString("groups_names"), true);
         }
         addGroup(groupName, groups, members, principals);
-        // for a successful completion, set to null.
+        // for a successful completion, reset to full.
         groupsCheckpoint = Checkpoint.full();
-
-        // Add special dm_world group, which is all users.
-        GroupPrincipal groupPrincipal = (GroupPrincipal)
-            principals.getPrincipal("dm_world", "dm_world", true);
-        groups.put(groupPrincipal, getDmWorldPrincipals(session, principals));
       } finally {
         result.close();
       }
+
+      // Add special dm_world group, which is all users.
+      GroupPrincipal groupPrincipal = (GroupPrincipal)
+          principals.getPrincipal("dm_world", "dm_world", true);
+      groups.put(groupPrincipal, getDmWorldPrincipals(session, principals));
+
+      return true;
     }
   }
 
@@ -881,17 +909,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
 
     // Push modified Groups.
-    dmSession = getDfSession();
-    try {
-      Principals principals = new Principals(dmSession, localNamespace,
-          globalNamespace, windowsDomain);
-      modifiedGroupsCheckpoint = pushGroupUpdates(pusher, dmSession, principals,
-          modifiedGroupsCheckpoint);
-    } catch (DfException e) {
-      savedExceptions.add(e);
-    } finally {
-      dmSessionManager.release(dmSession);
-    }
+    modifiedGroupTraverser.run(pusher, savedExceptions);
 
     // Push modified document permissions.
     dmSession = getDfSession();
@@ -1080,45 +1098,48 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     return query.toString();
   }
 
-  /**
-   * Push Group updates to GSA.
-   */
-  private Checkpoint pushGroupUpdates(DocIdPusher pusher, IDfSession session,
-      Principals principals, Checkpoint checkpoint)
-      throws DfException, IOException, InterruptedException {
-    String queryStr = makeGroupsQuery(checkpoint);
-    logger.log(Level.FINER, "Modified Groups Query: {0}", queryStr);
-    IDfQuery query = dmClientX.getQuery();
-    query.setDQL(queryStr);
-    IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
-    try {
-      ImmutableMap.Builder<GroupPrincipal, Collection<Principal>> groups =
-          ImmutableMap.builder();
-      ImmutableSet.Builder<Principal> members = null;
-      String groupName = null;
-      String lastModified = checkpoint.getLastModified();
-      String objectId = checkpoint.getObjectId();
-      while (result.next()) {
-        if (!Objects.equals(groupName, result.getString("group_name"))) {
-          // We have transitioned to a new group.
-          addGroup(groupName, groups, members, principals);
-          members = ImmutableSet.builder();
-          groupName = result.getString("group_name");
-          lastModified = result.getString("r_modify_date_str");
-          objectId = result.getString("r_object_id");
-          logger.log(Level.FINE, "Found Group: {0}", groupName);
+  @VisibleForTesting
+  class ModifiedGroupTraverser extends GroupTraverser {
+    private ModifiedGroupTraverser() {
+      super(Checkpoint.incremental());
+    }
+
+    protected boolean getGroups(IDfSession session, Principals principals)
+        throws DfException {
+      String queryStr = makeGroupsQuery(groupsCheckpoint);
+      logger.log(Level.FINER, "Modified Groups Query: {0}", queryStr);
+      IDfQuery query = dmClientX.getQuery();
+      query.setDQL(queryStr);
+      IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
+      try {
+        boolean isComplete = true;
+        ImmutableSet.Builder<Principal> members = null;
+        String groupName = null;
+        String lastModified = groupsCheckpoint.getLastModified();
+        String objectId = groupsCheckpoint.getObjectId();
+        while (result.next()) {
+          isComplete = false;
+          if (!Objects.equals(groupName, result.getString("group_name"))) {
+            // We have transitioned to a new group.
+            addGroup(groupName, groups, members, principals);
+            groupsCheckpoint = new Checkpoint(lastModified, objectId);
+            members = ImmutableSet.builder();
+            groupName = result.getString("group_name");
+            lastModified = result.getString("r_modify_date_str");
+            objectId = result.getString("r_object_id");
+            logger.log(Level.FINE, "Found Group: {0}", groupName);
+          }
+          addMemberPrincipal(members, principals,
+              result.getString("users_names"), false);
+          addMemberPrincipal(members, principals,
+              result.getString("groups_names"), true);
         }
-        addMemberPrincipal(members, principals,
-            result.getString("users_names"), false);
-        addMemberPrincipal(members, principals, 
-            result.getString("groups_names"), true);
+        addGroup(groupName, groups, members, principals);
+        groupsCheckpoint = new Checkpoint(lastModified, objectId);
+        return isComplete;
+      } finally {
+        result.close();
       }
-      addGroup(groupName, groups, members, principals);
-      pusher.pushGroupDefinitions(groups.build(),
-          caseSensitivityType == CaseSensitivityType.EVERYTHING_CASE_SENSITIVE);
-      return new Checkpoint(lastModified, objectId);
-    } finally {
-      result.close();
     }
   }
 
