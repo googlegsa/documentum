@@ -833,7 +833,7 @@ public class DocumentumAdaptorTest {
                   + "dm_document|dm_folder)\\)", "r_object_type LIKE '$1%'")
               .replace("FOLDER(", "(mock_object_path LIKE ")
               .replace("',descend", "%'")
-              .replace("ORDER BY group_name ENABLE(ROW_BASED)", "");
+              .replace("ENABLE(ROW_BASED)", "");
           rs = stmt.executeQuery(query);
         } catch (SQLException e) {
           throw new DfException(e);
@@ -3509,8 +3509,8 @@ public class DocumentumAdaptorTest {
   @Test
   public void testGetGroupUpdatesAllNew() throws Exception {
     insertUsers("User1", "User2");
-    insertModifiedGroup(FEB_1970, "Group1", "User1");
-    insertModifiedGroup(MAR_1970, "Group2", "User2");
+    insertModifiedGroup(FEB_1970, "Group2", "User2");
+    insertModifiedGroup(MAR_1970, "Group1", "User1");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
         expected = ImmutableMap.of(new GroupPrincipal("Group1", "NS_Local"),
@@ -3520,37 +3520,37 @@ public class DocumentumAdaptorTest {
 
     checkModifiedGroupsPushed(LocalGroupsOnly.FALSE,
         new Checkpoint(JAN_1970, "0"), expected,
-        new Checkpoint(MAR_1970, "12Group2"));
+        new Checkpoint(MAR_1970, "12Group1"));
   }
 
   @Test
   public void testGetGroupUpdatesSomeNew() throws Exception {
     insertUsers("User1", "User2");
-    insertModifiedGroup(JAN_1970, "Group1", "User1");
+    insertModifiedGroup(JAN_1970, "Group0", "User2");
     insertModifiedGroup(FEB_1970, "Group2", "User2");
-    insertModifiedGroup(MAR_1970, "Group3", "User2");
+    insertModifiedGroup(MAR_1970, "Group1", "User1");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-        expected = ImmutableMap.of(new GroupPrincipal("Group2", "NS_Local"),
-            ImmutableSet.of(new UserPrincipal("User2", "NS")),
-            new GroupPrincipal("Group3", "NS_Local"),
+        expected = ImmutableMap.of(new GroupPrincipal("Group1", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User1", "NS")),
+            new GroupPrincipal("Group2", "NS_Local"),
             ImmutableSet.of(new UserPrincipal("User2", "NS")));
 
     checkModifiedGroupsPushed(LocalGroupsOnly.FALSE,
-        new Checkpoint(JAN_1970, "12Group1"), expected,
-        new Checkpoint(MAR_1970, "12Group3"));
+        new Checkpoint(JAN_1970, "12Group0"), expected,
+        new Checkpoint(MAR_1970, "12Group1"));
   }
 
   @Test
   public void testGetGroupUpdatesNoneNew() throws Exception {
     insertUsers("User1", "User2");
-    insertModifiedGroup(FEB_1970, "Group1", "User1");
-    insertModifiedGroup(MAR_1970, "Group2", "User2");
+    insertModifiedGroup(FEB_1970, "Group2", "User2");
+    insertModifiedGroup(MAR_1970, "Group1", "User1");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
       expected = ImmutableMap.<GroupPrincipal, Collection<Principal>>of();
 
-    Checkpoint checkpoint = new Checkpoint(MAR_1970, "12Group2");
+    Checkpoint checkpoint = new Checkpoint(MAR_1970, "12Group1");
     checkModifiedGroupsPushed(LocalGroupsOnly.FALSE, checkpoint, expected,
          checkpoint);
   }

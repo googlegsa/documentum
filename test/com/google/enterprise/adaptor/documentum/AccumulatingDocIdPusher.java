@@ -14,6 +14,9 @@
 
 package com.google.enterprise.adaptor.documentum;
 
+import static com.google.common.collect.Sets.intersection;
+import static org.junit.Assert.assertTrue;
+
 import com.google.enterprise.adaptor.Acl;
 import com.google.enterprise.adaptor.DocId;
 import com.google.enterprise.adaptor.DocIdPusher;
@@ -26,6 +29,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 
 class AccumulatingDocIdPusher implements DocIdPusher {
@@ -91,6 +95,8 @@ class AccumulatingDocIdPusher implements DocIdPusher {
       Map<GroupPrincipal, ? extends Collection<Principal>> defs,
       boolean caseSensitive, ExceptionHandler handler)
       throws InterruptedException {
+    Set<GroupPrincipal> dups = intersection(defs.keySet(), groups.keySet());
+    assertTrue("Duplicate groups pushed: " + dups, dups.isEmpty());
     groups.putAll(defs);
     return null;
   }

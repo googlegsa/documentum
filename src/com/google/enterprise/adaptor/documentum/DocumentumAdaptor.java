@@ -871,7 +871,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       query.append(hasWhere ? " AND " : " WHERE ")
           .append("(group_source IS NULL OR group_source <> 'LDAP')");
     }
-    query.append(" ORDER BY group_name ENABLE(ROW_BASED)");
+    query.append(" ORDER BY ")
+        .append((checkpoint.getLastModified() == null)
+            ? "group_name" : "r_modify_date, r_object_id")
+        .append(" ENABLE(ROW_BASED)");
     return query.toString();
   }
 
@@ -1112,13 +1115,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       query.setDQL(queryStr);
       IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
       try {
-        boolean isComplete = true;
         ImmutableSet.Builder<Principal> members = null;
         String groupName = null;
         String lastModified = groupsCheckpoint.getLastModified();
         String objectId = groupsCheckpoint.getObjectId();
         while (result.next()) {
-          isComplete = false;
           if (!Objects.equals(groupName, result.getString("group_name"))) {
             // We have transitioned to a new group.
             addGroup(groupName, groups, members, principals);
@@ -1136,10 +1137,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         }
         addGroup(groupName, groups, members, principals);
         groupsCheckpoint = new Checkpoint(lastModified, objectId);
-        return isComplete;
       } finally {
         result.close();
       }
+      return true;
     }
   }
 
