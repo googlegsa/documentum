@@ -106,6 +106,8 @@ class DocumentumAcls {
         + "DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') AND (r_object_id > ''{1}'')) "
         + "OR (time_stamp_utc > DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'')))";
 
+    // Use event_name in order by so that dm_destroy event is first item if
+    // there are updates and delete on an ACL.
     Object[] arguments =
         { checkpoint.getLastModified(), checkpoint.getObjectId() };
     queryStr.append(MessageFormat.format(whereBoundedClause, arguments));
@@ -187,24 +189,30 @@ class DocumentumAcls {
         aclModifyId = dmAclCollection.getString("r_object_id");
         String chronicleId = dmAclCollection.getString("chronicle_id");
         String modifyObjectId = dmAclCollection.getString("audited_obj_id");
+        String eventName = dmAclCollection.getString("event_name");
 
         if (aclModifiedIds.contains(chronicleId)) {
           logger.log(Level.FINE,
               "Skipping redundant modify of: {0}", chronicleId);
           continue;
         }
-        logger.log(Level.FINE, "Updated ACL ID: {0}, chronicle ID: {1}",
-            new String[] {modifyObjectId, chronicleId});
+        logger.log(Level.FINE, "Updated ACL ID: {0}, chronicle ID: {1},"
+            + " event name: {2}",
+            new String[] {modifyObjectId, chronicleId, eventName});
 
-        IDfACL dmAcl;
-        try {
-          dmAcl = (IDfACL) dmSession.getObject(new DfId(modifyObjectId));
-        } catch (DfIdNotFoundException e) {
-          logger.log(Level.FINE,
-              "Skipping ACL {0}: {1}", new Object[] {modifyObjectId, e});
-          continue;
+        if ("dm_destroy".equalsIgnoreCase(eventName)) {
+          aclMap.put(new DocId(modifyObjectId), Acl.EMPTY);
+        } else {
+          IDfACL dmAcl;
+          try {
+            dmAcl = (IDfACL) dmSession.getObject(new DfId(modifyObjectId));
+          } catch (DfIdNotFoundException e) {
+            logger.log(Level.FINE,
+                "Skipping ACL {0}: {1}", new Object[] {modifyObjectId, e});
+            continue;
+          }
+          addAclChainToMap(dmAcl, modifyObjectId, aclMap);
         }
-        addAclChainToMap(dmAcl, modifyObjectId, aclMap);
         aclModifiedIds.add(chronicleId);
       }
       aclUpdateCheckpoint = new Checkpoint(aclModifiedDate, aclModifyId);

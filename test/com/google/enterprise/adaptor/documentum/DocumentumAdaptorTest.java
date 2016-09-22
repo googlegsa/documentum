@@ -904,9 +904,22 @@ public class DocumentumAdaptorTest {
         return "1.0.0.000 (Mock CS)";
       }
 
-      public IDfACL getObject(IDfId id) {
-        return Proxies.newProxyInstance(IDfACL.class,
-            new AclMock(id.toString()));
+      public IDfACL getObject(IDfId id) throws DfException {
+        String query = String.format(
+            "SELECT r_object_id FROM dm_acl WHERE r_object_id = '%s'",
+            id.toString());
+        try (Connection connection = getConnection();
+            Statement stmt = connection.createStatement();
+            ResultSet rs = stmt.executeQuery(query)) {
+          if (rs.first()) {
+            return Proxies.newProxyInstance(IDfACL.class,
+                new AclMock(id.toString()));
+          } else {
+            throw new AssertionError("Object ID " + id + " doesn't exist.");
+          }
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
       }
 
       public IDfSysObject getObjectByPath(String path) throws DfException {
@@ -2861,7 +2874,7 @@ public class DocumentumAdaptorTest {
     return dateFormat.format(calendar.getTime());
   }
 
-  private void testUpdateAcls(Checkpoint checkpoint, Set<DocId> expectedAclIds,
+  private Map<DocId, Acl> testUpdateAcls(Checkpoint checkpoint,
       Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
     DocumentumAdaptor adaptor = getObjectUnderTest();
@@ -2869,16 +2882,30 @@ public class DocumentumAdaptorTest {
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.modifiedAclsCheckpoint = checkpoint;
     adaptor.getModifiedDocIds(pusher);
-
-    assertEquals(expectedAclIds, pusher.getNamedResources().keySet());
     assertEquals(expectedCheckpoint, adaptor.modifiedAclsCheckpoint);
+
+    return pusher.getNamedResources();
+  }
+
+  private void testUpdateAcls(Checkpoint checkpoint, Set<DocId> expectedAclIds,
+      Checkpoint expectedCheckpoint)
+      throws DfException, IOException, InterruptedException {
+    Map<DocId, Acl> aclMap = testUpdateAcls(checkpoint, expectedCheckpoint);
+    assertEquals(expectedAclIds, aclMap.keySet());
+  }
+
+  private void assertUsers(Set<UserPrincipal> actual, String... expected) {
+    ImmutableSet.Builder<UserPrincipal> builder = ImmutableSet.builder();
+    for (String user : expected) {
+      builder.add(new UserPrincipal(user, "globalNS"));
+    }
+    assertEquals(builder.build(), actual);
   }
 
   @Test
   public void testUpdateAcls() throws Exception {
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
-    createAcl("4501081f80000102");
     String dateStr = getNowPlusMinutes(5);
     insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
     insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
@@ -2893,10 +2920,48 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
+  public void testUpdateAclsPrincipals() throws Exception {
+    insertUsers("User1", "User2", "User3", "User4", "User5", "User6");
+    String aclId1 = "4501081f80000100";
+    String aclId2 = "4501081f80000101";
+    createAcl(aclId1);
+    addAllowPermitToAcl(aclId1, "User1", IDfACL.DF_PERMIT_WRITE);
+    addAllowPermitToAcl(aclId1, "User2", IDfACL.DF_PERMIT_READ);
+    addDenyPermitToAcl(aclId1, "User3", IDfACL.DF_PERMIT_READ);
+    createAcl(aclId2);
+    addAllowPermitToAcl(aclId2, "User4", IDfACL.DF_PERMIT_WRITE);
+    addAllowPermitToAcl(aclId2, "User5", IDfACL.DF_PERMIT_READ);
+    addDenyPermitToAcl(aclId2, "User6", IDfACL.DF_PERMIT_READ);
+
+    String dateStr = getNowPlusMinutes(5);
+    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
+    insertAclAudit("125", "236", "4501081f80000102", "dm_destroy", dateStr);
+
+    Map<DocId, Acl> aclMap = testUpdateAcls(Checkpoint.incremental(),
+        new Checkpoint(dateStr, "125"));
+
+    Acl acl1 = aclMap.get(new DocId(aclId1));
+    assertUsers(acl1.getPermitUsers(), "User1", "User2");
+    assertUsers(acl1.getDenyUsers(), "User3");
+
+    Acl acl2 = aclMap.get(new DocId(aclId2));
+    assertUsers(acl2.getPermitUsers(), "User4", "User5");
+    assertUsers(acl2.getDenyUsers(), "User6");
+
+    Acl acl3 = aclMap.get(new DocId("4501081f80000102"));
+    assertTrue(acl3.getPermitUsers().toString(),
+        acl3.getPermitUsers().isEmpty());
+    assertTrue(acl3.getDenyUsers().toString(), acl3.getDenyUsers().isEmpty());
+    assertTrue(acl3.getPermitGroups().toString(),
+        acl3.getPermitGroups().isEmpty());
+    assertTrue(acl3.getDenyGroups().toString(), acl3.getDenyGroups().isEmpty());
+  }
+
+  @Test
   public void testUpdateAclsWithSameChronicleId() throws Exception {
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
-    createAcl("4501081f80000102");
     String dateStr = getNowPlusMinutes(6);
     insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
     insertAclAudit("124", "234", "4501081f80000101", "dm_saveasnew", dateStr);
@@ -2911,7 +2976,6 @@ public class DocumentumAdaptorTest {
   public void testPreviouslyUpdatedAcls() throws Exception {
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
-    createAcl("4501081f80000102");
     String dateStr = getNowPlusMinutes(-10);
     insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
     insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
@@ -2926,6 +2990,7 @@ public class DocumentumAdaptorTest {
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     createAcl("4501081f80000102");
+    createAcl("4501081f80000103");
     String dateStr = getNowPlusMinutes(10);
     insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
     insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
