@@ -33,6 +33,9 @@ public class PrincipalsTest {
     session = Proxies.newProxyInstance(IDfSession.class, new SessionMock());
   }
 
+  // TODO(jlacey): Change these tests to use getPrincipal() now that
+  // getPrincipalName() is only @VisibleForTesting.
+
   @Test
   public void testGetPrincipalName_builtin() throws DfException {
     Principals principals = new Principals(session, "local", "global", null);

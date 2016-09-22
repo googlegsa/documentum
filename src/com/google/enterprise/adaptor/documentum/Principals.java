@@ -14,6 +14,7 @@
 
 package com.google.enterprise.adaptor.documentum;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.enterprise.adaptor.GroupPrincipal;
@@ -62,16 +63,19 @@ class Principals {
    * Return principal for user or group.
    * 
    * @param accessorName accessor for the user or group.
-   * @param principalName principal name for the user or group.
    * @param isGroup true if group.
-   * @return
-   * @throws DfException if error in getting group name space.
+   * @return a Principal or {@code null} if the user or group does not exist.
+   * @throws DfException if error in getting the user or group information
+   *         or the group name space.
    */
-  public Principal getPrincipal(String accessorName, String principalName,
-      boolean isGroup) throws DfException {
+  public Principal getPrincipal(String accessorName, boolean isGroup)
+      throws DfException {
+    String principalName = getPrincipalName(accessorName);
     Principal principal;
-    // special group local to repository
-    if (accessorName.equalsIgnoreCase("dm_world")) {
+    if (principalName == null) {
+      principal = null;
+    } else if (accessorName.equalsIgnoreCase("dm_world")) {
+      // special group local to repository
       principal = new GroupPrincipal(principalName, localNamespace);
     } else if (isGroup) {
       String namespace = getGroupNamespace(accessorName);
@@ -89,7 +93,8 @@ class Principals {
    * @param accessorName accessor (user or group) name.
    * @throws DfException if error in getting user information.
    */
-  public String getPrincipalName(String accessorName) throws DfException {
+  @VisibleForTesting
+  String getPrincipalName(String accessorName) throws DfException {
     if (accessorName.equalsIgnoreCase("dm_world")
         || accessorName.equalsIgnoreCase("dm_owner")
         || accessorName.equalsIgnoreCase("dm_group")) {

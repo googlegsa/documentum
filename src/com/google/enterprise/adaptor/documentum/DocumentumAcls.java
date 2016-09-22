@@ -292,9 +292,9 @@ class DocumentumAcls {
       throws DfException {
     Set<Principal> permits = new HashSet<Principal>();
     for (String name : groups) {
-      String principalName = principals.getPrincipalName(name);
-      if (principalName != null) {
-        permits.add(principals.getPrincipal(name, principalName, true));
+      Principal principal = principals.getPrincipal(name, true);
+      if (principal != null) {
+        permits.add(principal);
       }
     }
     return getBasicAcl(parentAclId, permits, new HashSet<Principal>(),
@@ -319,14 +319,12 @@ class DocumentumAcls {
   private void processBasicPermissions(String accessorName, int permitType,
       int accessorPermit, boolean isGroup, Set<Principal> permits,
       Set<Principal> denies) throws DfException {
-    String principalName = principals.getPrincipalName(accessorName);
-    if (principalName == null) {
-      return;
-    }
     if (permitType == IDfPermitType.ACCESS_RESTRICTION) {
       if (accessorPermit <= IDfACL.DF_PERMIT_READ) {
-        denies.add(
-            principals.getPrincipal(accessorName, principalName, isGroup));
+        Principal principal = principals.getPrincipal(accessorName, isGroup);
+        if (principal != null) {
+          denies.add(principal);
+        }
       }
     } else if (permitType == IDfPermitType.ACCESS_PERMIT) {
       if (accessorPermit >= IDfACL.DF_PERMIT_READ) {
@@ -335,10 +333,11 @@ class DocumentumAcls {
           // skip dm_owner and dm_group for now.
           // TODO (Srinivas): Need to resolve these acls for
           //      both allow and deny.
-          return;
         } else {
-          permits.add(
-              principals.getPrincipal(accessorName, principalName, isGroup));
+          Principal principal = principals.getPrincipal(accessorName, isGroup);
+          if (principal != null) {
+            permits.add(principal);
+          }
         }
       }
     }

@@ -779,7 +779,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
       // Add special dm_world group, which is all users.
       GroupPrincipal groupPrincipal = (GroupPrincipal)
-          principals.getPrincipal("dm_world", "dm_world", true);
+          principals.getPrincipal("dm_world", true);
       groups.put(groupPrincipal, getDmWorldPrincipals(session, principals));
 
       return true;
@@ -794,16 +794,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     if (membersBuilder == null) {
       return;
     }
-    String principalName = principals.getPrincipalName(groupName);
-    if (principalName == null) {
+    GroupPrincipal groupPrincipal = (GroupPrincipal)
+        principals.getPrincipal(groupName, true);
+    if (groupPrincipal == null) {
       return;
     }
-    GroupPrincipal groupPrincipal = (GroupPrincipal)
-        principals.getPrincipal(groupName, principalName, true);
     ImmutableSet<Principal> members = membersBuilder.build();
     groupsBuilder.put(groupPrincipal, members);
     logger.log(Level.FINEST, "Pushing Group {0}: {1}",
-        new Object[] { principalName, members });
+        new Object[] { groupPrincipal.getName(), members });
   }
 
   /** Adds a Principal for a user or group to the set of members. */
@@ -811,10 +810,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
      Principals principals, String memberName, boolean isGroup)
      throws DfException {
    if (memberName != null) {
-      String principalName = principals.getPrincipalName(memberName);
-      if (principalName != null) {
-        members.add(
-            principals.getPrincipal(memberName, principalName, isGroup));
+      Principal principal = principals.getPrincipal(memberName, isGroup);
+      if (principal != null) {
+        members.add(principal);
       }
     }
   }
@@ -829,9 +827,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       ImmutableSet.Builder<Principal> members = ImmutableSet.builder();
       while (result.next()) {
         String member = result.getString("user_name");
-        String principalName = principals.getPrincipalName(member);
-        if (principalName != null) {
-          members.add(principals.getPrincipal(member, principalName, false));
+        Principal principal = principals.getPrincipal(member, false);
+        if (principal != null) {
+          members.add(principal);
         }
       }      
       return members.build();
