@@ -2880,9 +2880,10 @@ public class DocumentumAdaptorTest {
     DocumentumAdaptor adaptor = getObjectUnderTest();
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
-    adaptor.modifiedAclsCheckpoint = checkpoint;
+    adaptor.modifiedAclTraverser.setCheckpoint(checkpoint);
     adaptor.getModifiedDocIds(pusher);
-    assertEquals(expectedCheckpoint, adaptor.modifiedAclsCheckpoint);
+    assertEquals(expectedCheckpoint,
+        adaptor.modifiedAclTraverser.getCheckpoint());
 
     return pusher.getNamedResources();
   }
@@ -3032,6 +3033,52 @@ public class DocumentumAdaptorTest {
 
     testUpdateAcls(expectedCheckpoint, ImmutableSet.<DocId>of(),
         expectedCheckpoint);
+  }
+
+  /*
+   * TODO(jlacey): A hack of sizeable proportions. To mimic an
+   * exception thrown from the loop in getUpdateAcls, we create an
+   * non-destroy audit event with no corresponding ACL. The mock
+   * getObject throws an AssertionError.
+   */
+  private DocumentumAcls getUpdateAclsAndFail() throws Exception {
+    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
+    IDfClientX dmClientX = proxyCls.getProxyClientX();
+    IDfSessionManager dmSessionManager =
+        dmClientX.getLocalClient().newSessionManager();
+    IDfSession dmSession = dmSessionManager.getSession("testdocbase");
+    DocumentumAcls dctmAcls = new DocumentumAcls(dmClientX, dmSession,
+        new Principals(dmSession, "localNS", "globalNS", null),
+        CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE);
+
+    Map<DocId, Acl> aclMap = new HashMap<>();
+    try {
+      dctmAcls.getUpdateAcls(Checkpoint.incremental(), aclMap);
+      fail("Expected an AssertionError");
+    } catch (AssertionError expected) {
+    }
+    return dctmAcls;
+  }
+
+  @Test
+  public void testUpdateAclsFirstRowFailure() throws Exception {
+    String dateStr = getNowPlusMinutes(5);
+    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
+
+    DocumentumAcls dctmAcls = getUpdateAclsAndFail();
+    assertEquals(Checkpoint.incremental(), dctmAcls.getCheckpoint());
+  }
+
+  @Test
+  public void testUpdateAclsSecondRowFailure() throws Exception {
+    createAcl("4501081f80000100");
+    String dateStr = getNowPlusMinutes(3);
+    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew",
+      getNowPlusMinutes(5));
+
+    DocumentumAcls dctmAcls = getUpdateAclsAndFail();
+    assertEquals(new Checkpoint(dateStr, "123"), dctmAcls.getCheckpoint());
   }
 
   private void insertAuditTrailEvent(String date, String id, String eventName,
@@ -3550,12 +3597,12 @@ public class DocumentumAdaptorTest {
         .build());
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
-    adaptor.modifiedGroupTraverser.groupsCheckpoint = checkpoint;
+    adaptor.modifiedGroupTraverser.setCheckpoint(checkpoint);
     adaptor.getModifiedDocIds(pusher);
 
     assertEquals(expectedGroups, pusher.getGroups());
     assertEquals(expectedCheckpoint,
-        adaptor.modifiedGroupTraverser.groupsCheckpoint);
+        adaptor.modifiedGroupTraverser.getCheckpoint());
   }
 
   @Test

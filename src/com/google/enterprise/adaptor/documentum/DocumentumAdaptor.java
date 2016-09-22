@@ -144,8 +144,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   @VisibleForTesting String dateToStringFunction;
 
   private AclTraverser aclTraverser = new AclTraverser();
-  @VisibleForTesting Checkpoint modifiedAclsCheckpoint =
-      Checkpoint.incremental();
+  @VisibleForTesting ModifiedAclTraverser modifiedAclTraverser =
+      new ModifiedAclTraverser();
   @VisibleForTesting Checkpoint modifiedDocumentsCheckpoint =
       Checkpoint.incremental();
   private GroupTraverser groupTraverser = new GroupTraverser();
@@ -616,6 +616,16 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       this.checkpoint = checkpoint;
     }
 
+    @VisibleForTesting
+    void setCheckpoint(Checkpoint checkpoint) {
+      this.checkpoint = checkpoint;
+    }
+
+    @VisibleForTesting
+    Checkpoint getCheckpoint() {
+      return checkpoint;
+    }
+
     protected abstract void createCollection();
 
     /**
@@ -676,11 +686,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   }
 
   private class AclTraverser extends TraverserTemplate {
-    private Map<DocId, Acl> aclMap;
-    private DocumentumAcls dctmAcls;
+    protected Map<DocId, Acl> aclMap;
+    protected DocumentumAcls dctmAcls;
 
     protected AclTraverser() {
       super(Checkpoint.full());
+    }
+
+    protected AclTraverser(Checkpoint checkpoint) {
+      super(checkpoint);
     }
 
     @Override
@@ -693,8 +707,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         Principals principals, Checkpoint checkpoint) throws DfException {
       dctmAcls = new DocumentumAcls(dmClientX, dmSession, principals,
           caseSensitivityType);
-      dctmAcls.getAcls(checkpoint, aclMap);
-      return true;
+      return getAcls(checkpoint);
     }
 
     @Override
@@ -702,6 +715,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         throws InterruptedException {
       pusher.pushNamedResources(aclMap);
       return dctmAcls.getCheckpoint();
+    }
+
+    protected boolean getAcls(Checkpoint checkpoint) throws DfException {
+      dctmAcls.getAcls(checkpoint, aclMap);
+      return true;
     }
   }
 
@@ -717,7 +735,6 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
     protected GroupTraverser(Checkpoint checkpoint) {
       super(checkpoint);
-      groupsCheckpoint = checkpoint;
     }
 
     @Override
@@ -728,6 +745,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     @Override
     protected boolean fillCollection(IDfSession dmSession,
         Principals principals, Checkpoint checkpoint) throws DfException {
+      groupsCheckpoint = checkpoint;
       return getGroups(dmSession, principals);
     }
 
@@ -897,20 +915,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       dmSessionManager.release(dmSession);
     }
 
-    // Push modified ACLs.
-    dmSession = getDfSession();
-    try {
-      Principals principals = new Principals(dmSession, localNamespace,
-          globalNamespace, windowsDomain);
-      modifiedAclsCheckpoint =
-          pushAclUpdates(pusher, dmSession, principals, modifiedAclsCheckpoint);
-    } catch (DfException e) {
-      savedExceptions.add(e);
-    } finally {
-      dmSessionManager.release(dmSession);
-    }
-
-    // Push modified Groups.
+    // Push modified ACLs and groups.
+    modifiedAclTraverser.run(pusher, savedExceptions);
     modifiedGroupTraverser.run(pusher, savedExceptions);
 
     // Push modified document permissions.
@@ -935,17 +941,17 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     logger.exiting("DocumentumAdaptor", "getModifiedDocIds");
   }
 
-  /**
-   * Push ACL updates to GSA.
-   */
-  private Checkpoint pushAclUpdates(DocIdPusher pusher, IDfSession session,
-      Principals principals, Checkpoint checkpoint)
-      throws DfException, IOException, InterruptedException {
-    DocumentumAcls dctmAcls =
-        new DocumentumAcls(dmClientX, session, principals, caseSensitivityType);
-    Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(checkpoint);
-    pusher.pushNamedResources(aclMap);
-    return dctmAcls.getCheckpoint();
+  @VisibleForTesting
+  class ModifiedAclTraverser extends AclTraverser {
+    protected ModifiedAclTraverser() {
+      super(Checkpoint.incremental());
+    }
+
+    @Override
+    protected boolean getAcls(Checkpoint checkpoint) throws DfException {
+      dctmAcls.getUpdateAcls(checkpoint, aclMap);
+      return true;
+    }
   }
 
   /**

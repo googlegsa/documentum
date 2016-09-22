@@ -36,7 +36,6 @@ import com.documentum.fc.common.DfId;
 
 import java.text.MessageFormat;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -147,15 +146,13 @@ class DocumentumAcls {
       while (dmAclCollection.next()) {
         String objectId = dmAclCollection.getString("r_object_id");
         logger.log(Level.FINE, "ACL ID: {0}", objectId);
-        IDfACL dmAcl;
         try {
-          dmAcl = (IDfACL) dmSession.getObject(new DfId(objectId));
+          IDfACL dmAcl = (IDfACL) dmSession.getObject(new DfId(objectId));
+          addAclChainToMap(dmAcl, objectId, aclMap);
         } catch (DfIdNotFoundException e) {
           logger.log(Level.FINE,
               "Skipping ACL {0}: {1}", new Object[] {objectId, e});
-          continue;
         }
-        addAclChainToMap(dmAcl, objectId, aclMap);
         aclCheckpoint = new Checkpoint(objectId);
       }
       // for a successful completion, reset to full.
@@ -177,15 +174,17 @@ class DocumentumAcls {
    * can have it's own individual ACL applied to it. So this method needs to
    * send all the ACLs in Documentum to GSA.
    *
-   * @return Documentum ACLs in map
+   * @param checkpoint the last checkpoint
+   * @param aclMap a map of Adaptor Acls for all Documentum ACLs.
    * @throws DfException if error in getting ACL information.
    */
-  public Map<DocId, Acl> getUpdateAcls(Checkpoint checkpoint)
+  public void getUpdateAcls(Checkpoint checkpoint, Map<DocId, Acl> aclMap)
       throws DfException {
     checkState(state != State.GET_ACLS,
         "Only one of getAcls or getUpdateAcls may be called.");
     state = State.GET_UPDATE_ACLS;
 
+    aclCheckpoint = checkpoint;
     HashSet<String> aclModifiedIds = new HashSet<String>();
     String aclModifiedDate = checkpoint.getLastModified();
     String aclModifyId = checkpoint.getObjectId();
@@ -193,7 +192,6 @@ class DocumentumAcls {
     IDfCollection dmAclCollection =
         query.execute(dmSession, IDfQuery.DF_EXECREAD_QUERY);
     try {
-      Map<DocId, Acl> aclMap = new HashMap<DocId, Acl>();
       while (dmAclCollection.next()) {
         aclModifiedDate = dmAclCollection.getString("time_stamp_utc_str");
         aclModifyId = dmAclCollection.getString("r_object_id");
@@ -204,29 +202,28 @@ class DocumentumAcls {
         if (aclModifiedIds.contains(chronicleId)) {
           logger.log(Level.FINE,
               "Skipping redundant modify of: {0}", chronicleId);
-          continue;
-        }
-        logger.log(Level.FINE, "Updated ACL ID: {0}, chronicle ID: {1},"
-            + " event name: {2}",
-            new String[] {modifyObjectId, chronicleId, eventName});
-
-        if ("dm_destroy".equalsIgnoreCase(eventName)) {
-          aclMap.put(new DocId(modifyObjectId), Acl.EMPTY);
         } else {
-          IDfACL dmAcl;
-          try {
-            dmAcl = (IDfACL) dmSession.getObject(new DfId(modifyObjectId));
-          } catch (DfIdNotFoundException e) {
-            logger.log(Level.FINE,
-                "Skipping ACL {0}: {1}", new Object[] {modifyObjectId, e});
-            continue;
+          aclModifiedIds.add(chronicleId);
+          logger.log(Level.FINE, "Updated ACL ID: {0}, chronicle ID: {1},"
+              + " event name: {2}",
+              new String[] {modifyObjectId, chronicleId, eventName});
+
+          if ("dm_destroy".equalsIgnoreCase(eventName)) {
+            aclMap.put(new DocId(modifyObjectId), Acl.EMPTY);
+          } else {
+            try {
+              IDfACL dmAcl =
+                  (IDfACL) dmSession.getObject(new DfId(modifyObjectId));
+              addAclChainToMap(dmAcl, modifyObjectId, aclMap);
+            } catch (DfIdNotFoundException e) {
+              logger.log(Level.FINE,
+                  "Skipping ACL {0}: {1}", new Object[] {modifyObjectId, e});
+              aclModifiedIds.remove(chronicleId);
+            }
           }
-          addAclChainToMap(dmAcl, modifyObjectId, aclMap);
         }
-        aclModifiedIds.add(chronicleId);
+        aclCheckpoint = new Checkpoint(aclModifiedDate, aclModifyId);
       }
-      aclCheckpoint = new Checkpoint(aclModifiedDate, aclModifyId);
-      return aclMap;
     } finally {
       try {
         dmAclCollection.close();
