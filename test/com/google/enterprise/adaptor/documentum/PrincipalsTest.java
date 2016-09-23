@@ -33,68 +33,71 @@ public class PrincipalsTest {
     session = Proxies.newProxyInstance(IDfSession.class, new SessionMock());
   }
 
-  // TODO(jlacey): Change these tests to use getPrincipal() now that
-  // getPrincipalName() is only @VisibleForTesting.
-
   @Test
-  public void testGetPrincipalName_builtin() throws DfException {
+  public void testGetPrincipal_builtin() throws DfException {
     Principals principals = new Principals(session, "local", "global", null);
-    assertEquals("dm_world", principals.getPrincipalName("dm_world"));
+    assertEquals("dm_world",
+        principals.getPrincipal("dm_world", true).getName());
   }
 
   @Test
-  public void testGetPrincipalName_missing() throws DfException {
+  public void testGetPrincipal_missing() throws DfException {
     Principals principals = new Principals(session, "local", "global", null);
-    assertNull(principals.getPrincipalName("nobody"));
+    assertNull(principals.getPrincipal("nobody", false));
   }
 
   @Test
-  public void testGetPrincipalName_exception() throws DfException {
+  public void testGetPrincipal_exception() throws DfException {
     Principals principals = new Principals(session, "local", "global", null);
-    assertNull(principals.getPrincipalName("exception"));
+    assertNull(principals.getPrincipal("exception", false));
   }
 
   @Test
-  public void testGetPrincipalName_dnDomain() throws DfException {
+  public void testGetPrincipal_dnDomain() throws DfException {
     Principals principals = new Principals(session, "local", "global", null);
     assertEquals("example\\janedoe",
-        principals.getPrincipalName("user:janedoe:ldap:dc=example,dc=com:"));
+        principals.getPrincipal("user:janedoe:ldap:dc=example,dc=com:", false)
+        .getName());
   }
 
   @Test
-  public void testGetPrincipalName_dnInvalid() throws DfException {
+  public void testGetPrincipal_dnInvalid() throws DfException {
     Principals principals = new Principals(session, "local", "global", null);
-    assertNull(principals.getPrincipalName("user:janedoe:ldap:is this a DN?:"));
+    assertNull(
+        principals.getPrincipal("user:janedoe:ldap:is this a DN?:", false));
   }
 
   @Test
-  public void testGetPrincipalName_dnEmpty_windowsNull() throws DfException {
+  public void testGetPrincipal_dnEmpty_windowsNull() throws DfException {
     Principals principals = new Principals(session, "local", "global", null);
-    assertEquals("janedoe", principals.getPrincipalName("user:janedoe:ldap::"));
+    assertEquals("janedoe",
+        principals.getPrincipal("user:janedoe:ldap::", false).getName());
   }
 
   @Test
-  public void testGetPrincipalName_dnEmpty_windowsDomain() throws DfException {
+  public void testGetPrincipal_dnEmpty_windowsDomain() throws DfException {
     Principals principals =
         new Principals(session, "local", "global", "example");
     assertEquals("example\\janedoe",
-        principals.getPrincipalName("user:janedoe:ldap::"));
+        principals.getPrincipal("user:janedoe:ldap::", false).getName());
   }
 
   @Test
-  public void testGetPrincipalName_dnNoDomain_windowsNull() throws DfException {
+  public void testGetPrincipal_dnNoDomain_windowsNull() throws DfException {
     Principals principals = new Principals(session, "local", "global", null);
     assertEquals("janedoe",
-        principals.getPrincipalName("user:janedoe:ldap:cn=Jane Doe,ou=eng:"));
+        principals.getPrincipal("user:janedoe:ldap:cn=Jane Doe,ou=eng:", false)
+        .getName());
   }
 
   @Test
-  public void testGetPrincipalName_dnNoDomain_windowsDomain()
+  public void testGetPrincipal_dnNoDomain_windowsDomain()
       throws DfException {
     Principals principals =
         new Principals(session, "local", "global", "example");
     assertEquals("example\\janedoe",
-        principals.getPrincipalName("user:janedoe:ldap:cn=Jane Doe,ou=eng:"));
+        principals.getPrincipal("user:janedoe:ldap:cn=Jane Doe,ou=eng:", false)
+        .getName());
   }
 
   private class SessionMock {

@@ -14,7 +14,6 @@
 
 package com.google.enterprise.adaptor.documentum;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
 import com.google.enterprise.adaptor.GroupPrincipal;
@@ -93,8 +92,7 @@ class Principals {
    * @param accessorName accessor (user or group) name.
    * @throws DfException if error in getting user information.
    */
-  @VisibleForTesting
-  String getPrincipalName(String accessorName) throws DfException {
+  private String getPrincipalName(String accessorName) throws DfException {
     if (accessorName.equalsIgnoreCase("dm_world")
         || accessorName.equalsIgnoreCase("dm_owner")
         || accessorName.equalsIgnoreCase("dm_group")) {
