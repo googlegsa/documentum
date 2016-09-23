@@ -692,7 +692,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         Principals principals, Checkpoint checkpoint) throws DfException {
       dctmAcls = new DocumentumAcls(dmClientX, dmSession, principals,
           caseSensitivityType);
-      dctmAcls.getAcls(checkpoint.getObjectId(), aclMap);
+      dctmAcls.getAcls(checkpoint, aclMap);
       return true;
     }
 
@@ -700,7 +700,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     protected Checkpoint pushCollection(DocIdPusher pusher)
         throws InterruptedException {
       pusher.pushNamedResources(aclMap);
-      return new Checkpoint(dctmAcls.getAclsCheckpoint());
+      return dctmAcls.getCheckpoint();
     }
   }
 
@@ -944,7 +944,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         new DocumentumAcls(dmClientX, session, principals, caseSensitivityType);
     Map<DocId, Acl> aclMap = dctmAcls.getUpdateAcls(checkpoint);
     pusher.pushNamedResources(aclMap);
-    return dctmAcls.getUpdateAclsCheckpoint();
+    return dctmAcls.getCheckpoint();
   }
 
   /**
