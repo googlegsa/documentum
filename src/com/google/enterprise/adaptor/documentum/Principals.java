@@ -16,6 +16,8 @@ package com.google.enterprise.adaptor.documentum;
 
 import com.google.common.base.Preconditions;
 import com.google.common.base.Strings;
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
 import com.google.enterprise.adaptor.GroupPrincipal;
 import com.google.enterprise.adaptor.Principal;
 import com.google.enterprise.adaptor.UserPrincipal;
@@ -27,6 +29,7 @@ import com.documentum.fc.client.impl.typeddata.NoSuchAttributeException;
 import com.documentum.fc.common.DfException;
 
 import java.util.ArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -40,10 +43,23 @@ import javax.naming.ldap.Rdn;
 class Principals {
   private static Logger logger = Logger.getLogger(Principals.class.getName());
 
+  // Cache of Principals should max out at about 20 MB.
+  private static Cache<String, Principal> principalCache = CacheBuilder
+      .newBuilder().initialCapacity(10000).maximumSize(100000)
+      .expireAfterWrite(24, TimeUnit.HOURS).build();
+
+  // Cannot cache null, so this is a special place-holder.
+  private static Principal NULL_PRINCIPAL = new UserPrincipal("NULL",
+      "com.google.enterprise.adaptor.documentum.Principals");
+
   private final IDfSession dmSession;
   private final String localNamespace;
   private final String globalNamespace;
   private final String windowsDomain;
+
+  public static void clearCache() {
+    principalCache.invalidateAll();
+  }
 
   Principals(IDfSession dmSession,
       String localNamespace, String globalNamespace, String windowsDomain) {
@@ -69,20 +85,23 @@ class Principals {
    */
   public Principal getPrincipal(String accessorName, boolean isGroup)
       throws DfException {
-    String principalName = getPrincipalName(accessorName);
-    Principal principal;
-    if (principalName == null) {
-      principal = null;
-    } else if (accessorName.equalsIgnoreCase("dm_world")) {
-      // special group local to repository
-      principal = new GroupPrincipal(principalName, localNamespace);
-    } else if (isGroup) {
-      String namespace = getGroupNamespace(accessorName);
-      principal = new GroupPrincipal(principalName, namespace);
-    } else {
-      principal = new UserPrincipal(principalName, globalNamespace);
+    Principal principal = principalCache.getIfPresent(accessorName);
+    if (principal == null) {
+      String principalName = getPrincipalName(accessorName);
+      if (principalName == null) {
+        principal = NULL_PRINCIPAL;
+      } else if (accessorName.equalsIgnoreCase("dm_world")) {
+        // special group local to repository
+        principal = new GroupPrincipal(principalName, localNamespace);
+      } else if (isGroup) {
+        String namespace = getGroupNamespace(accessorName);
+        principal = new GroupPrincipal(principalName, namespace);
+      } else {
+        principal = new UserPrincipal(principalName, globalNamespace);
+      }
+      principalCache.put(accessorName, principal);
     }
-    return principal;
+    return (principal == NULL_PRINCIPAL) ? null : principal;
   }
 
   /**

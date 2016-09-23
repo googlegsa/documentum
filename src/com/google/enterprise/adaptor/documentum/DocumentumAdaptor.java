@@ -583,6 +583,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
 
     // Push the ACLs and groups.
+    Principals.clearCache();
     ArrayDeque<DfException> savedExceptions = new ArrayDeque<>();
     aclTraverser.run(pusher, savedExceptions);
     groupTraverser.run(pusher, savedExceptions);
