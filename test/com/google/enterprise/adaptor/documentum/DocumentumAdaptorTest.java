@@ -2853,13 +2853,13 @@ public class DocumentumAdaptorTest {
         acl.isEverythingCaseInsensitive());
   }
 
-  private void insertAclAudit(String id, String chronicleId, String auditObjId,
+  private void insertAclAudit(String id, String auditObjId,
       String eventName, String date) throws SQLException {
     executeUpdate(String.format(
-        "insert into dm_audittrail_acl(r_object_id, chronicle_id, "
-            + "audited_obj_id, event_name, time_stamp_utc) "
-            + "values('%s', '%s', '%s', '%s', {ts '%s'})",
-            id, chronicleId, auditObjId, eventName, date));
+        "insert into dm_audittrail_acl(r_object_id, audited_obj_id, "
+            + "event_name, time_stamp_utc) "
+            + "values('%s', '%s', '%s', {ts '%s'})",
+            id, auditObjId, eventName, date));
   }
 
   /**
@@ -2909,9 +2909,9 @@ public class DocumentumAdaptorTest {
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     String dateStr = getNowPlusMinutes(5);
-    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
-    insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
-    insertAclAudit("125", "236", "4501081f80000102", "dm_destroy", dateStr);
+    insertAclAudit("123", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "4501081f80000101", "dm_saveasnew", dateStr);
+    insertAclAudit("125", "4501081f80000102", "dm_destroy", dateStr);
 
     testUpdateAcls(Checkpoint.incremental(),
         ImmutableSet.of(
@@ -2936,9 +2936,9 @@ public class DocumentumAdaptorTest {
     addDenyPermitToAcl(aclId2, "User6", IDfACL.DF_PERMIT_READ);
 
     String dateStr = getNowPlusMinutes(5);
-    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
-    insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
-    insertAclAudit("125", "236", "4501081f80000102", "dm_destroy", dateStr);
+    insertAclAudit("123", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "4501081f80000101", "dm_saveasnew", dateStr);
+    insertAclAudit("125", "4501081f80000102", "dm_destroy", dateStr);
 
     Map<DocId, Acl> aclMap = testUpdateAcls(Checkpoint.incremental(),
         new Checkpoint(dateStr, "125"));
@@ -2961,13 +2961,13 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
-  public void testUpdateAclsWithSameChronicleId() throws Exception {
+  public void testUpdateAclsWithSameObjectId() throws Exception {
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     String dateStr = getNowPlusMinutes(6);
-    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
-    insertAclAudit("124", "234", "4501081f80000101", "dm_saveasnew", dateStr);
-    insertAclAudit("125", "234", "4501081f80000102", "dm_destroy", dateStr);
+    insertAclAudit("123", "4501081f80000100", "dm_saveasnew", dateStr);
+    insertAclAudit("124", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("125", "4501081f80000100", "dm_destroy", dateStr);
 
     testUpdateAcls(Checkpoint.incremental(),
         ImmutableSet.of(new DocId("4501081f80000100")),
@@ -2979,9 +2979,9 @@ public class DocumentumAdaptorTest {
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
     String dateStr = getNowPlusMinutes(-10);
-    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
-    insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
-    insertAclAudit("125", "236", "4501081f80000102", "dm_destroy", dateStr);
+    insertAclAudit("123", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "4501081f80000101", "dm_saveasnew", dateStr);
+    insertAclAudit("125", "4501081f80000102", "dm_destroy", dateStr);
 
     Checkpoint checkpoint = new Checkpoint(getNowPlusMinutes(0), "0");
     testUpdateAcls(checkpoint, ImmutableSet.<DocId>of(), checkpoint);
@@ -2994,9 +2994,9 @@ public class DocumentumAdaptorTest {
     createAcl("4501081f80000102");
     createAcl("4501081f80000103");
     String dateStr = getNowPlusMinutes(10);
-    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
-    insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew", dateStr);
-    insertAclAudit("125", "236", "4501081f80000102", "dm_saveasnew", dateStr);
+    insertAclAudit("123", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "4501081f80000101", "dm_saveasnew", dateStr);
+    insertAclAudit("125", "4501081f80000102", "dm_saveasnew", dateStr);
 
     Checkpoint firstCheckpoint = new Checkpoint(dateStr, "125");
     testUpdateAcls(Checkpoint.incremental(),
@@ -3007,8 +3007,8 @@ public class DocumentumAdaptorTest {
         firstCheckpoint);
 
     dateStr = getNowPlusMinutes(15);
-    insertAclAudit("126", "237", "4501081f80000103", "dm_saveasnew", dateStr);
-    insertAclAudit("127", "238", "4501081f80000104", "dm_destroy", dateStr);
+    insertAclAudit("126", "4501081f80000103", "dm_saveasnew", dateStr);
+    insertAclAudit("127", "4501081f80000104", "dm_destroy", dateStr);
 
     testUpdateAcls(firstCheckpoint,
         ImmutableSet.of(
@@ -3022,8 +3022,8 @@ public class DocumentumAdaptorTest {
     createAcl("4501081f80000106");
     createAcl("4501081f80000107");
     String dateStr = getNowPlusMinutes(20);
-    insertAclAudit("128", "234", "4501081f80000106", "dm_saveasnew", dateStr);
-    insertAclAudit("129", "235", "4501081f80000107", "dm_saveasnew", dateStr);
+    insertAclAudit("128", "4501081f80000106", "dm_saveasnew", dateStr);
+    insertAclAudit("129", "4501081f80000107", "dm_saveasnew", dateStr);
 
     Checkpoint expectedCheckpoint = new Checkpoint(dateStr, "129");
     testUpdateAcls(Checkpoint.incremental(),

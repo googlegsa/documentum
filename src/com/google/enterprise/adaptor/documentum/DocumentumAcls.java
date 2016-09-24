@@ -93,7 +93,7 @@ class DocumentumAcls {
         dmSession.getServerVersion().matches("[456]\\..*")
         ? "DATETOSTRING" : "DATETOSTRING_LOCAL";
     StringBuilder queryStr = new StringBuilder()
-        .append("SELECT r_object_id, chronicle_id, audited_obj_id, ")
+        .append("SELECT r_object_id, audited_obj_id, ")
         .append("event_name, time_stamp_utc, ")
         .append(dateToStringFunction)
         .append("(time_stamp_utc, 'yyyy-mm-dd hh:mi:ss') ")
@@ -195,19 +195,16 @@ class DocumentumAcls {
       while (dmAclCollection.next()) {
         aclModifiedDate = dmAclCollection.getString("time_stamp_utc_str");
         aclModifyId = dmAclCollection.getString("r_object_id");
-        String chronicleId = dmAclCollection.getString("chronicle_id");
         String modifyObjectId = dmAclCollection.getString("audited_obj_id");
         String eventName = dmAclCollection.getString("event_name");
+        logger.log(Level.FINE, "Updated ACL ID: {0}, event: {1}",
+            new String[] {modifyObjectId, eventName});
 
-        if (aclModifiedIds.contains(chronicleId)) {
+        if (aclModifiedIds.contains(modifyObjectId)) {
           logger.log(Level.FINE,
-              "Skipping redundant modify of: {0}", chronicleId);
+              "Skipping ACL {0}: redundant event", modifyObjectId);
         } else {
-          aclModifiedIds.add(chronicleId);
-          logger.log(Level.FINE, "Updated ACL ID: {0}, chronicle ID: {1},"
-              + " event name: {2}",
-              new String[] {modifyObjectId, chronicleId, eventName});
-
+          aclModifiedIds.add(modifyObjectId);
           if ("dm_destroy".equalsIgnoreCase(eventName)) {
             aclMap.put(new DocId(modifyObjectId), Acl.EMPTY);
           } else {
@@ -218,7 +215,7 @@ class DocumentumAcls {
             } catch (DfIdNotFoundException e) {
               logger.log(Level.FINE,
                   "Skipping ACL {0}: {1}", new Object[] {modifyObjectId, e});
-              aclModifiedIds.remove(chronicleId);
+              aclModifiedIds.remove(modifyObjectId);
             }
           }
         }
