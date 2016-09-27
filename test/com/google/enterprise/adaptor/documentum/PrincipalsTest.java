@@ -30,6 +30,7 @@ public class PrincipalsTest {
 
   @Before
   public void setUp() {
+    Principals.clearCache();
     session = Proxies.newProxyInstance(IDfSession.class, new SessionMock());
   }
 

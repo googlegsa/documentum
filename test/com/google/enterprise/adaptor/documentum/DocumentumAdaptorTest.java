@@ -174,6 +174,7 @@ public class DocumentumAdaptorTest {
 
   @Before
   public void setUp() throws Exception {
+    Principals.clearCache();
     executeUpdate(CREATE_TABLE_ACL, CREATE_TABLE_AUDITTRAIL,
         CREATE_TABLE_AUDITTRAIL_ACL, CREATE_TABLE_CABINET, CREATE_TABLE_FOLDER,
         CREATE_TABLE_GROUP, CREATE_TABLE_SYSOBJECT, CREATE_TABLE_USER);
