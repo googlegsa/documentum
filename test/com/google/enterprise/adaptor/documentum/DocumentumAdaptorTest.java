@@ -3064,7 +3064,7 @@ public class DocumentumAdaptorTest {
   @Test
   public void testUpdateAclsFirstRowFailure() throws Exception {
     String dateStr = getNowPlusMinutes(5);
-    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("123", "4501081f80000100", "dm_save", dateStr);
 
     DocumentumAcls dctmAcls = getUpdateAclsAndFail();
     assertEquals(Checkpoint.incremental(), dctmAcls.getCheckpoint());
@@ -3074,8 +3074,8 @@ public class DocumentumAdaptorTest {
   public void testUpdateAclsSecondRowFailure() throws Exception {
     createAcl("4501081f80000100");
     String dateStr = getNowPlusMinutes(3);
-    insertAclAudit("123", "234", "4501081f80000100", "dm_save", dateStr);
-    insertAclAudit("124", "235", "4501081f80000101", "dm_saveasnew",
+    insertAclAudit("123", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "4501081f80000101", "dm_saveasnew",
       getNowPlusMinutes(5));
 
     DocumentumAcls dctmAcls = getUpdateAclsAndFail();
