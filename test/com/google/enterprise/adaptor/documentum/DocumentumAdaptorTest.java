@@ -155,9 +155,9 @@ public class DocumentumAdaptorTest {
       + "groups_names varchar, users_names varchar, r_modify_date timestamp)";
 
   private static final String CREATE_TABLE_USER = "create table dm_user "
-      + "(user_name varchar primary key, user_login_name varchar, "
-      + "user_source varchar, user_ldap_dn varchar, r_is_group boolean, "
-      + "user_state int DEFAULT 0)";
+      + "(r_object_id varchar, user_name varchar primary key, "
+      + "user_login_name varchar, user_source varchar, user_ldap_dn varchar, "
+      + "r_is_group boolean, user_state int DEFAULT 0)";
 
   private static final String CREATE_TABLE_SYSOBJECT =
       "create table dm_sysobject "
@@ -2243,9 +2243,10 @@ public class DocumentumAdaptorTest {
 
   private void insertUsers(String... names) throws SQLException {
     for (String name : names) {
-      executeUpdate(String.format(
-          "insert into dm_user(user_name, user_login_name) values('%s', '%s')",
-          name, name));
+      executeUpdate(String.format("insert into dm_user "
+          + "(r_object_id, user_name, user_login_name) "
+          + "values('%s', '%s', '%s')",
+          "11" + name, name, name));
     }
   }
 

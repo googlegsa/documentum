@@ -98,10 +98,6 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   /** Charset used in generated HTML responses. */
   private static final Charset CHARSET = Charset.forName("UTF-8");
 
-  /** DQL Query to fetch all users for dm_world magic group. */
-  private static final String ALL_USERS_QUERY = "SELECT user_name FROM dm_user"
-      + " WHERE user_state = 0 AND (r_is_group IS NULL OR r_is_group = FALSE)";
-
   private static final SimpleDateFormat dateFormat =
       new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
 
@@ -149,6 +145,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   @VisibleForTesting Checkpoint modifiedDocumentsCheckpoint =
       Checkpoint.incremental();
   private GroupTraverser groupTraverser = new GroupTraverser();
+  private DmWorldTraverser dmWorldTraverser = new DmWorldTraverser();
   @VisibleForTesting ModifiedGroupTraverser modifiedGroupTraverser =
       new ModifiedGroupTraverser();
   @VisibleForTesting Checkpoint modifiedPermissionsCheckpoint =
@@ -587,6 +584,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     ArrayDeque<DfException> savedExceptions = new ArrayDeque<>();
     aclTraverser.run(pusher, savedExceptions);
     groupTraverser.run(pusher, savedExceptions);
+    dmWorldTraverser.run(pusher, savedExceptions);
 
     if (!savedExceptions.isEmpty()) {
       DfException cause = savedExceptions.removeFirst();
@@ -795,12 +793,6 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       } finally {
         result.close();
       }
-
-      // Add special dm_world group, which is all users.
-      GroupPrincipal groupPrincipal = (GroupPrincipal)
-          principals.getPrincipal("dm_world", true);
-      groups.put(groupPrincipal, getDmWorldPrincipals(session, principals));
-
       return true;
     }
   }
@@ -833,27 +825,6 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       if (principal != null) {
         members.add(principal);
       }
-    }
-  }
-
-  /** Adds Principals for all users in special dm_world group to members. */
-  private Collection<Principal> getDmWorldPrincipals(IDfSession session,
-      Principals principals) throws DfException {
-    IDfQuery query = dmClientX.getQuery();
-    query.setDQL(ALL_USERS_QUERY);
-    IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
-    try {
-      ImmutableSet.Builder<Principal> members = ImmutableSet.builder();
-      while (result.next()) {
-        String member = result.getString("user_name");
-        Principal principal = principals.getPrincipal(member, false);
-        if (principal != null) {
-          members.add(principal);
-        }
-      }      
-      return members.build();
-    } finally {
-      result.close();
     }
   }
 
@@ -892,6 +863,82 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         .append((checkpoint.getLastModified() == null)
             ? "group_name" : "r_modify_date, r_object_id")
         .append(" ENABLE(ROW_BASED)");
+    return query.toString();
+  }
+
+  private class DmWorldTraverser extends TraverserTemplate {
+    private ImmutableMap<GroupPrincipal, ImmutableSet<Principal>> dmWorld =
+        null;
+    private ImmutableSet.Builder<Principal> members = null;
+    private Checkpoint membersCheckpoint;
+
+    protected DmWorldTraverser() {
+      super(Checkpoint.full());
+    }
+
+    @Override
+    protected void createCollection() {
+      if (members == null) {
+        members = ImmutableSet.builder();
+      }
+    }
+
+    @Override
+    protected boolean fillCollection(IDfSession session,
+        Principals principals, Checkpoint checkpoint) throws DfException {
+      membersCheckpoint = checkpoint;
+      String queryStr = makeDmWorldQuery(checkpoint);
+      logger.log(Level.FINER, "Get dm_world Members Query: {0}", queryStr);
+      IDfQuery query = dmClientX.getQuery();
+      query.setDQL(queryStr);
+      IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
+      try {
+        while (result.next()) {
+          String member = result.getString("user_name");
+          Principal principal = principals.getPrincipal(member, false);
+          if (principal != null) {
+            members.add(principal);
+          }
+          membersCheckpoint = new Checkpoint(result.getString("r_object_id"));
+        }
+      } finally {
+        result.close();
+      }
+
+      // For a successful completion, reset to full.
+      membersCheckpoint = Checkpoint.full();
+      dmWorld = ImmutableMap
+          .of((GroupPrincipal) principals.getPrincipal("dm_world", true),
+              members.build());
+      members = null;
+      return true;
+    }
+
+    @Override
+    protected Checkpoint pushCollection(DocIdPusher pusher)
+        throws InterruptedException {
+      // Only push the dm_world group if it has been fully formed.
+      if (dmWorld != null) {
+        pusher.pushGroupDefinitions(dmWorld, caseSensitivityType
+            == CaseSensitivityType.EVERYTHING_CASE_SENSITIVE);
+        dmWorld = null;
+      }
+      return membersCheckpoint;
+    }
+  }
+
+  /** Returns the DQL Query to fetch all users for dm_world magic group. */
+  private String makeDmWorldQuery(Checkpoint checkpoint) {
+    StringBuilder query = new StringBuilder();
+    query.append("SELECT r_object_id, user_name FROM dm_user")
+        .append(" WHERE user_state = 0 AND")
+        .append(" (r_is_group IS NULL OR r_is_group = FALSE)");
+    if (checkpoint.getObjectId() != null) {
+      query.append(" AND r_object_id > '")
+          .append(checkpoint.getObjectId())
+          .append("'");
+    }
+    query.append(" ORDER BY r_object_id");
     return query.toString();
   }
 
