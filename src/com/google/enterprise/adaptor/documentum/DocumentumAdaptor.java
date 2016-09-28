@@ -145,7 +145,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   @VisibleForTesting Checkpoint modifiedDocumentsCheckpoint =
       Checkpoint.incremental();
   private GroupTraverser groupTraverser = new GroupTraverser();
-  private DmWorldTraverser dmWorldTraverser = new DmWorldTraverser();
+  @VisibleForTesting DmWorldTraverser dmWorldTraverser = new DmWorldTraverser();
   @VisibleForTesting ModifiedGroupTraverser modifiedGroupTraverser =
       new ModifiedGroupTraverser();
   @VisibleForTesting Checkpoint modifiedPermissionsCheckpoint =
@@ -868,14 +868,21 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     return query.toString();
   }
 
-  private class DmWorldTraverser extends TraverserTemplate {
+  @VisibleForTesting
+  class DmWorldTraverser extends TraverserTemplate {
     private ImmutableMap<GroupPrincipal, ImmutableSet<Principal>> dmWorld =
         null;
     private ImmutableSet.Builder<Principal> members = null;
     private Checkpoint membersCheckpoint;
+    private int batchSize = 1000;
 
     protected DmWorldTraverser() {
       super(Checkpoint.full());
+    }
+
+    @VisibleForTesting
+    void setBatchSize(int batchSize) {
+      this.batchSize = batchSize;
     }
 
     @Override
@@ -889,13 +896,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     protected boolean fillCollection(IDfSession session,
         Principals principals, Checkpoint checkpoint) throws DfException {
       membersCheckpoint = checkpoint;
-      String queryStr = makeDmWorldQuery(checkpoint);
+      String queryStr = makeDmWorldQuery(checkpoint, batchSize);
       logger.log(Level.FINER, "Get dm_world Members Query: {0}", queryStr);
       IDfQuery query = dmClientX.getQuery();
       query.setDQL(queryStr);
       IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
+      boolean isComplete = true;
       try {
         while (result.next()) {
+          isComplete = (batchSize == 0);  // Avoid extra query if fetching all.
           String member = result.getString("user_name");
           Principal principal = principals.getPrincipal(member, false);
           if (principal != null) {
@@ -907,13 +916,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         result.close();
       }
 
-      // For a successful completion, reset to full.
-      membersCheckpoint = Checkpoint.full();
-      dmWorld = ImmutableMap
-          .of((GroupPrincipal) principals.getPrincipal("dm_world", true),
-              members.build());
-      members = null;
-      return true;
+      if (isComplete) {
+        // For a successful completion, reset to full.
+        membersCheckpoint = Checkpoint.full();
+        dmWorld = ImmutableMap
+            .of((GroupPrincipal) principals.getPrincipal("dm_world", true),
+                members.build());
+        members = null;
+      }
+      return isComplete;
     }
 
     @Override
@@ -930,7 +941,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   }
 
   /** Returns the DQL Query to fetch all users for dm_world magic group. */
-  private String makeDmWorldQuery(Checkpoint checkpoint) {
+  private String makeDmWorldQuery(Checkpoint checkpoint, int batchSize) {
     StringBuilder query = new StringBuilder();
     query.append("SELECT r_object_id, user_name FROM dm_user")
         .append(" WHERE user_state = 0 AND")
@@ -941,6 +952,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
           .append("'");
     }
     query.append(" ORDER BY r_object_id");
+    if (batchSize > 0) {
+      query.append(" ENABLE(RETURN_TOP ")
+          .append(batchSize)
+          .append(")");
+    }
     return query.toString();
   }
 

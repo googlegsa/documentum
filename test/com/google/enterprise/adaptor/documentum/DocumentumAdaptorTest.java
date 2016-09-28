@@ -834,7 +834,8 @@ public class DocumentumAdaptorTest {
                   + "dm_document|dm_folder)\\)", "r_object_type LIKE '$1%'")
               .replace("FOLDER(", "(mock_object_path LIKE ")
               .replace("',descend", "%'")
-              .replace("ENABLE(ROW_BASED)", "");
+              .replace("ENABLE(ROW_BASED)", "")
+              .replace("ENABLE(RETURN_TOP", "LIMIT (");
           rs = stmt.executeQuery(query);
         } catch (SQLException e) {
           throw new DfException(e);
@@ -3300,11 +3301,11 @@ public class DocumentumAdaptorTest {
 
   private Map<GroupPrincipal, ? extends Collection<Principal>> getGroups()
        throws Exception {
-    return getGroups(LocalGroupsOnly.FALSE, "");
+    return getGroups(LocalGroupsOnly.FALSE, "", 0);
   }
 
   private Map<GroupPrincipal, ? extends Collection<Principal>> getGroups(
-      LocalGroupsOnly localGroupsOnly, String windowsDomain)
+      LocalGroupsOnly localGroupsOnly, String windowsDomain, int batchSize)
       throws DfException, IOException, InterruptedException {
     DocumentumAdaptor adaptor = getObjectUnderTest(
         ImmutableMap.<String, String>builder()
@@ -3313,6 +3314,7 @@ public class DocumentumAdaptorTest {
         .put("adaptor.namespace", "NS")
         .put("documentum.docbaseName", "Local") // Local Namespace
         .build());
+    adaptor.dmWorldTraverser.setBatchSize(batchSize);
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.getDocIds(pusher);
@@ -3342,7 +3344,11 @@ public class DocumentumAdaptorTest {
                             new UserPrincipal("User4", "NS"),
                             new UserPrincipal("User5", "NS")));
 
+    // First get all dm_world members at once.
     assertEquals(expected, getGroups());
+
+    // Then try collecting them in batches of two.
+    assertEquals(expected, getGroups(LocalGroupsOnly.FALSE, "", 2));
   }
 
   @Test
@@ -3522,7 +3528,7 @@ public class DocumentumAdaptorTest {
                            new UserPrincipal("TEST\\User5", "NS")));
 
     Map<GroupPrincipal, ? extends Collection<Principal>> groups =
-        getGroups(LocalGroupsOnly.FALSE, "TEST");
+        getGroups(LocalGroupsOnly.FALSE, "TEST", 0);
 
     assertEquals(expected, filterDmWorld(groups));
   }
@@ -3578,7 +3584,7 @@ public class DocumentumAdaptorTest {
                            new UserPrincipal("User5", "NS")));
 
     Map<GroupPrincipal, ? extends Collection<Principal>> groups =
-        getGroups(LocalGroupsOnly.TRUE, "");
+        getGroups(LocalGroupsOnly.TRUE, "", 0);
 
     assertEquals(expected, filterDmWorld(groups));
   }
