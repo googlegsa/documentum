@@ -773,13 +773,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       try {
         ImmutableSet.Builder<Principal> members = null;
         String groupName = null;
+        String objectId = groupsCheckpoint.getObjectId();
         while (result.next()) {
-          if (!Objects.equals(groupName, result.getString("group_name"))) {
+          if (!Objects.equals(objectId, result.getString("r_object_id"))) {
             // We have transitioned to a new group.
             addGroup(groupName, groups, members, principals);
-            groupsCheckpoint = new Checkpoint(groupName);
+            groupsCheckpoint = new Checkpoint(objectId);
             members = ImmutableSet.builder();
             groupName = result.getString("group_name");
+            objectId = result.getString("r_object_id");
             logger.log(Level.FINE, "Found Group: {0}", groupName);
           }
           addMemberPrincipal(members, principals,
@@ -838,7 +840,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       if (checkpoint.getObjectId() == null) {
         hasWhere = false;
       } else {
-        query.append(" WHERE group_name > '")
+        query.append(" WHERE r_object_id > '")
             .append(checkpoint.getObjectId())
             .append("'");
         hasWhere = true;
@@ -861,7 +863,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
     query.append(" ORDER BY ")
         .append((checkpoint.getLastModified() == null)
-            ? "group_name" : "r_modify_date, r_object_id")
+            ? "r_object_id" : "r_modify_date, r_object_id")
         .append(" ENABLE(ROW_BASED)");
     return query.toString();
   }
@@ -1172,7 +1174,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         String lastModified = groupsCheckpoint.getLastModified();
         String objectId = groupsCheckpoint.getObjectId();
         while (result.next()) {
-          if (!Objects.equals(groupName, result.getString("group_name"))) {
+          if (!Objects.equals(objectId, result.getString("r_object_id"))) {
             // We have transitioned to a new group.
             addGroup(groupName, groups, members, principals);
             groupsCheckpoint = new Checkpoint(lastModified, objectId);

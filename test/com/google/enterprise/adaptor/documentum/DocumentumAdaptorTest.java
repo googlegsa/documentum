@@ -3457,8 +3457,9 @@ public class DocumentumAdaptorTest {
     executeUpdate(
         "insert into dm_user(user_name, user_login_name, r_is_group) "
         + "values('Group1', 'GroupUno', TRUE)");
-    executeUpdate("insert into dm_group(group_name, users_names) "
-        + "values ('Group1', 'User1'), ('Group1', 'User2')");
+    executeUpdate("insert into dm_group(r_object_id, group_name, users_names) "
+        + "values ('12Group1', 'Group1', 'User1'),"
+        + " ('12Group1', 'Group1', 'User2')");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
         expected = ImmutableMap.of(new GroupPrincipal("GroupUno", "NS_Local"),
@@ -3491,8 +3492,9 @@ public class DocumentumAdaptorTest {
     executeUpdate("insert into dm_user(user_name, user_login_name, "
         + "user_source, user_ldap_dn) values('Group1', 'Group1', 'LDAP', "
         + "'cn=Group1,dc=test,dc=com')");
-    executeUpdate("insert into dm_group(group_name, group_source, users_names) "
-        + "values ('Group1', 'LDAP', 'User1'), ('Group1', 'LDAP', 'User2')");
+    executeUpdate("insert into dm_group(r_object_id, group_name, group_source,"
+        + " users_names) values ('12Group1', 'Group1', 'LDAP', 'User1'),"
+        + " ('12Group1', 'Group1', 'LDAP', 'User2')");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
         expected =
