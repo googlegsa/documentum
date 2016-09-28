@@ -49,7 +49,7 @@ class Principals {
       .expireAfterWrite(24, TimeUnit.HOURS).build();
 
   // Cannot cache null, so this is a special place-holder.
-  private static Principal NULL_PRINCIPAL = new UserPrincipal("NULL",
+  private static final Principal NULL_PRINCIPAL = new UserPrincipal("NULL",
       "com.google.enterprise.adaptor.documentum.Principals");
 
   private final IDfSession dmSession;
