@@ -205,6 +205,7 @@ public class DocumentumAdaptorTest {
     config.addKey("adaptor.namespace", "globalNS");
     config.addKey("documentum.windowsDomain", "");
     config.addKey("documentum.pushLocalGroupsOnly", "false");
+    config.addKey("documentum.queryBatchSize", "0");
     config.addKey("documentum.maxHtmlSize", "1000");
     config.addKey("documentum.cabinetWhereCondition", "");
     config.addKey("adaptor.caseSensitivityType", "");
@@ -2344,16 +2345,17 @@ public class DocumentumAdaptorTest {
   }
 
   private Map<DocId, Acl> getAllAcls() throws Exception {
-    return getAllAcls("");
+    return getAllAcls("", 0);
   }
 
-  private Map<DocId, Acl> getAllAcls(String windowsDomain)
+  private Map<DocId, Acl> getAllAcls(String windowsDomain, int batchSize)
       throws DfException, IOException, InterruptedException {
     DocumentumAdaptor adaptor = getObjectUnderTest(
         ImmutableMap.<String, String>builder()
         .put("documentum.windowsDomain", windowsDomain)
         .put("adaptor.namespace", "NS")
         .put("documentum.docbaseName", "Local") // Local Namespace
+        .put("documentum.queryBatchSize", Integer.toString(batchSize))
         .build());
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
@@ -2361,17 +2363,33 @@ public class DocumentumAdaptorTest {
     return pusher.getNamedResources();
   }
 
+  /** Creates ACLs by the supplied object ids and returns a set of DocIds
+      for those ACLs. */
+  private Set<DocId> createAcls(String... objectIds) throws SQLException {
+    ImmutableSet.Builder<DocId> builder = ImmutableSet.builder();
+    for (String objectId : objectIds) {
+      createAcl(objectId);
+      builder.add(new DocId(objectId));
+    }
+    return builder.build();
+  }
+
   // tests for ACLs
   // TODO: (Srinivas) -  Add a unit test and perform manual test of
   //                     user and group names with quotes in them.
   @Test
-  public void testAcls() throws Exception {
-    createAcl("4501081f80000100");
-    createAcl("4501081f80000101");
-    createAcl("4501081f80000102");
-    Map<DocId, Acl> namedResources = getAllAcls();
+  public void testGetAllAcls() throws Exception {
+    Set<DocId> expectedDocIds = createAcls("4501081f80000100",
+        "4501081f80000101",  "4501081f80000102",  "4501081f80000103",
+        "4501081f80000104",  "4501081f80000105",  "4501081f80000106");
 
-    assertEquals(3, namedResources.size());
+    // Fetch all the ACLs in various sized batches.
+    // Note: a batch size of 0, means no batching.
+    for (int batchSize = 0; batchSize <= expectedDocIds.size() + 1;
+         batchSize++) {
+      assertEquals("batchSize: " + batchSize,
+          expectedDocIds, getAllAcls("", batchSize).keySet());
+    }
   }
 
   @Test
@@ -2522,7 +2540,7 @@ public class DocumentumAdaptorTest {
     addDenyPermitToAcl(id, "User2", IDfACL.DF_PERMIT_BROWSE);
     addDenyPermitToAcl(id, "User3", IDfACL.DF_PERMIT_WRITE);
 
-    Map<DocId, Acl> namedResources = getAllAcls("ajax");
+    Map<DocId, Acl> namedResources = getAllAcls("ajax", 0);
 
     Acl acl = namedResources.get(new DocId(id));
     assertEquals(ImmutableSet.of(new UserPrincipal("ajax\\User4", "NS"),
@@ -2543,7 +2561,7 @@ public class DocumentumAdaptorTest {
     addDenyPermitToAcl(id, "User2", IDfACL.DF_PERMIT_BROWSE);
     addDenyPermitToAcl(id, "User3", IDfACL.DF_PERMIT_WRITE);
 
-    Map<DocId, Acl> namedResources = getAllAcls("ajax.example.com");
+    Map<DocId, Acl> namedResources = getAllAcls("ajax.example.com", 0);
     Acl acl = namedResources.get(new DocId(id));
     assertEquals(ImmutableSet.of(
         new UserPrincipal("ajax.example.com\\User4", "NS"),
@@ -2568,7 +2586,7 @@ public class DocumentumAdaptorTest {
     addAllowPermitToAcl(id, "Group2", IDfACL.DF_PERMIT_WRITE);
     addDenyPermitToAcl(id, "Group3", IDfACL.DF_PERMIT_READ);
 
-    Map<DocId, Acl> namedResources = getAllAcls("ajax");
+    Map<DocId, Acl> namedResources = getAllAcls("ajax", 0);
     Acl acl = namedResources.get(new DocId(id));
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "NS_Local"),
         new GroupPrincipal("Group2", "NS_Local")),
@@ -3056,7 +3074,7 @@ public class DocumentumAdaptorTest {
 
     Map<DocId, Acl> aclMap = new HashMap<>();
     try {
-      dctmAcls.getUpdateAcls(Checkpoint.incremental(), aclMap);
+      dctmAcls.getUpdateAcls(Checkpoint.incremental(), 0, aclMap);
       fail("Expected an AssertionError");
     } catch (AssertionError expected) {
     }
@@ -3313,8 +3331,8 @@ public class DocumentumAdaptorTest {
         .put("documentum.windowsDomain", windowsDomain)
         .put("adaptor.namespace", "NS")
         .put("documentum.docbaseName", "Local") // Local Namespace
+        .put("documentum.queryBatchSize", Integer.toString(batchSize))
         .build());
-    adaptor.dmWorldTraverser.setBatchSize(batchSize);
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.getDocIds(pusher);
@@ -3344,11 +3362,12 @@ public class DocumentumAdaptorTest {
                             new UserPrincipal("User4", "NS"),
                             new UserPrincipal("User5", "NS")));
 
-    // First get all dm_world members at once.
-    assertEquals(expected, getGroups());
-
-    // Then try collecting them in batches of two.
-    assertEquals(expected, getGroups(LocalGroupsOnly.FALSE, "", 2));
+    // Fetch all the dm_world members in various sized batches.
+    // Note: a batch size of 0, means no batching.
+    for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize++) {
+      assertEquals("batchSize: " + batchSize,
+          expected, getGroups(LocalGroupsOnly.FALSE, "", batchSize));
+    }
   }
 
   @Test

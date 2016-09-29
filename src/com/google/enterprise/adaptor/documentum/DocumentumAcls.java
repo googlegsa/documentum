@@ -74,7 +74,7 @@ class DocumentumAcls {
     this.caseSensitivityType = caseSensitivityType;
   }
 
-  private IDfQuery makeAclQuery(String aclId) {
+  private IDfQuery makeAclQuery(String aclId, int batchSize) {
     IDfQuery query = dmClientX.getQuery();
     StringBuilder queryStr = new StringBuilder()
       .append("SELECT r_object_id FROM dm_acl");
@@ -82,11 +82,15 @@ class DocumentumAcls {
       queryStr.append(" WHERE r_object_id > '").append(aclId).append("'");
     }
     queryStr.append(" ORDER BY r_object_id");
+    if (batchSize > 0) {
+      queryStr.append(" ENABLE(RETURN_TOP ").append(batchSize).append(")");
+    }
+    logger.log(Level.FINER, "ACL query: {0}", queryStr);
     query.setDQL(queryStr.toString());
     return query;
   }
 
-  private IDfQuery makeUpdateAclQuery(Checkpoint checkpoint)
+  private IDfQuery makeUpdateAclQuery(Checkpoint checkpoint, int batchSize)
       throws DfException {
     //TODO(sveldurthi): Create utility function for getServerVersion().matches()
     String dateToStringFunction =
@@ -112,7 +116,9 @@ class DocumentumAcls {
         { checkpoint.getLastModified(), checkpoint.getObjectId() };
     queryStr.append(MessageFormat.format(whereBoundedClause, arguments));
     queryStr.append(" ORDER BY time_stamp_utc, r_object_id, event_name");
-    logger.log(Level.FINE, "Modify date: {0} ; Modify ID: {1}", arguments);
+    if (batchSize > 0) {
+      queryStr.append(" ENABLE(RETURN_TOP ").append(batchSize).append(")");
+    }
     logger.log(Level.FINER, "Update ACL query: {0}", queryStr);
 
     IDfQuery query = dmClientX.getQuery();
@@ -121,7 +127,7 @@ class DocumentumAcls {
   }
 
   /**
-   * Returns all Documentum ACLs in map with doc id and Acl.
+   * Returns Documentum ACLs in map with doc id and Acl.
    * 
    * In Documentum, ACLs are high level objects separate from content objects.
    * An ACL can be applied to one or many content objects. Or, each object 
@@ -129,21 +135,26 @@ class DocumentumAcls {
    * the ACLs in Documentum to GSA.
    * 
    * @param checkpoint the last checkpoint
+   * @param batchSize number of ACLs to fetch in each query
    * @param aclMap a map of Adaptor Acls for all Documentum ACLs
+   * @return {@code true} if the traversal is complete,
+   *     or {@code false} otherwise
    * @throws DfException if error in getting ACL information.
    */
-  public void getAcls(Checkpoint checkpoint, Map<DocId, Acl> aclMap)
-      throws DfException {
+  public boolean getAcls(Checkpoint checkpoint, int batchSize,
+      Map<DocId, Acl> aclMap) throws DfException {
     checkState(state != State.GET_UPDATE_ACLS,
         "Only one of getAcls or getUpdateAcls may be called.");
     state = State.GET_ACLS;
 
     aclCheckpoint = checkpoint;
-    IDfQuery query = makeAclQuery(checkpoint.getObjectId());
+    IDfQuery query = makeAclQuery(checkpoint.getObjectId(), batchSize);
     IDfCollection dmAclCollection =
         query.execute(dmSession, IDfQuery.DF_EXECREAD_QUERY);
     try {
+      boolean isComplete = true;
       while (dmAclCollection.next()) {
+        isComplete = (batchSize == 0);
         String objectId = dmAclCollection.getString("r_object_id");
         logger.log(Level.FINE, "ACL ID: {0}", objectId);
         try {
@@ -155,8 +166,11 @@ class DocumentumAcls {
         }
         aclCheckpoint = new Checkpoint(objectId);
       }
-      // for a successful completion, reset to full.
-      aclCheckpoint = Checkpoint.full();
+      if (isComplete) {
+        // for a successful completion, reset to full.
+        aclCheckpoint = Checkpoint.full();
+      }
+      return isComplete;
     } finally {
       try {
         dmAclCollection.close();
@@ -167,7 +181,7 @@ class DocumentumAcls {
   }
 
   /**
-   * Returns all updated Documentum ACLs in map with doc id and Acl.
+   * Returns updated Documentum ACLs in map with doc id and Acl.
    *
    * In Documentum, ACLs are high level objects separate from content objects.
    * An ACL can be applied to one or many content objects. Or, each object
@@ -175,11 +189,14 @@ class DocumentumAcls {
    * send all the ACLs in Documentum to GSA.
    *
    * @param checkpoint the last checkpoint
+   * @param batchSize number of ACLs to fetch in each query
    * @param aclMap a map of Adaptor Acls for all Documentum ACLs.
+   * @return {@code true} if the traversal is complete,
+   *     or {@code false} otherwise
    * @throws DfException if error in getting ACL information.
    */
-  public void getUpdateAcls(Checkpoint checkpoint, Map<DocId, Acl> aclMap)
-      throws DfException {
+  public boolean getUpdateAcls(Checkpoint checkpoint, int batchSize,
+      Map<DocId, Acl> aclMap) throws DfException {
     checkState(state != State.GET_ACLS,
         "Only one of getAcls or getUpdateAcls may be called.");
     state = State.GET_UPDATE_ACLS;
@@ -188,11 +205,13 @@ class DocumentumAcls {
     HashSet<String> aclModifiedIds = new HashSet<String>();
     String aclModifiedDate = checkpoint.getLastModified();
     String aclModifyId = checkpoint.getObjectId();
-    IDfQuery query = makeUpdateAclQuery(checkpoint);
+    IDfQuery query = makeUpdateAclQuery(checkpoint, batchSize);
     IDfCollection dmAclCollection =
         query.execute(dmSession, IDfQuery.DF_EXECREAD_QUERY);
     try {
+      boolean isComplete = true;
       while (dmAclCollection.next()) {
+        isComplete = (batchSize == 0);
         aclModifiedDate = dmAclCollection.getString("time_stamp_utc_str");
         aclModifyId = dmAclCollection.getString("r_object_id");
         String modifyObjectId = dmAclCollection.getString("audited_obj_id");
@@ -221,6 +240,7 @@ class DocumentumAcls {
         }
         aclCheckpoint = new Checkpoint(aclModifiedDate, aclModifyId);
       }
+      return isComplete;
     } finally {
       try {
         dmAclCollection.close();

@@ -128,6 +128,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private String localNamespace;
   private String windowsDomain;
   private boolean pushLocalGroupsOnly;
+  private int queryBatchSize;
   private int maxHtmlSize;
   private String cabinetWhereCondition;
   private CaseSensitivityType caseSensitivityType;
@@ -145,7 +146,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   @VisibleForTesting Checkpoint modifiedDocumentsCheckpoint =
       Checkpoint.incremental();
   private GroupTraverser groupTraverser = new GroupTraverser();
-  @VisibleForTesting DmWorldTraverser dmWorldTraverser = new DmWorldTraverser();
+  private DmWorldTraverser dmWorldTraverser = new DmWorldTraverser();
   @VisibleForTesting ModifiedGroupTraverser modifiedGroupTraverser =
       new ModifiedGroupTraverser();
   @VisibleForTesting Checkpoint modifiedPermissionsCheckpoint =
@@ -322,6 +323,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     config.addKey("adaptor.namespace", Principal.DEFAULT_NAMESPACE);
     config.addKey("documentum.windowsDomain", "");
     config.addKey("documentum.pushLocalGroupsOnly", "false");
+    config.addKey("documentum.queryBatchSize", "0");
     config.addKey("documentum.maxHtmlSize", "1000");
     config.addKey("adaptor.caseSensitivityType",
         "everything-case-sensitive");
@@ -380,14 +382,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     documentTypes = ImmutableList.copyOf(Splitter.on(',').trimResults()
         .omitEmptyStrings().split(types));
     logger.log(Level.CONFIG, "document types: {0}", documentTypes);
-    try {
-      maxHtmlSize = Math.max(0, 
-          Integer.parseInt(config.getValue("documentum.maxHtmlSize").trim()));
-      logger.log(Level.CONFIG, "documentum.maxHtmlSize: {0}", maxHtmlSize);
-    } catch (NumberFormatException e) {
-      throw new InvalidConfigurationException(
-          "documentum.maxHtmlSize must be a positive integer.", e);
-    }
+    queryBatchSize = getPositiveInt(config, "documentum.queryBatchSize");
+    logger.log(Level.CONFIG, "documentum.queryBatchSize: {0}", queryBatchSize);
+    maxHtmlSize = getPositiveInt(config, "documentum.maxHtmlSize");
+    logger.log(Level.CONFIG, "documentum.maxHtmlSize: {0}", maxHtmlSize);
     if (config.getValue("adaptor.caseSensitivityType").equals(
         CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE.toString())) {
       caseSensitivityType = CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE;
@@ -421,6 +419,16 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
          "Failed to validate documentum.src paths.");
     }
     context.setPollingIncrementalLister(this);
+  }
+
+  private static int getPositiveInt(Config config, String propName) {
+    try {
+      return Math.max(0,
+          Integer.parseInt(config.getValue(propName).trim()));
+    } catch (NumberFormatException e) {
+      throw new InvalidConfigurationException(
+          propName + " must be a positive integer.", e);
+    }
   }
 
   private static void validateConfig(Config config) {
@@ -716,8 +724,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
 
     protected boolean getAcls(Checkpoint checkpoint) throws DfException {
-      dctmAcls.getAcls(checkpoint, aclMap);
-      return true;
+      return dctmAcls.getAcls(checkpoint, queryBatchSize, aclMap);
     }
   }
 
@@ -868,21 +875,14 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     return query.toString();
   }
 
-  @VisibleForTesting
-  class DmWorldTraverser extends TraverserTemplate {
+  private class DmWorldTraverser extends TraverserTemplate {
     private ImmutableMap<GroupPrincipal, ImmutableSet<Principal>> dmWorld =
         null;
     private ImmutableSet.Builder<Principal> members = null;
     private Checkpoint membersCheckpoint;
-    private int batchSize = 1000;
 
     protected DmWorldTraverser() {
       super(Checkpoint.full());
-    }
-
-    @VisibleForTesting
-    void setBatchSize(int batchSize) {
-      this.batchSize = batchSize;
     }
 
     @Override
@@ -896,7 +896,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     protected boolean fillCollection(IDfSession session,
         Principals principals, Checkpoint checkpoint) throws DfException {
       membersCheckpoint = checkpoint;
-      String queryStr = makeDmWorldQuery(checkpoint, batchSize);
+      String queryStr = makeDmWorldQuery(checkpoint, queryBatchSize);
       logger.log(Level.FINER, "Get dm_world Members Query: {0}", queryStr);
       IDfQuery query = dmClientX.getQuery();
       query.setDQL(queryStr);
@@ -904,7 +904,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       boolean isComplete = true;
       try {
         while (result.next()) {
-          isComplete = (batchSize == 0);  // Avoid extra query if fetching all.
+          isComplete = (queryBatchSize == 0);
           String member = result.getString("user_name");
           Principal principal = principals.getPrincipal(member, false);
           if (principal != null) {
@@ -1014,8 +1014,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
     @Override
     protected boolean getAcls(Checkpoint checkpoint) throws DfException {
-      dctmAcls.getUpdateAcls(checkpoint, aclMap);
-      return true;
+      return dctmAcls.getUpdateAcls(checkpoint, queryBatchSize, aclMap);
     }
   }
 
