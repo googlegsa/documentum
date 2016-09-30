@@ -828,6 +828,12 @@ public class DocumentumAdaptorTest {
       public CollectionMock(String query) throws DfException {
         try {
           stmt = getConnection().createStatement();
+          // The test dm_group table is ROW_BASED in implementation.
+          // If not fetching ROW_BASED, then force DISTINCT on the SELECT.
+          if (query.contains(" FROM dm_group ")
+              && !query.contains("ENABLE(ROW_BASED)")) {
+            query = query.replaceFirst("^SELECT ", "SELECT DISTINCT ");
+          }
           query = query.replaceAll("DATETOSTRING(_LOCAL)?", "FORMATDATETIME")
               .replace("DATE(", "PARSEDATETIME(")
               .replace("yyyy-mm-dd hh:mi:ss", "yyyy-MM-dd HH:mm:ss")
@@ -3446,6 +3452,9 @@ public class DocumentumAdaptorTest {
     insertUsers("User1", "User2", "User3", "User4", "User5");
     insertGroup("Group1", "User1", "User2", "User3");
     insertGroup("Group2", "Group1", "User4", "User5");
+    insertGroup("Group3", "Group2", "User1", "User5");
+    insertGroup("Group4", "User1", "User2", "User3", "User4");
+    insertGroup("Group5", "Group1", "Group2");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
        expected = ImmutableMap.of(new GroupPrincipal("Group1", "NS_Local"),
@@ -3455,9 +3464,26 @@ public class DocumentumAdaptorTest {
            new GroupPrincipal("Group2", "NS_Local"),
            ImmutableSet.of(new GroupPrincipal("Group1", "NS_Local"),
                            new UserPrincipal("User4", "NS"),
-                           new UserPrincipal("User5", "NS")));
+                           new UserPrincipal("User5", "NS")),
+           new GroupPrincipal("Group3", "NS_Local"),
+           ImmutableSet.of(new GroupPrincipal("Group2", "NS_Local"),
+                           new UserPrincipal("User1", "NS"),
+                           new UserPrincipal("User5", "NS")),
+           new GroupPrincipal("Group4", "NS_Local"),
+           ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                           new UserPrincipal("User2", "NS"),
+                           new UserPrincipal("User3", "NS"),
+                           new UserPrincipal("User4", "NS")),
+           new GroupPrincipal("Group5", "NS_Local"),
+           ImmutableSet.of(new GroupPrincipal("Group1", "NS_Local"),
+                           new GroupPrincipal("Group2", "NS_Local")));
 
-    assertEquals(expected, filterDmWorld(getGroups()));
+    // Fetch all the groups in various sized batches.
+    // Note: a batch size of 0, means no batching.
+    for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize++) {
+      assertEquals("batchSize: " + batchSize, expected,
+          filterDmWorld(getGroups(LocalGroupsOnly.FALSE, "", batchSize)));
+    }
   }
 
   @Test
