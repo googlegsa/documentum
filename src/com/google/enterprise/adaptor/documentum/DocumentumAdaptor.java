@@ -124,14 +124,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private IDfSessionManager dmSessionManager;
   private String docbase;
   private String displayUrl;
+  private boolean markAllDocsAsPublic;
   private String globalNamespace;
   private String localNamespace;
   private String windowsDomain;
   private boolean pushLocalGroupsOnly;
+  private CaseSensitivityType caseSensitivityType;
   private int queryBatchSize;
   private int maxHtmlSize;
   private String cabinetWhereCondition;
-  private CaseSensitivityType caseSensitivityType;
 
   /* Cache to store all types */
   private final Map<String, IDfType> superTypeCache =
@@ -361,16 +362,30 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     validateConfig(config);
     docbase = config.getValue("documentum.docbaseName").trim();
     displayUrl = config.getValue("documentum.displayUrlPattern");
-    globalNamespace = config.getValue("adaptor.namespace").trim();
-    logger.log(Level.CONFIG, "adaptor.namespace: {0}", globalNamespace);
-    localNamespace = globalNamespace + "_" + docbase;
-    logger.log(Level.CONFIG, "local namespace: {0}", localNamespace);
-    windowsDomain = config.getValue("documentum.windowsDomain").trim();
-    logger.log(Level.CONFIG, "documentum.windowsDomain: {0}", windowsDomain);
-    pushLocalGroupsOnly = Boolean.parseBoolean(
-        config.getValue("documentum.pushLocalGroupsOnly"));
-    logger.log(Level.CONFIG, "documentum.pushLocalGroupsOnly: {0}", 
-        pushLocalGroupsOnly);
+    markAllDocsAsPublic =
+        Boolean.parseBoolean(config.getValue("adaptor.markAllDocsAsPublic"));
+    logger.log(Level.CONFIG, "adaptor.markAllDocsAsPublic: {0}",
+        markAllDocsAsPublic);
+    if (!markAllDocsAsPublic) {
+      globalNamespace = config.getValue("adaptor.namespace").trim();
+      logger.log(Level.CONFIG, "adaptor.namespace: {0}", globalNamespace);
+      localNamespace = globalNamespace + "_" + docbase;
+      logger.log(Level.CONFIG, "local namespace: {0}", localNamespace);
+      windowsDomain = config.getValue("documentum.windowsDomain").trim();
+      logger.log(Level.CONFIG, "documentum.windowsDomain: {0}", windowsDomain);
+      pushLocalGroupsOnly = Boolean.parseBoolean(
+          config.getValue("documentum.pushLocalGroupsOnly"));
+      logger.log(Level.CONFIG, "documentum.pushLocalGroupsOnly: {0}",
+          pushLocalGroupsOnly);
+      if (config.getValue("adaptor.caseSensitivityType").equals(
+          CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE.toString())) {
+        caseSensitivityType = CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE;
+      } else {
+        caseSensitivityType = CaseSensitivityType.EVERYTHING_CASE_SENSITIVE;
+      }
+      logger.log(Level.CONFIG, "adaptor.caseSensitivityType: {0}",
+          caseSensitivityType);
+    }
     String src = config.getValue("documentum.src");
     logger.log(Level.CONFIG, "documentum.src: {0}", src);
     String separator = config.getValue("documentum.src.separator");
@@ -386,14 +401,6 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     logger.log(Level.CONFIG, "documentum.queryBatchSize: {0}", queryBatchSize);
     maxHtmlSize = getPositiveInt(config, "documentum.maxHtmlSize");
     logger.log(Level.CONFIG, "documentum.maxHtmlSize: {0}", maxHtmlSize);
-    if (config.getValue("adaptor.caseSensitivityType").equals(
-        CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE.toString())) {
-      caseSensitivityType = CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE;
-    } else {
-      caseSensitivityType = CaseSensitivityType.EVERYTHING_CASE_SENSITIVE;
-    }
-    logger.log(Level.CONFIG, "adaptor.caseSensitivityType: {0}",
-        caseSensitivityType);
     cabinetWhereCondition =
         config.getValue("documentum.cabinetWhereCondition");
     logger.log(Level.CONFIG, "documentum.cabinetWhereCondition: {0}", 
@@ -587,19 +594,21 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       dmSessionManager.release(dmSession);
     }
 
-    // Push the ACLs and groups.
-    Principals.clearCache();
-    ArrayDeque<DfException> savedExceptions = new ArrayDeque<>();
-    aclTraverser.run(pusher, savedExceptions);
-    groupTraverser.run(pusher, savedExceptions);
-    dmWorldTraverser.run(pusher, savedExceptions);
+    if (!markAllDocsAsPublic) {
+      // Push the ACLs and groups.
+      Principals.clearCache();
+      ArrayDeque<DfException> savedExceptions = new ArrayDeque<>();
+      aclTraverser.run(pusher, savedExceptions);
+      groupTraverser.run(pusher, savedExceptions);
+      dmWorldTraverser.run(pusher, savedExceptions);
 
-    if (!savedExceptions.isEmpty()) {
-      DfException cause = savedExceptions.removeFirst();
-      for (DfException e : savedExceptions) {
-        cause.addSuppressed(e);
+      if (!savedExceptions.isEmpty()) {
+        DfException cause = savedExceptions.removeFirst();
+        for (DfException e : savedExceptions) {
+          cause.addSuppressed(e);
+        }
+        throw new IOException(cause);
       }
-      throw new IOException(cause);
     }
 
     logger.exiting("DocumentumAdaptor", "getDocIds");
@@ -1008,19 +1017,21 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       dmSessionManager.release(dmSession);
     }
 
-    // Push modified ACLs and groups.
-    modifiedAclTraverser.run(pusher, savedExceptions);
-    modifiedGroupTraverser.run(pusher, savedExceptions);
+    if (!markAllDocsAsPublic) {
+      // Push modified ACLs and groups.
+      modifiedAclTraverser.run(pusher, savedExceptions);
+      modifiedGroupTraverser.run(pusher, savedExceptions);
 
-    // Push modified document permissions.
-    dmSession = getDfSession();
-    try {
-      modifiedPermissionsCheckpoint = pushPermissionsUpdates(pusher, dmSession,
-          modifiedPermissionsCheckpoint);
-    } catch (DfException e) {
-      savedExceptions.add(e);
-    } finally {
-      dmSessionManager.release(dmSession);
+      // Push modified document permissions.
+      dmSession = getDfSession();
+      try {
+        modifiedPermissionsCheckpoint = pushPermissionsUpdates(pusher,
+            dmSession, modifiedPermissionsCheckpoint);
+      } catch (DfException e) {
+        savedExceptions.add(e);
+      } finally {
+        dmSessionManager.release(dmSession);
+      }
     }
 
     if (!savedExceptions.isEmpty()) {
@@ -1428,7 +1439,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    * @throws URISyntaxException */
   private void getDocumentContent(Response resp, IDfSysObject dmSysbObj,
       DocId id) throws DfException, IOException, URISyntaxException {
-    getACL(resp, dmSysbObj, id);
+    if (!markAllDocsAsPublic) {
+      getACL(resp, dmSysbObj, id);
+    }
     // Include document attributes as metadata.
     getMetadata(resp, dmSysbObj, id);
 
@@ -1548,7 +1561,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   /** Returns the Folder's contents as links in a generated HTML document. */
   private void getFolderContent(Response resp, IDfFolder dmFolder, DocId id)
       throws DfException, IOException {
-    getACL(resp, dmFolder, id);
+    if (!markAllDocsAsPublic) {
+      getACL(resp, dmFolder, id);
+    }
     // Include folder attributes as metadata.
     getMetadata(resp, dmFolder, id);
 

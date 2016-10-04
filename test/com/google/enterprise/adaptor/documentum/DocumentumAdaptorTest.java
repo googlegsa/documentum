@@ -115,6 +115,7 @@ import java.util.Vector;
 public class DocumentumAdaptorTest {
 
   private static enum LocalGroupsOnly { TRUE, FALSE };
+  private static enum MarkAllDocsPublic { TRUE, FALSE };
 
   private static final SimpleDateFormat dateFormat =
       new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
@@ -1776,15 +1777,17 @@ public class DocumentumAdaptorTest {
         getDisplayUrl("{1}-http://webtopurl/{0}/drl/", path));
   }
 
-  private Acl getACL(String path) throws Exception {
+  private Acl getACL(String path, MarkAllDocsPublic markAllDocsPublic)
+      throws Exception {
     assertTrue(path, path.startsWith(START_PATH));
 
     AdaptorContext context = ProxyAdaptorContext.getInstance();
-    initTestAdaptorConfig(context);
+    Config config = initTestAdaptorConfig(context);
+    config.overrideKey("adaptor.markAllDocsAsPublic",
+        markAllDocsPublic.toString());
     Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
     MockResponse response = getDocContent(context, request);
 
-    assertNotNull(response.toString(), response.acl);
     return response.acl;
   }
 
@@ -1795,7 +1798,8 @@ public class DocumentumAdaptorTest {
     insertDocument(path);
     setSysObjectACL(path, documentACL);
 
-    Acl acl = getACL(path);
+    Acl acl = getACL(path, MarkAllDocsPublic.FALSE);
+    assertNotNull(acl);
     assertEquals(new DocId(documentACL), acl.getInheritFrom());
   }
 
@@ -1808,8 +1812,33 @@ public class DocumentumAdaptorTest {
     insertFolder(now, folderId, folder);
     setSysObjectACL(folder, folderACL);
 
-    Acl acl = getACL(folder);
+    Acl acl = getACL(folder, MarkAllDocsPublic.FALSE);
+    assertNotNull(acl);
     assertEquals(new DocId(folderACL), acl.getInheritFrom());
+  }
+
+  @Test
+  public void testDocumentAclMarkAllDocsPublic() throws Exception {
+    String path = "/Folder1/path1/object1";
+    String documentACL = "45DocumentACL";
+    insertDocument(path);
+    setSysObjectACL(path, documentACL);
+
+    Acl acl = getACL(path, MarkAllDocsPublic.TRUE);
+    assertNull(acl);
+  }
+
+  @Test
+  public void testFolderAclMarkAllDocsPublic() throws Exception {
+    String now = getNowPlusMinutes(0);
+    String folderId = "0b01081f80078d29";
+    String folder = START_PATH + "/path2";
+    String folderACL = "45FolderAcl";
+    insertFolder(now, folderId, folder);
+    setSysObjectACL(folder, folderACL);
+
+    Acl acl = getACL(folder, MarkAllDocsPublic.TRUE);
+    assertNull(acl);
   }
 
   /*
@@ -2803,15 +2832,17 @@ public class DocumentumAdaptorTest {
     assertEquals(ImmutableSet.of(), acl2.getDenyGroups());
   }
 
-  private Map<DocId, Acl> getAclMap(CaseSensitivityType caseSensitivityType)
-      throws Exception {
+  private Map<DocId, Acl> getAclMap(MarkAllDocsPublic markAllDocsPublic,
+      CaseSensitivityType caseSensitivityType) throws Exception {
     IDfClientX dmClientX = new H2BackedTestProxies().getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
     AdaptorContext context = ProxyAdaptorContext.getInstance();
-    initTestAdaptorConfig(context);
+    Config config = initTestAdaptorConfig(context);
+    config.overrideKey("adaptor.markAllDocsAsPublic",
+        markAllDocsPublic.toString());
     if (caseSensitivityType != null) {
-      context.getConfig().overrideKey("adaptor.caseSensitivityType",
+      config.overrideKey("adaptor.caseSensitivityType",
           caseSensitivityType.toString());
     }
     adaptor.init(context);
@@ -2822,7 +2853,14 @@ public class DocumentumAdaptorTest {
   }
 
   private Map<DocId, Acl> getAclMap() throws Exception {
-    return getAclMap(null);
+    return getAclMap(MarkAllDocsPublic.FALSE, null);
+  }
+
+  @Test
+  public void testAclMarkAllDocsPublic() throws Exception {
+    Map<DocId, Acl> aclMap = getAclMap(MarkAllDocsPublic.TRUE, null);
+    assertNotNull(aclMap);
+    assertTrue(aclMap.isEmpty());
   }
 
   @Test
@@ -2849,8 +2887,8 @@ public class DocumentumAdaptorTest {
   @Test
   public void testAclCaseSensitivity_sensitive() throws Exception {
     createAcl("4501081f80000100");
-    Map<DocId, Acl> aclMap =
-        getAclMap(CaseSensitivityType.EVERYTHING_CASE_SENSITIVE);
+    Map<DocId, Acl> aclMap = getAclMap(MarkAllDocsPublic.FALSE,
+        CaseSensitivityType.EVERYTHING_CASE_SENSITIVE);
     Acl acl = aclMap.get(new DocId("4501081f80000100"));
     assertTrue("Expected everything-case-sensitive",
         acl.isEverythingCaseSensitive());
@@ -2859,8 +2897,8 @@ public class DocumentumAdaptorTest {
   @Test
   public void testAclCaseSensitivity_insensitive() throws Exception {
     createAcl("4501081f80000100");
-    Map<DocId, Acl> aclMap =
-        getAclMap(CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE);
+    Map<DocId, Acl> aclMap = getAclMap(MarkAllDocsPublic.FALSE,
+        CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE);
     Acl acl = aclMap.get(new DocId("4501081f80000100"));
     assertTrue("Expected everything-case-insensitive",
         acl.isEverythingCaseInsensitive());
@@ -2872,8 +2910,8 @@ public class DocumentumAdaptorTest {
     insertGroup("Group1", "User2", "User3");
     createAcl("4501081f80000100");
     addRequiredGroupToAcl("4501081f80000100", "Group1");
-    Map<DocId, Acl> aclMap =
-        getAclMap(CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE);
+    Map<DocId, Acl> aclMap = getAclMap(MarkAllDocsPublic.FALSE,
+        CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE);
     Acl acl = aclMap.get(new DocId("4501081f80000100_Group1"));
     assertTrue("Expected everything-case-insensitive",
         acl.isEverythingCaseInsensitive());
@@ -3325,14 +3363,16 @@ public class DocumentumAdaptorTest {
 
   private Map<GroupPrincipal, ? extends Collection<Principal>> getGroups()
        throws Exception {
-    return getGroups(LocalGroupsOnly.FALSE, "", 0);
+    return getGroups(MarkAllDocsPublic.FALSE, LocalGroupsOnly.FALSE, "", 0);
   }
 
   private Map<GroupPrincipal, ? extends Collection<Principal>> getGroups(
-      LocalGroupsOnly localGroupsOnly, String windowsDomain, int batchSize)
+      MarkAllDocsPublic markAllDocsPublic, LocalGroupsOnly localGroupsOnly,
+      String windowsDomain, int batchSize)
       throws DfException, IOException, InterruptedException {
     DocumentumAdaptor adaptor = getObjectUnderTest(
         ImmutableMap.<String, String>builder()
+        .put("adaptor.markAllDocsAsPublic", markAllDocsPublic.toString())
         .put("documentum.pushLocalGroupsOnly", localGroupsOnly.toString())
         .put("documentum.windowsDomain", windowsDomain)
         .put("adaptor.namespace", "NS")
@@ -3355,6 +3395,20 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
+  public void testGetGroupsMarkAllDocsPublic() throws Exception {
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    insertGroup("Group1", "User1", "User2", "User3");
+    insertGroup("Group2", "User3", "User4", "User5");
+
+    // If all docs are public, no groups should be sent.
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+        expected = ImmutableMap.of();
+
+    assertEquals(expected,
+        getGroups(MarkAllDocsPublic.TRUE, LocalGroupsOnly.FALSE, "", 0));
+  }
+
+  @Test
   public void testGetGroupsDmWorldOnly() throws Exception {
     insertUsers("User1", "User2", "User3", "User4", "User5");
 
@@ -3371,8 +3425,9 @@ public class DocumentumAdaptorTest {
     // Fetch all the dm_world members in various sized batches.
     // Note: a batch size of 0, means no batching.
     for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize++) {
-      assertEquals("batchSize: " + batchSize,
-          expected, getGroups(LocalGroupsOnly.FALSE, "", batchSize));
+      assertEquals("batchSize: " + batchSize, expected,
+          getGroups(MarkAllDocsPublic.FALSE, LocalGroupsOnly.FALSE, "",
+              batchSize));
     }
   }
 
@@ -3481,8 +3536,9 @@ public class DocumentumAdaptorTest {
     // Fetch all the groups in various sized batches.
     // Note: a batch size of 0, means no batching.
     for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize++) {
-      assertEquals("batchSize: " + batchSize, expected,
-          filterDmWorld(getGroups(LocalGroupsOnly.FALSE, "", batchSize)));
+      assertEquals("batchSize: " + batchSize, expected, filterDmWorld(
+          getGroups(MarkAllDocsPublic.FALSE, LocalGroupsOnly.FALSE, "",
+              batchSize)));
     }
   }
 
@@ -3573,7 +3629,7 @@ public class DocumentumAdaptorTest {
                            new UserPrincipal("TEST\\User5", "NS")));
 
     Map<GroupPrincipal, ? extends Collection<Principal>> groups =
-        getGroups(LocalGroupsOnly.FALSE, "TEST", 0);
+        getGroups(MarkAllDocsPublic.FALSE, LocalGroupsOnly.FALSE, "TEST", 0);
 
     assertEquals(expected, filterDmWorld(groups));
   }
@@ -3629,7 +3685,7 @@ public class DocumentumAdaptorTest {
                            new UserPrincipal("User5", "NS")));
 
     Map<GroupPrincipal, ? extends Collection<Principal>> groups =
-        getGroups(LocalGroupsOnly.TRUE, "", 0);
+        getGroups(MarkAllDocsPublic.FALSE, LocalGroupsOnly.TRUE, "", 0);
 
     assertEquals(expected, filterDmWorld(groups));
   }
