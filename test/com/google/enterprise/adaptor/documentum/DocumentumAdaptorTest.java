@@ -3175,7 +3175,7 @@ public class DocumentumAdaptorTest {
     DocumentumAdaptor adaptor = getObjectUnderTest();
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
-    adaptor.modifiedDocumentsCheckpoint = docCheckpoint;
+    adaptor.modifiedDocumentTraverser.setCheckpoint(docCheckpoint);
     adaptor.modifiedPermissionsCheckpoint = permissionsCheckpoint;
     adaptor.getModifiedDocIds(pusher);
 
@@ -3839,11 +3839,12 @@ public class DocumentumAdaptorTest {
         ImmutableMap.of("documentum.src", Joiner.on(",").join(startPaths)));
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
-    adaptor.modifiedDocumentsCheckpoint = checkpoint;
+    adaptor.modifiedDocumentTraverser.setCheckpoint(checkpoint);
     adaptor.getModifiedDocIds(pusher);
 
     assertEquals(expectedRecords, pusher.getRecords());
-    assertEquals(expectedCheckpoint, adaptor.modifiedDocumentsCheckpoint);
+    assertEquals(expectedCheckpoint,
+        adaptor.modifiedDocumentTraverser.getCheckpoint());
   }
 
   @Test
@@ -4186,7 +4187,7 @@ public class DocumentumAdaptorTest {
     adaptor.init(context);
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
-    adaptor.modifiedDocumentsCheckpoint = checkpoint;
+    adaptor.modifiedDocumentTraverser.setCheckpoint(checkpoint);
     adaptor.getModifiedDocIds(pusher);
 
     assertEquals(expectedRecords, pusher.getRecords());

@@ -144,10 +144,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private AclTraverser aclTraverser = new AclTraverser();
   @VisibleForTesting ModifiedAclTraverser modifiedAclTraverser =
       new ModifiedAclTraverser();
-  @VisibleForTesting Checkpoint modifiedDocumentsCheckpoint =
-      Checkpoint.incremental();
   private GroupTraverser groupTraverser = new GroupTraverser();
   private DmWorldTraverser dmWorldTraverser = new DmWorldTraverser();
+  @VisibleForTesting ModifiedDocumentTraverser modifiedDocumentTraverser =
+      new ModifiedDocumentTraverser();
   @VisibleForTesting ModifiedGroupTraverser modifiedGroupTraverser =
       new ModifiedGroupTraverser();
   @VisibleForTesting Checkpoint modifiedPermissionsCheckpoint =
@@ -1005,17 +1005,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     ArrayDeque<DfException> savedExceptions = new ArrayDeque<>();
 
     // Push modified documents.
-    IDfSession dmSession = getDfSession();
-    try {
-      validateStartPaths(dmSession);
-      validateDocumentTypes(dmSession);
-      modifiedDocumentsCheckpoint = pushDocumentUpdates(pusher, dmSession,
-          modifiedDocumentsCheckpoint);
-    } catch (DfException e) {
-      savedExceptions.add(e);
-    } finally {
-      dmSessionManager.release(dmSession);
-    }
+    modifiedDocumentTraverser.run(pusher, savedExceptions);
 
     if (!markAllDocsAsPublic) {
       // Push modified ACLs and groups.
@@ -1023,7 +1013,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       modifiedGroupTraverser.run(pusher, savedExceptions);
 
       // Push modified document permissions.
-      dmSession = getDfSession();
+      IDfSession dmSession = getDfSession();
       try {
         modifiedPermissionsCheckpoint = pushPermissionsUpdates(pusher,
             dmSession, modifiedPermissionsCheckpoint);
@@ -1057,34 +1047,57 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
   }
 
-  /**
-   * Push Document updates to GSA.
-   */
-  private Checkpoint pushDocumentUpdates(DocIdPusher pusher, IDfSession session,
-      Checkpoint checkpoint)
-      throws DfException, IOException, InterruptedException {
-    String queryStr = makeUpdatedDocsQuery(checkpoint);
-    logger.log(Level.FINER, "Modified DocIds Query: {0}", queryStr);
-    IDfQuery query = dmClientX.getQuery();
-    query.setDQL(queryStr);
-    IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
-    try {
-      String lastModified = checkpoint.getLastModified();
-      String objectId = checkpoint.getObjectId();
-      ImmutableList.Builder<Record> builder = ImmutableList.builder();
-      while (result.next()) {
-        lastModified = result.getString("r_modify_date_str");
-        objectId = result.getString("r_object_id");
-        String name = result.getString("object_name");
-        addUpdatedDocIds(builder, session, objectId, name);
-      }
+  @VisibleForTesting
+  class ModifiedDocumentTraverser extends TraverserTemplate {
+    private ImmutableList.Builder<Record> builder;
+    private Checkpoint docsCheckpoint;
+
+    protected ModifiedDocumentTraverser() {
+      super(Checkpoint.incremental());
+    }
+
+    @Override
+    protected void createCollection() {
+      builder = ImmutableList.builder();
+    }
+
+    @Override
+    protected boolean fillCollection(IDfSession dmSession,
+        Principals principals, Checkpoint checkpoint) throws DfException {
+      docsCheckpoint = checkpoint;
+      return getDocumentUpdates(dmSession);
+    }
+
+    @Override
+    protected Checkpoint pushCollection(DocIdPusher pusher)
+        throws InterruptedException {
       List<Record> records = builder.build();
-      logger.log(Level.FINER, "DocumentumAdaptor Modified DocIds: {0}",
-          records);
+      logger
+          .log(Level.FINER, "DocumentumAdaptor Modified DocIds: {0}", records);
       pusher.pushRecords(records);
-      return new Checkpoint(lastModified, objectId);
-    } finally {
-      result.close();
+      return docsCheckpoint;
+    }
+
+    private boolean getDocumentUpdates(IDfSession session) throws DfException {
+      String queryStr = makeUpdatedDocsQuery(docsCheckpoint);
+      logger.log(Level.FINER, "Modified DocIds Query: {0}", queryStr);
+      IDfQuery query = dmClientX.getQuery();
+      query.setDQL(queryStr);
+      IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
+      try {
+        String lastModified = docsCheckpoint.getLastModified();
+        String objectId = docsCheckpoint.getObjectId();
+        while (result.next()) {
+          lastModified = result.getString("r_modify_date_str");
+          objectId = result.getString("r_object_id");
+          String name = result.getString("object_name");
+          addUpdatedDocIds(builder, session, objectId, name);
+          docsCheckpoint = new Checkpoint(lastModified, objectId);
+        }
+      } finally {
+        result.close();
+      }
+      return true;
     }
   }
 
