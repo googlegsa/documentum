@@ -3363,21 +3363,17 @@ public class DocumentumAdaptorTest {
 
   private Map<GroupPrincipal, ? extends Collection<Principal>> getGroups()
        throws Exception {
-    return getGroups(MarkAllDocsPublic.FALSE, LocalGroupsOnly.FALSE, "", 0);
+    return getGroups(ImmutableMap.<String, String>of());
   }
 
   private Map<GroupPrincipal, ? extends Collection<Principal>> getGroups(
-      MarkAllDocsPublic markAllDocsPublic, LocalGroupsOnly localGroupsOnly,
-      String windowsDomain, int batchSize)
+      Map<String, String> configOverrides)
       throws DfException, IOException, InterruptedException {
     DocumentumAdaptor adaptor = getObjectUnderTest(
         ImmutableMap.<String, String>builder()
-        .put("adaptor.markAllDocsAsPublic", markAllDocsPublic.toString())
-        .put("documentum.pushLocalGroupsOnly", localGroupsOnly.toString())
-        .put("documentum.windowsDomain", windowsDomain)
         .put("adaptor.namespace", "NS")
         .put("documentum.docbaseName", "Local") // Local Namespace
-        .put("documentum.queryBatchSize", Integer.toString(batchSize))
+        .putAll(configOverrides)
         .build());
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
@@ -3405,7 +3401,7 @@ public class DocumentumAdaptorTest {
         expected = ImmutableMap.of();
 
     assertEquals(expected,
-        getGroups(MarkAllDocsPublic.TRUE, LocalGroupsOnly.FALSE, "", 0));
+        getGroups(ImmutableMap.of("adaptor.markAllDocsAsPublic", "true")));
   }
 
   @Test
@@ -3426,8 +3422,8 @@ public class DocumentumAdaptorTest {
     // Note: a batch size of 0, means no batching.
     for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize++) {
       assertEquals("batchSize: " + batchSize, expected,
-          getGroups(MarkAllDocsPublic.FALSE, LocalGroupsOnly.FALSE, "",
-              batchSize));
+          getGroups(ImmutableMap.of("documentum.queryBatchSize",
+                                    Integer.toString(batchSize))));
     }
   }
 
@@ -3537,8 +3533,8 @@ public class DocumentumAdaptorTest {
     // Note: a batch size of 0, means no batching.
     for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize++) {
       assertEquals("batchSize: " + batchSize, expected, filterDmWorld(
-          getGroups(MarkAllDocsPublic.FALSE, LocalGroupsOnly.FALSE, "",
-              batchSize)));
+          getGroups(ImmutableMap.of("documentum.queryBatchSize",
+                                    Integer.toString(batchSize)))));
     }
   }
 
@@ -3628,10 +3624,8 @@ public class DocumentumAdaptorTest {
                            new UserPrincipal("TEST\\User4", "NS"),
                            new UserPrincipal("TEST\\User5", "NS")));
 
-    Map<GroupPrincipal, ? extends Collection<Principal>> groups =
-        getGroups(MarkAllDocsPublic.FALSE, LocalGroupsOnly.FALSE, "TEST", 0);
-
-    assertEquals(expected, filterDmWorld(groups));
+   assertEquals(expected, filterDmWorld(
+       getGroups(ImmutableMap.of("documentum.windowsDomain", "TEST"))));
   }
 
   @Test
@@ -3684,10 +3678,8 @@ public class DocumentumAdaptorTest {
                            new UserPrincipal("User4", "NS"),
                            new UserPrincipal("User5", "NS")));
 
-    Map<GroupPrincipal, ? extends Collection<Principal>> groups =
-        getGroups(MarkAllDocsPublic.FALSE, LocalGroupsOnly.TRUE, "", 0);
-
-    assertEquals(expected, filterDmWorld(groups));
+    assertEquals(expected, filterDmWorld(
+        getGroups(ImmutableMap.of("documentum.pushLocalGroupsOnly", "true"))));
   }
 
   private void insertModifiedGroup(String lastModified, String groupName,
