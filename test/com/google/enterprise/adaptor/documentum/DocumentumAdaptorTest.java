@@ -1454,7 +1454,7 @@ public class DocumentumAdaptorTest {
     return getObjectUnderTest(ImmutableMap.<String, String>of());
   }
 
-  private DocumentumAdaptor getObjectUnderTest(Map<String, String> configMap)
+  private DocumentumAdaptor getObjectUnderTest(Map<String, ?> configMap)
       throws DfException {
     H2BackedTestProxies proxyCls = new H2BackedTestProxies();
     IDfClientX dmClientX = proxyCls.getProxyClientX();
@@ -1462,8 +1462,8 @@ public class DocumentumAdaptorTest {
 
     AdaptorContext context = ProxyAdaptorContext.getInstance();
     Config config = initTestAdaptorConfig(context);
-    for (Map.Entry<String, String> entry : configMap.entrySet()) {
-      config.overrideKey(entry.getKey(), entry.getValue());
+    for (Map.Entry<String, ?> entry : configMap.entrySet()) {
+      config.overrideKey(entry.getKey(), entry.getValue().toString());
     }
     adaptor.init(context);
     return adaptor;
@@ -1484,16 +1484,12 @@ public class DocumentumAdaptorTest {
         "Get All Cabinets Query", queries);
 
     String startPath = "/";
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
-    DocIdEncoder docidEncoder = context.getDocIdEncoder();
-    Config config = initTestAdaptorConfig(context);
-    config.overrideKey("documentum.src", startPath);
-    config.overrideKey("documentum.maxHtmlSize", "" + maxHtmlLinks);
-    config.overrideKey("documentum.cabinetWhereCondition", whereClause);
-
-    Request request =
-        new MockRequest(DocumentumAdaptor.docIdFromPath(startPath));
-    MockResponse response = getDocContent(context, request);
+    MockResponse response = getDocContent(
+        ImmutableMap.<String, Object>of(
+            "documentum.src", startPath,
+            "documentum.maxHtmlSize", maxHtmlLinks,
+            "documentum.cabinetWhereCondition", whereClause),
+        new MockRequest(DocumentumAdaptor.docIdFromPath(startPath)));
 
     assertEquals(queries.toString(), 1, queries.size());
     String query = queries.get(0); 
@@ -1512,6 +1508,8 @@ public class DocumentumAdaptorTest {
                  maxHtmlLinks >= expectedCabinets.length,
                  response.anchors.isEmpty());
 
+    DocIdEncoder docidEncoder =
+        ProxyAdaptorContext.getInstance().getDocIdEncoder();
     for (String cabinet : expectedCabinets) {
       // First look in the HTML links for the cabinet. If not there,
       // look in the external anchors.
@@ -1656,11 +1654,8 @@ public class DocumentumAdaptorTest {
     String content = "<html><body>Hello</body></html>";
     insertDocument(lastModified, path, contentType, content);
 
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
-    initTestAdaptorConfig(context);
-    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path),
-        lastCrawled);
-    MockResponse response = getDocContent(context, request);
+    MockResponse response = getDocContent(ImmutableMap.<String, String>of(),
+        new MockRequest(DocumentumAdaptor.docIdFromPath(path), lastCrawled));
 
     if (expectNotModified) {
       assertTrue(response.notModified);
@@ -1675,19 +1670,13 @@ public class DocumentumAdaptorTest {
 
   private MockResponse getDocContent(String path)
       throws DfException, IOException {
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
-    initTestAdaptorConfig(context);
     Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
-    return getDocContent(context, request);
+    return getDocContent(ImmutableMap.<String, String>of(), request);
   }
 
-  private MockResponse getDocContent(AdaptorContext context, Request request)
-      throws DfException, IOException {
-    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-    adaptor.init(context);
-
+  private MockResponse getDocContent(Map<String, ?> configOverrides,
+      Request request) throws DfException, IOException {
+    DocumentumAdaptor adaptor = getObjectUnderTest(configOverrides);
     MockResponse response = new MockResponse();
     adaptor.getDocContent(request, response);
     return response;
@@ -1745,12 +1734,9 @@ public class DocumentumAdaptorTest {
     assertTrue(path, path.startsWith(START_PATH));
     insertDocument(path);
 
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = initTestAdaptorConfig(context);
-    config.overrideKey("documentum.displayUrlPattern", displayUrlPattern);
-
-    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
-    MockResponse response = getDocContent(context, request);
+    MockResponse response = getDocContent(
+        ImmutableMap.of("documentum.displayUrlPattern", displayUrlPattern),
+        new MockRequest(DocumentumAdaptor.docIdFromPath(path)));
 
     assertNotNull(response.toString(), response.displayUrl);
     return response.displayUrl.toString();
@@ -1781,12 +1767,9 @@ public class DocumentumAdaptorTest {
       throws Exception {
     assertTrue(path, path.startsWith(START_PATH));
 
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = initTestAdaptorConfig(context);
-    config.overrideKey("adaptor.markAllDocsAsPublic",
-        markAllDocsPublic.toString());
-    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
-    MockResponse response = getDocContent(context, request);
+    MockResponse response = getDocContent(
+        ImmutableMap.of("adaptor.markAllDocsAsPublic", markAllDocsPublic),
+        new MockRequest(DocumentumAdaptor.docIdFromPath(path)));
 
     return response.acl;
   }
@@ -1928,14 +1911,12 @@ public class DocumentumAdaptorTest {
     insertDocument(path);
     writeAttributes(objectId, attrs);
 
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = initTestAdaptorConfig(context);
-    if (excludedAttrs != null) {
-      config.overrideKey("documentum.excludedAttributes", excludedAttrs);
-    }
+    Map<String, String> configOverrides = (excludedAttrs == null)
+        ? ImmutableMap.<String, String>of()
+        : ImmutableMap.of("documentum.excludedAttributes", excludedAttrs);
 
     Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
-    MockResponse response = getDocContent(context, request);
+    MockResponse response = getDocContent(configOverrides, request);
 
     assertEquals(expected, response.metadata);
   }
@@ -2386,11 +2367,11 @@ public class DocumentumAdaptorTest {
   private Map<DocId, Acl> getAllAcls(String windowsDomain, int batchSize)
       throws DfException, IOException, InterruptedException {
     DocumentumAdaptor adaptor = getObjectUnderTest(
-        ImmutableMap.<String, String>builder()
+        ImmutableMap.<String, Object>builder()
         .put("documentum.windowsDomain", windowsDomain)
         .put("adaptor.namespace", "NS")
         .put("documentum.docbaseName", "Local") // Local Namespace
-        .put("documentum.queryBatchSize", Integer.toString(batchSize))
+        .put("documentum.queryBatchSize", batchSize)
         .build());
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
@@ -2834,19 +2815,12 @@ public class DocumentumAdaptorTest {
 
   private Map<DocId, Acl> getAclMap(MarkAllDocsPublic markAllDocsPublic,
       CaseSensitivityType caseSensitivityType) throws Exception {
-    IDfClientX dmClientX = new H2BackedTestProxies().getProxyClientX();
-    DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
-
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = initTestAdaptorConfig(context);
-    config.overrideKey("adaptor.markAllDocsAsPublic",
-        markAllDocsPublic.toString());
+    ImmutableMap.Builder<String, Object> builder = ImmutableMap.builder();
+    builder.put("adaptor.markAllDocsAsPublic", markAllDocsPublic);
     if (caseSensitivityType != null) {
-      config.overrideKey("adaptor.caseSensitivityType",
-          caseSensitivityType.toString());
+      builder.put("adaptor.caseSensitivityType", caseSensitivityType);
     }
-    adaptor.init(context);
-
+    DocumentumAdaptor adaptor = getObjectUnderTest(builder.build());
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.getDocIds(pusher);
     return pusher.getNamedResources();
@@ -3367,10 +3341,10 @@ public class DocumentumAdaptorTest {
   }
 
   private Map<GroupPrincipal, ? extends Collection<Principal>> getGroups(
-      Map<String, String> configOverrides)
+      Map<String, ?> configOverrides)
       throws DfException, IOException, InterruptedException {
     DocumentumAdaptor adaptor = getObjectUnderTest(
-        ImmutableMap.<String, String>builder()
+        ImmutableMap.<String, Object>builder()
         .put("adaptor.namespace", "NS")
         .put("documentum.docbaseName", "Local") // Local Namespace
         .putAll(configOverrides)
@@ -3422,8 +3396,7 @@ public class DocumentumAdaptorTest {
     // Note: a batch size of 0, means no batching.
     for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize++) {
       assertEquals("batchSize: " + batchSize, expected,
-          getGroups(ImmutableMap.of("documentum.queryBatchSize",
-                                    Integer.toString(batchSize))));
+          getGroups(ImmutableMap.of("documentum.queryBatchSize", batchSize)));
     }
   }
 
@@ -3533,8 +3506,7 @@ public class DocumentumAdaptorTest {
     // Note: a batch size of 0, means no batching.
     for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize++) {
       assertEquals("batchSize: " + batchSize, expected, filterDmWorld(
-          getGroups(ImmutableMap.of("documentum.queryBatchSize",
-                                    Integer.toString(batchSize)))));
+          getGroups(ImmutableMap.of("documentum.queryBatchSize", batchSize))));
     }
   }
 
@@ -3693,8 +3665,8 @@ public class DocumentumAdaptorTest {
       expectedGroups, Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
     DocumentumAdaptor adaptor = getObjectUnderTest(
-        ImmutableMap.<String, String>builder()
-        .put("documentum.pushLocalGroupsOnly", localGroupsOnly.toString())
+        ImmutableMap.<String, Object>builder()
+        .put("documentum.pushLocalGroupsOnly", localGroupsOnly)
         .put("adaptor.namespace", "NS")
         .put("documentum.docbaseName", "Local") // Local Namespace
         .build());
@@ -4107,84 +4079,67 @@ public class DocumentumAdaptorTest {
         new Checkpoint(MAR_1970, "0b01081f80001003"));
   }
 
-  private void initValidDocumentTypes(DocumentumAdaptor adaptor,
-      String... types) throws DfException {
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = initTestAdaptorConfig(context);
-    config.overrideKey("documentum.documentTypes", Joiner.on(',').join(types));
-    adaptor.init(context);
+  private DocumentumAdaptor getObjectUnderTestDocumentTypes(String... types)
+      throws DfException {
+    return getObjectUnderTest(ImmutableMap.<String, String>of(
+        "documentum.documentTypes", Joiner.on(',').join(types)));
   }
 
   @Test
   public void testValidateDocumentTypes() throws DfException {
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(new H2BackedTestProxies().getProxyClientX());
     String type1 = "dm_document";
     String type2 = "dm_document_subtype";
 
-    initValidDocumentTypes(adaptor, type1, type2);
+    DocumentumAdaptor adaptor = getObjectUnderTestDocumentTypes(type1, type2);
     assertEquals(ImmutableList.of(type1, type2),
         adaptor.getValidatedDocumentTypes());
   }
 
   @Test
   public void testValidateDocumentTypesSomeValid() throws DfException {
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(new H2BackedTestProxies().getProxyClientX());
     String type1 = "dm_document_subtype";
     String type2 = "dm_my_type";
     String type3 = "dm_document";
     String type4 = "dm_folder";
     String type5 = "dm_folder_subtype";
 
-    initValidDocumentTypes(adaptor, type1, type2, type3, type4, type5);
+    DocumentumAdaptor adaptor =
+        getObjectUnderTestDocumentTypes(type1, type2, type3, type4, type5);
     assertEquals(ImmutableList.of(type1, type3),
         adaptor.getValidatedDocumentTypes());
   }
 
   @Test
   public void testValidateDocumentSysobjectSubtype() throws DfException {
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(new H2BackedTestProxies().getProxyClientX());
     String type = "dm_sysobject_subtype";
 
-    initValidDocumentTypes(adaptor, type);
     assertEquals(ImmutableList.of(type),
-        adaptor.getValidatedDocumentTypes());
+        getObjectUnderTestDocumentTypes(type).getValidatedDocumentTypes());
   }
 
   @Test
   public void testValidateDocumentTypesNoneValid() throws DfException {
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(new H2BackedTestProxies().getProxyClientX());
     String type1 = "dm_some_type";
     String type2 = "dm_my_type";
     String type3 = "dm_any_type";
 
-    initValidDocumentTypes(adaptor, type1, type2, type3);
+    DocumentumAdaptor adaptor =
+        getObjectUnderTestDocumentTypes(type1, type2, type3);
     assertTrue(adaptor.getValidatedDocumentTypes().isEmpty());
   }
 
   @Test(expected = InvalidConfigurationException.class)
   public void testValidateDocumentTypesEmpty() throws DfException {
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(new H2BackedTestProxies().getProxyClientX());
-    String type1 = "";
-
-    initValidDocumentTypes(adaptor, type1);
+    getObjectUnderTestDocumentTypes("");
   }
 
   private void checkTypedDocIdsPushed(List<String> startPaths, String docTypes,
       Checkpoint checkpoint, List<Record> expectedRecords)
       throws DfException, IOException, InterruptedException {
-    DocumentumAdaptor adaptor =
-        new DocumentumAdaptor(new H2BackedTestProxies().getProxyClientX());
-
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
-    Config config = initTestAdaptorConfig(context);
-    config.overrideKey("documentum.src", Joiner.on(",").join(startPaths));
-    config.overrideKey("documentum.documentTypes", docTypes);
-    adaptor.init(context);
+    DocumentumAdaptor adaptor = getObjectUnderTest(
+        ImmutableMap.<String, String>of(
+            "documentum.src", Joiner.on(",").join(startPaths),
+            "documentum.documentTypes", docTypes));
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.modifiedDocumentTraverser.setCheckpoint(checkpoint);
