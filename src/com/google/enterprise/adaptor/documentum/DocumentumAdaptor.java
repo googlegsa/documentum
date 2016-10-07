@@ -614,6 +614,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     logger.exiting("DocumentumAdaptor", "getDocIds");
   }
 
+  @VisibleForTesting
+  interface Sleeper {
+    void sleep() throws InterruptedException;
+  }
+
   /**
    * A template method for traversing ACLs and groups. Each subclass
    * must implement methods to create a collection of objects, to fill
@@ -622,13 +627,27 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    */
   @VisibleForTesting
   abstract class TraverserTemplate {
-    private final int sleepDuration = 5;
-    private final TimeUnit sleepUnit = TimeUnit.SECONDS;
+    private Sleeper sleeper = new Sleeper() {
+        private final int sleepDuration = 5;
+        private final TimeUnit sleepUnit = TimeUnit.SECONDS;
+
+        @Override public void sleep() throws InterruptedException {
+          sleepUnit.sleep(sleepDuration);
+        }
+        @Override public String toString() {
+          return sleepDuration + " " + sleepUnit;
+        }
+      };
 
     private Checkpoint checkpoint;
 
     protected TraverserTemplate(Checkpoint checkpoint) {
       this.checkpoint = checkpoint;
+    }
+
+    @VisibleForTesting
+    void setSleeper(Sleeper sleeper) {
+      this.sleeper = sleeper;
     }
 
     @VisibleForTesting
@@ -681,9 +700,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         if (caughtException != null) {
           if (!Objects.equals(checkpoint, previousCheckpoint)) {
             logger.log(Level.WARNING, "Error in traversal", caughtException);
-            logger.log(Level.FINEST, "Waiting for {0} {1}",
-                new Object[] {sleepDuration, sleepUnit});
-            sleep();
+            logger.log(Level.FINEST, "Waiting for {0}", sleeper);
+            sleeper.sleep();
           } else {
             logger.log(Level.FINE, "Error with no progress at checkpoint {0}",
                 checkpoint);
@@ -692,11 +710,6 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
           }
         }
       } while (!isComplete);
-    }
-
-    @VisibleForTesting
-    protected void sleep() throws InterruptedException {
-      sleepUnit.sleep(sleepDuration);
     }
   }
 

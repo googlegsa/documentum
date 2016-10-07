@@ -2194,9 +2194,10 @@ public class DocumentumAdaptorTest {
             protected Checkpoint pushCollection(DocIdPusher pusher) {
               return new Checkpoint(actions.removeFirst().output);
             }
-
-            @Override protected void sleep() {}
           };
+    template.setSleeper(new DocumentumAdaptor.Sleeper() {
+        @Override public void sleep() {}
+      });
 
     // We only expect an exception if the last loop iteration throws.
     ArrayList<DfException> expectedExceptions = new ArrayList<>();
