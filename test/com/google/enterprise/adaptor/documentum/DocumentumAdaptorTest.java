@@ -173,6 +173,14 @@ public class DocumentumAdaptorTest {
       // create AclMock in SysObjectMock.
       + "mock_acl_id varchar )";
 
+  private static final DocumentumAdaptor.Sleeper NO_SLEEP =
+      new DocumentumAdaptor.Sleeper() {
+        @Override public void sleep() {}
+        @Override public String toString() {
+          return "No sleep";
+        }
+      };
+
   @Before
   public void setUp() throws Exception {
     Principals.clearCache();
@@ -789,7 +797,7 @@ public class DocumentumAdaptorTest {
       }
 
       public IDfQuery getQuery() {
-        return Proxies.newProxyInstance(IDfQuery.class, new QueryMock());
+        return Proxies.newProxyInstance(IDfQuery.class, newQuery());
       }
     }
 
@@ -808,8 +816,13 @@ public class DocumentumAdaptorTest {
       }
     }
 
-    private class QueryMock {
-      private String query;
+    /** Factory method for creating a new Query. */
+    public Object newQuery() {
+      return new QueryMock();
+    }
+
+    protected class QueryMock {
+      protected String query;
 
       public void setDQL(String query) {
         this.query = query;
@@ -822,9 +835,9 @@ public class DocumentumAdaptorTest {
       }
     }
 
-    private class CollectionMock {
+    protected class CollectionMock {
       final Statement stmt;
-      final ResultSet rs;
+      protected final ResultSet rs;
 
       public CollectionMock(String query) throws DfException {
         try {
@@ -1450,13 +1463,65 @@ public class DocumentumAdaptorTest {
     }
   }
 
+  /** Mock proxy implementations that throw Exceptions when iterating over
+      a result set. */
+  private class ExceptionalResultSetTestProxies extends H2BackedTestProxies {
+    private final String queryPattern;
+    private final int failIteration;
+    private final DfException exceptionToThrow;
+
+    ExceptionalResultSetTestProxies(String queryPattern, int failIteration,
+        DfException exceptionToThrow) {
+      this.queryPattern = queryPattern;
+      this.failIteration = failIteration;
+      this.exceptionToThrow = exceptionToThrow;
+    }
+
+    @Override
+    public Object newQuery() {
+      return new ExceptionalQueryMock();
+    }
+
+    private class ExceptionalQueryMock extends QueryMock {
+      @Override
+      public IDfCollection execute(IDfSession session, int queryType)
+          throws DfException {
+        return Proxies.newProxyInstance(IDfCollection.class,
+            (query.matches(queryPattern))
+            ? new ExceptionalCollectionMock(query) : new CollectionMock(query));
+      }
+    }
+
+    private class ExceptionalCollectionMock extends CollectionMock {
+      private int iteration;
+
+      public ExceptionalCollectionMock(String query) throws DfException {
+        super(query);
+        iteration = 0;
+      }
+
+      @Override
+      public boolean next() throws DfException {
+        if (iteration++ == failIteration) {
+          throw exceptionToThrow;
+        } else {
+          return super.next();
+        }
+      }
+    }
+  }
+
   private DocumentumAdaptor getObjectUnderTest() throws DfException {
     return getObjectUnderTest(ImmutableMap.<String, String>of());
   }
 
   private DocumentumAdaptor getObjectUnderTest(Map<String, ?> configMap)
       throws DfException {
-    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
+    return getObjectUnderTest(new H2BackedTestProxies(), configMap);
+  }
+
+  private DocumentumAdaptor getObjectUnderTest(H2BackedTestProxies proxyCls,
+      Map<String, ?> configMap) throws DfException {
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
@@ -1485,7 +1550,7 @@ public class DocumentumAdaptorTest {
 
     String startPath = "/";
     MockResponse response = getDocContent(
-        ImmutableMap.<String, Object>of(
+        ImmutableMap.of(
             "documentum.src", startPath,
             "documentum.maxHtmlSize", maxHtmlLinks,
             "documentum.cabinetWhereCondition", whereClause),
@@ -2195,9 +2260,7 @@ public class DocumentumAdaptorTest {
               return new Checkpoint(actions.removeFirst().output);
             }
           };
-    template.setSleeper(new DocumentumAdaptor.Sleeper() {
-        @Override public void sleep() {}
-      });
+    template.setSleeper(NO_SLEEP);
 
     // We only expect an exception if the last loop iteration throws.
     ArrayList<DfException> expectedExceptions = new ArrayList<>();
@@ -2361,19 +2424,33 @@ public class DocumentumAdaptorTest {
     grantPermit(id, permitobj);
   }
 
+  private DocumentumAdaptor getObjectUnderTestNamespaces(
+      Map<String, ?> configOverrides) throws DfException {
+    return getObjectUnderTestNamespaces(new H2BackedTestProxies(),
+      configOverrides);
+  }
+
+  private DocumentumAdaptor getObjectUnderTestNamespaces(
+      H2BackedTestProxies proxyCls, Map<String, ?> configOverrides)
+      throws DfException {
+    return getObjectUnderTest(proxyCls,
+        ImmutableMap.<String, Object>builder()
+        .put("adaptor.namespace", "NS")
+        .put("documentum.docbaseName", "Local") // Local Namespace
+        .putAll(configOverrides)
+        .build());
+  }
+
   private Map<DocId, Acl> getAllAcls() throws Exception {
     return getAllAcls("", 0);
   }
 
   private Map<DocId, Acl> getAllAcls(String windowsDomain, int batchSize)
       throws DfException, IOException, InterruptedException {
-    DocumentumAdaptor adaptor = getObjectUnderTest(
-        ImmutableMap.<String, Object>builder()
-        .put("documentum.windowsDomain", windowsDomain)
-        .put("adaptor.namespace", "NS")
-        .put("documentum.docbaseName", "Local") // Local Namespace
-        .put("documentum.queryBatchSize", batchSize)
-        .build());
+    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+        ImmutableMap.of(
+            "documentum.windowsDomain", windowsDomain,
+            "documentum.queryBatchSize", batchSize));
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.getDocIds(pusher);
@@ -3337,20 +3414,20 @@ public class DocumentumAdaptorTest {
   }
 
   private Map<GroupPrincipal, ? extends Collection<Principal>> getGroups()
-       throws Exception {
+      throws DfException, IOException, InterruptedException {
     return getGroups(ImmutableMap.<String, String>of());
   }
 
   private Map<GroupPrincipal, ? extends Collection<Principal>> getGroups(
       Map<String, ?> configOverrides)
       throws DfException, IOException, InterruptedException {
-    DocumentumAdaptor adaptor = getObjectUnderTest(
-        ImmutableMap.<String, Object>builder()
-        .put("adaptor.namespace", "NS")
-        .put("documentum.docbaseName", "Local") // Local Namespace
-        .putAll(configOverrides)
-        .build());
+    return getGroups(getObjectUnderTestNamespaces(
+        new H2BackedTestProxies(), configOverrides));
+  }
 
+  private Map<GroupPrincipal, ? extends Collection<Principal>> getGroups(
+      DocumentumAdaptor adaptor)
+      throws DfException, IOException, InterruptedException {
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.getDocIds(pusher);
     return pusher.getGroups();
@@ -3398,6 +3475,37 @@ public class DocumentumAdaptorTest {
     for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize++) {
       assertEquals("batchSize: " + batchSize, expected,
           getGroups(ImmutableMap.of("documentum.queryBatchSize", batchSize)));
+    }
+  }
+
+  @Test
+  public void testDmWorldTraversalThrownExceptions() throws Exception {
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+
+    // The only group should be the virtual group, dm_world, which consists
+    // of all users.
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+        expected = ImmutableMap.of(new GroupPrincipal("dm_world", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                            new UserPrincipal("User2", "NS"),
+                            new UserPrincipal("User3", "NS"),
+                            new UserPrincipal("User4", "NS"),
+                            new UserPrincipal("User5", "NS")));
+
+    // Fetch all the dm_world members in various sized batches, failing
+    // while iterating over the results in each batch.
+    // Note: a batch size of 0, means no batching.
+    for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize++) {
+      int maxBatchSize = (batchSize == 0) ? expected.size() : batchSize;
+      for (int failIter = 0; failIter <= maxBatchSize; failIter++) {
+        DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+            new ExceptionalResultSetTestProxies("FROM dm_user", failIter,
+                new DfException("Expected failure at iteration " + failIter)),
+            ImmutableMap.of("documentum.queryBatchSize", batchSize));
+        adaptor.dmWorldTraverser.setSleeper(NO_SLEEP);
+        assertEquals("batchSize: " + batchSize + "  failIter: " + failIter,
+            expected, getGroups(adaptor));
+      }
     }
   }
 
@@ -3665,13 +3773,8 @@ public class DocumentumAdaptorTest {
       Map<GroupPrincipal, ? extends Collection<? extends Principal>>
       expectedGroups, Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
-    DocumentumAdaptor adaptor = getObjectUnderTest(
-        ImmutableMap.<String, Object>builder()
-        .put("documentum.pushLocalGroupsOnly", localGroupsOnly)
-        .put("adaptor.namespace", "NS")
-        .put("documentum.docbaseName", "Local") // Local Namespace
-        .build());
-
+    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+        ImmutableMap.of("documentum.pushLocalGroupsOnly", localGroupsOnly));
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.modifiedGroupTraverser.setCheckpoint(checkpoint);
     adaptor.getModifiedDocIds(pusher);
@@ -4082,7 +4185,7 @@ public class DocumentumAdaptorTest {
 
   private DocumentumAdaptor getObjectUnderTestDocumentTypes(String... types)
       throws DfException {
-    return getObjectUnderTest(ImmutableMap.<String, String>of(
+    return getObjectUnderTest(ImmutableMap.of(
         "documentum.documentTypes", Joiner.on(',').join(types)));
   }
 
@@ -4138,7 +4241,7 @@ public class DocumentumAdaptorTest {
       Checkpoint checkpoint, List<Record> expectedRecords)
       throws DfException, IOException, InterruptedException {
     DocumentumAdaptor adaptor = getObjectUnderTest(
-        ImmutableMap.<String, String>of(
+        ImmutableMap.of(
             "documentum.src", Joiner.on(",").join(startPaths),
             "documentum.documentTypes", docTypes));
 

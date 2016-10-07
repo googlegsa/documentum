@@ -145,7 +145,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   @VisibleForTesting ModifiedAclTraverser modifiedAclTraverser =
       new ModifiedAclTraverser();
   private GroupTraverser groupTraverser = new GroupTraverser();
-  private DmWorldTraverser dmWorldTraverser = new DmWorldTraverser();
+  @VisibleForTesting DmWorldTraverser dmWorldTraverser = new DmWorldTraverser();
   @VisibleForTesting ModifiedDocumentTraverser modifiedDocumentTraverser =
       new ModifiedDocumentTraverser();
   @VisibleForTesting ModifiedGroupTraverser modifiedGroupTraverser =
@@ -925,7 +925,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     return query.toString();
   }
 
-  private class DmWorldTraverser extends TraverserTemplate {
+  @VisibleForTesting
+  class DmWorldTraverser extends TraverserTemplate {
     private ImmutableMap<GroupPrincipal, ImmutableSet<Principal>> dmWorld =
         null;
     private ImmutableSet.Builder<Principal> members = null;
