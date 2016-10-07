@@ -110,12 +110,10 @@ class DocumentumAcls {
         + "DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') AND (r_object_id > ''{1}'')) "
         + "OR (time_stamp_utc > DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'')))";
 
-    // Use event_name in order by so that dm_destroy event is first item if
-    // there are updates and delete on an ACL.
     Object[] arguments =
         { checkpoint.getLastModified(), checkpoint.getObjectId() };
     queryStr.append(MessageFormat.format(whereBoundedClause, arguments));
-    queryStr.append(" ORDER BY time_stamp_utc, r_object_id, event_name");
+    queryStr.append(" ORDER BY time_stamp_utc, r_object_id");
     if (batchSize > 0) {
       queryStr.append(" ENABLE(RETURN_TOP ").append(batchSize).append(")");
     }
@@ -220,7 +218,7 @@ class DocumentumAcls {
             new String[] {modifyObjectId, eventName});
 
         if (aclModifiedIds.contains(modifyObjectId)) {
-          logger.log(Level.FINE,
+          logger.log(Level.FINER,
               "Skipping ACL {0}: redundant event", modifyObjectId);
         } else {
           aclModifiedIds.add(modifyObjectId);
@@ -232,9 +230,9 @@ class DocumentumAcls {
                   (IDfACL) dmSession.getObject(new DfId(modifyObjectId));
               addAclChainToMap(dmAcl, modifyObjectId, aclMap);
             } catch (DfIdNotFoundException e) {
-              logger.log(Level.FINE,
-                  "Skipping ACL {0}: {1}", new Object[] {modifyObjectId, e});
-              aclModifiedIds.remove(modifyObjectId);
+              logger.log(Level.FINER,
+                  "Deleting ACL {0}: {1}", new Object[] {modifyObjectId, e});
+              aclMap.put(new DocId(modifyObjectId), Acl.EMPTY);
             }
           }
         }
