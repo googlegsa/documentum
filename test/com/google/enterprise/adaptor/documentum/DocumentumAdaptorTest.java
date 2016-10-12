@@ -3437,11 +3437,12 @@ public class DocumentumAdaptorTest {
 
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.modifiedDocumentTraverser.setCheckpoint(docCheckpoint);
-    adaptor.modifiedPermissionsCheckpoint = permissionsCheckpoint;
+    adaptor.modifiedPermissionsTraverser.setCheckpoint(permissionsCheckpoint);
     adaptor.getModifiedDocIds(pusher);
 
     assertEquals(expectedDocIdlist, pusher.getRecords());
-    assertEquals(expectedCheckpoint, adaptor.modifiedPermissionsCheckpoint);
+    assertEquals(expectedCheckpoint,
+        adaptor.modifiedPermissionsTraverser.getCheckpoint());
   }
 
   private Checkpoint insertTestDocuments() throws SQLException {
@@ -3603,6 +3604,88 @@ public class DocumentumAdaptorTest {
     testUpdatedPermissions(docCheckpoint, checkPoint,
         makeExpectedDocIds(START_PATH, "file1"),
         new Checkpoint(dateStr, "5f123"));
+  }
+
+  private List<Record> getModifiedDocIds(DocumentumAdaptor adaptor,
+      boolean throwsException) throws Exception {
+    Checkpoint docCheckpoint = insertTestDocuments();
+    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
+    adaptor.modifiedDocumentTraverser.setCheckpoint(docCheckpoint);
+    adaptor.modifiedPermissionsTraverser
+        .setCheckpoint(Checkpoint.incremental());
+    try {
+      adaptor.getModifiedDocIds(pusher);
+      assertFalse("Expected an exception at "
+          + Checkpoint.incremental().toString(), throwsException);
+    } catch (IOException e) {
+      if (!throwsException) {
+        throw e;
+      }
+    }
+    return pusher.getRecords();
+  }
+
+  @Test
+  public void testUpdatePermissionsFirstRowException()
+      throws Exception {
+    String dateStr = getNowPlusMinutes(5);
+    insertAuditTrailAclEvent(dateStr, "5f123", "09514");
+    insertAuditTrailAclEvent(dateStr, "5f124", "09515");
+    insertAuditTrailAclEvent(dateStr, "5f125", "09516");
+
+    DocumentumAdaptor adaptor =
+        getObjectUnderTest(new ExceptionalResultSetTestProxies(
+            "FROM dm_sysobject s, dm_audittrail a", 0,
+            new DfException("Expected failure in first event")),
+            ImmutableMap.<String, String>of());
+
+    thrown.expect(IOException.class);
+    thrown.expectMessage("Expected failure in first event");
+    getModifiedDocIds(adaptor, false);
+  }
+
+  private void testUpdatePermissionsExceptions(
+      Iterator<Integer> failIterations, boolean throwsException,
+      List<Record> expected, Checkpoint expectedCheckpoint) throws Exception {
+    DocumentumAdaptor adaptor =
+        getObjectUnderTest(new ExceptionalResultSetTestProxies(
+            "FROM dm_sysobject s, dm_audittrail a", failIterations,
+            new DfException("Expected failure")),
+            ImmutableMap.<String, String>of());
+
+    assertEquals(expected, getModifiedDocIds(adaptor, throwsException));
+    assertEquals(expectedCheckpoint,
+        adaptor.modifiedPermissionsTraverser.getCheckpoint());
+  }
+
+  @Test
+  public void testUpdatePermissionsOtherRowsException()
+      throws Exception {
+    String dateStr = getNowPlusMinutes(5);
+    insertAuditTrailAclEvent(dateStr, "5f123", "09514");
+    insertAuditTrailAclEvent(dateStr, "5f124", "09515");
+    insertAuditTrailAclEvent(dateStr, "5f125", "09516");
+
+    List<Record> expected =
+        makeExpectedDocIds(START_PATH, "file1", "file2", "file3");
+
+    testUpdatePermissionsExceptions(Iterators.cycle(1), false, expected,
+        new Checkpoint(dateStr, "5f125"));
+  }
+
+  @Test
+  public void testUpdatePermissionsPartialRowsException()
+      throws Exception {
+    String dateStr = getNowPlusMinutes(5);
+    insertAuditTrailAclEvent(dateStr, "5f123", "09514");
+    insertAuditTrailAclEvent(dateStr, "5f124", "09515");
+    insertAuditTrailAclEvent(dateStr, "5f125", "09516");
+
+    List<Record> expected =
+        makeExpectedDocIds(START_PATH, "file1", "file2");
+
+    testUpdatePermissionsExceptions(Iterators.forArray(2, 0), true, expected,
+        new Checkpoint(dateStr, "5f124"));
   }
 
   @Test

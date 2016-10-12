@@ -150,8 +150,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       new ModifiedDocumentTraverser();
   @VisibleForTesting ModifiedGroupTraverser modifiedGroupTraverser =
       new ModifiedGroupTraverser();
-  @VisibleForTesting Checkpoint modifiedPermissionsCheckpoint =
-      Checkpoint.incremental();
+  @VisibleForTesting ModifiedPermissionsTraverser modifiedPermissionsTraverser =
+      new ModifiedPermissionsTraverser();
 
   /** Case-sensitivity of user and group names. */
   public enum CaseSensitivityType {
@@ -1034,20 +1034,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     modifiedDocumentTraverser.run(pusher, savedExceptions);
 
     if (!markAllDocsAsPublic) {
-      // Push modified ACLs and groups.
+      // Push modified ACLs, groups and document permissions.
       modifiedAclTraverser.run(pusher, savedExceptions);
       modifiedGroupTraverser.run(pusher, savedExceptions);
-
-      // Push modified document permissions.
-      IDfSession dmSession = getDfSession();
-      try {
-        modifiedPermissionsCheckpoint = pushPermissionsUpdates(pusher,
-            dmSession, modifiedPermissionsCheckpoint);
-      } catch (DfException e) {
-        savedExceptions.add(e);
-      } finally {
-        dmSessionManager.release(dmSession);
-      }
+      modifiedPermissionsTraverser.run(pusher, savedExceptions);
     }
 
     if (!savedExceptions.isEmpty()) {
@@ -1127,52 +1117,78 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
   }
 
-  /**
-   * Push Document ACL link updates to GSA.
-   */
-  private Checkpoint pushPermissionsUpdates(DocIdPusher pusher,
-      IDfSession session, Checkpoint checkpoint) throws DfException,
-      InterruptedException {
-    String queryStr = makeUpdatedPermissionsQuery(checkpoint);
-    logger.log(Level.FINER, "Modified permissions query: {0}", queryStr);
-    IDfQuery query = dmClientX.getQuery();
-    query.setDQL(queryStr);
-    IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
-    try {
-      HashSet<String> chronicleIds = new HashSet<>();
-      String eventDate = checkpoint.getLastModified();
-      String eventId = checkpoint.getObjectId();
-      ImmutableList.Builder<Record> builder = ImmutableList.builder();
-      while (result.next()) {
-        eventDate = result.getString("time_stamp_utc_str");
-        eventId = result.getString("r_object_id");
-        String objectId = result.getString("audited_obj_id");
-        String chronicleId = result.getString("chronicle_id");
-        String objectName = result.getString("object_name");
+  @VisibleForTesting
+  class ModifiedPermissionsTraverser extends TraverserTemplate {
+    private ImmutableList.Builder<Record> builder;
+    private Checkpoint permissionsCheckpoint;
 
-        if (chronicleIds.contains(chronicleId)) {
-          logger.log(Level.FINEST,
-              "Skipping already processed event {0} for chronicle ID {1}",
-              new String[] {eventId, chronicleId});
-          continue;
-        }
-        logger.log(Level.FINER, "Processing permission changes "
-            + "time_stamp_utc: {0}, "
-            + "r_object_id: {1}, "
-            + "audited_obj_id: {2}, "
-            + "chronicle_id: {3}",
-            new String[] {eventDate, eventId, objectId, chronicleId});
+    protected ModifiedPermissionsTraverser() {
+      super(Checkpoint.incremental());
+    }
 
-        addUpdatedDocIds(builder, session, objectId, objectName);
-        chronicleIds.add(chronicleId);
-      }
+    @Override
+    protected void createCollection() {
+      builder = ImmutableList.builder();
+    }
+
+    @Override
+    protected boolean fillCollection(IDfSession dmSession,
+        Principals principals, Checkpoint checkpoint) throws DfException {
+      permissionsCheckpoint = checkpoint;
+      return getPermissionsUpdates(dmSession);
+    }
+
+    @Override
+    protected Checkpoint pushCollection(DocIdPusher pusher)
+        throws InterruptedException {
       List<Record> records = builder.build();
       logger.log(Level.FINER, "DocumentumAdaptor Modified ACL Links: {0}",
           records);
       pusher.pushRecords(records);
-      return new Checkpoint(eventDate, eventId);
-    } finally {
-      result.close();
+      return permissionsCheckpoint;
+    }
+
+    /**
+     * Push Document ACL link updates to GSA.
+     */
+      private boolean getPermissionsUpdates(IDfSession session)
+          throws DfException {
+      String queryStr = makeUpdatedPermissionsQuery(permissionsCheckpoint);
+      logger.log(Level.FINER, "Modified permissions query: {0}", queryStr);
+      IDfQuery query = dmClientX.getQuery();
+      query.setDQL(queryStr);
+      IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
+      try {
+        HashSet<String> chronicleIds = new HashSet<>();
+        String eventDate = permissionsCheckpoint.getLastModified();
+        String eventId = permissionsCheckpoint.getObjectId();
+        while (result.next()) {
+          eventDate = result.getString("time_stamp_utc_str");
+          eventId = result.getString("r_object_id");
+          String objectId = result.getString("audited_obj_id");
+          String chronicleId = result.getString("chronicle_id");
+          String objectName = result.getString("object_name");
+
+          if (chronicleIds.contains(chronicleId)) {
+            logger.log(Level.FINEST,
+                "Skipping already processed event {0} for chronicle ID {1}",
+                new String[] {eventId, chronicleId});
+          } else {
+            logger.log(Level.FINER, "Processing permission changes "
+                + "time_stamp_utc: {0}, "
+                + "r_object_id: {1}, "
+                + "audited_obj_id: {2}, "
+                + "chronicle_id: {3}",
+                new String[] {eventDate, eventId, objectId, chronicleId});
+            addUpdatedDocIds(builder, session, objectId, objectName);
+            chronicleIds.add(chronicleId);
+          }
+          permissionsCheckpoint = new Checkpoint(eventDate, eventId);
+        }
+      } finally {
+        result.close();
+      }
+      return true;
     }
   }
 
