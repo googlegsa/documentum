@@ -141,10 +141,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   /** "The DQL function that returns the time in the server timezone.*/
   @VisibleForTesting String dateToStringFunction;
 
-  private AclTraverser aclTraverser = new AclTraverser();
+  @VisibleForTesting AclTraverser aclTraverser = new AclTraverser();
   @VisibleForTesting ModifiedAclTraverser modifiedAclTraverser =
       new ModifiedAclTraverser();
-  private GroupTraverser groupTraverser = new GroupTraverser();
+  @VisibleForTesting GroupTraverser groupTraverser = new GroupTraverser();
   @VisibleForTesting DmWorldTraverser dmWorldTraverser = new DmWorldTraverser();
   @VisibleForTesting ModifiedDocumentTraverser modifiedDocumentTraverser =
       new ModifiedDocumentTraverser();
@@ -716,7 +716,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
   }
 
-  private class AclTraverser extends TraverserTemplate {
+  @VisibleForTesting
+  class AclTraverser extends TraverserTemplate {
     protected Map<DocId, Acl> aclMap;
     protected DocumentumAcls dctmAcls;
 

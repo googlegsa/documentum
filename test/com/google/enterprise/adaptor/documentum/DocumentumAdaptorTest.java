@@ -79,7 +79,9 @@ import com.documentum.fc.common.IDfTime;
 
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.ExpectedException;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -196,6 +198,9 @@ public class DocumentumAdaptorTest {
   public void tearDown() throws Exception {
     dropAllObjects();
   }
+
+  @Rule
+  public ExpectedException thrown = ExpectedException.none();
 
   private Config getTestAdaptorConfig() {
     return initTestAdaptorConfig(ProxyAdaptorContext.getInstance());
@@ -1466,13 +1471,13 @@ public class DocumentumAdaptorTest {
   /** Mock proxy implementations that throw Exceptions when iterating over
       a result set. */
   private class ExceptionalResultSetTestProxies extends H2BackedTestProxies {
-    private final String queryPattern;
+    private final String queryFragment;
     private final int failIteration;
     private final DfException exceptionToThrow;
 
-    ExceptionalResultSetTestProxies(String queryPattern, int failIteration,
+    ExceptionalResultSetTestProxies(String queryFragment, int failIteration,
         DfException exceptionToThrow) {
-      this.queryPattern = queryPattern;
+      this.queryFragment = queryFragment;
       this.failIteration = failIteration;
       this.exceptionToThrow = exceptionToThrow;
     }
@@ -1487,7 +1492,7 @@ public class DocumentumAdaptorTest {
       public IDfCollection execute(IDfSession session, int queryType)
           throws DfException {
         return Proxies.newProxyInstance(IDfCollection.class,
-            (query.matches(queryPattern))
+            (query.contains(queryFragment))
             ? new ExceptionalCollectionMock(query) : new CollectionMock(query));
       }
     }
@@ -2445,16 +2450,20 @@ public class DocumentumAdaptorTest {
   }
 
   private Map<DocId, Acl> getAllAcls() throws Exception {
-    return getAllAcls("", 0);
+    return getAllAcls(
+        getObjectUnderTestNamespaces(ImmutableMap.<String, String>of()));
   }
 
   private Map<DocId, Acl> getAllAcls(String windowsDomain, int batchSize)
       throws DfException, IOException, InterruptedException {
-    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+    return getAllAcls(getObjectUnderTestNamespaces(
         ImmutableMap.of(
             "documentum.windowsDomain", windowsDomain,
-            "documentum.queryBatchSize", batchSize));
+            "documentum.queryBatchSize", batchSize)));
+  }
 
+  private Map<DocId, Acl> getAllAcls(DocumentumAdaptor adaptor)
+      throws DfException, IOException, InterruptedException {
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.getDocIds(pusher);
     return pusher.getNamedResources();
@@ -2486,6 +2495,29 @@ public class DocumentumAdaptorTest {
          batchSize++) {
       assertEquals("batchSize: " + batchSize,
           expectedDocIds, getAllAcls("", batchSize).keySet());
+    }
+  }
+
+  @Test
+  public void testGetAllAclsThrownExceptions() throws Exception {
+    Set<DocId> expected = createAcls("4501081f80000100",
+        "4501081f80000101",  "4501081f80000102",  "4501081f80000103",
+        "4501081f80000104",  "4501081f80000105",  "4501081f80000106");
+
+    // Fetch all the ACLs in various sized batches, failing
+    // while iterating over the results in each batch.
+    // Note: a batch size of 0, means no batching.
+    for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize++) {
+      int maxBatchSize = (batchSize == 0) ? expected.size() : batchSize;
+      for (int failIter = 1; failIter <= maxBatchSize; failIter++) {
+        DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+            new ExceptionalResultSetTestProxies("FROM dm_acl", failIter,
+                new DfException("Expected failure at iteration " + failIter)),
+            ImmutableMap.of("documentum.queryBatchSize", batchSize));
+        adaptor.aclTraverser.setSleeper(NO_SLEEP);
+        assertEquals("batchSize: " + batchSize + "  failIter: " + failIter,
+            expected, getAllAcls(adaptor).keySet());
+      }
     }
   }
 
@@ -3500,7 +3532,7 @@ public class DocumentumAdaptorTest {
     // Note: a batch size of 0, means no batching.
     for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize++) {
       int maxBatchSize = (batchSize == 0) ? expected.size() : batchSize;
-      for (int failIter = 0; failIter <= maxBatchSize; failIter++) {
+      for (int failIter = 1; failIter <= maxBatchSize; failIter++) {
         DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
             new ExceptionalResultSetTestProxies("FROM dm_user", failIter,
                 new DfException("Expected failure at iteration " + failIter)),
@@ -3620,6 +3652,156 @@ public class DocumentumAdaptorTest {
       assertEquals("batchSize: " + batchSize, expected, filterDmWorld(
           getGroups(ImmutableMap.of("documentum.queryBatchSize", batchSize))));
     }
+  }
+
+  @Test
+  public void testGetGroupsThrownExceptionBetweenGroups()
+      throws Exception {
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    insertGroup("Group1", "User1");
+    insertGroup("Group2", "User2");
+    insertGroup("Group3", "User3");
+    insertGroup("Group4", "User4");
+    insertGroup("Group5", "User5");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+       expected = ImmutableMap.of(
+           new GroupPrincipal("Group1", "NS_Local"),
+               ImmutableSet.of(new UserPrincipal("User1", "NS")),
+           new GroupPrincipal("Group2", "NS_Local"),
+               ImmutableSet.of(new UserPrincipal("User2", "NS")),
+           new GroupPrincipal("Group3", "NS_Local"),
+               ImmutableSet.of(new UserPrincipal("User3", "NS")),
+           new GroupPrincipal("Group4", "NS_Local"),
+               ImmutableSet.of(new UserPrincipal("User4", "NS")),
+           new GroupPrincipal("Group5", "NS_Local"),
+               ImmutableSet.of(new UserPrincipal("User5", "NS")));
+
+    // Fetch all the groups in various sized batches, throwing an exception
+    // after each group. Each group has a single member, so each group is a
+    // single row in the result set.
+    // Note: a batch size of 0, means no batching.
+    for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize++) {
+      DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+          new ExceptionalResultSetTestProxies("ENABLE(ROW_BASED)", 2,
+              new DfException("Expected failure at batch size " + batchSize)),
+          ImmutableMap.of("documentum.queryBatchSize", batchSize));
+      adaptor.groupTraverser.setSleeper(NO_SLEEP);
+      assertEquals("batchSize: " + batchSize,
+            expected, filterDmWorld(getGroups(adaptor)));
+    }
+  }
+
+  @Test
+  public void testGetGroupsThrownExceptionInFirstGroup()
+      throws Exception {
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    insertGroup("Group1", "User1", "User2", "User3");
+    insertGroup("Group2", "User4", "User5");
+
+    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+        new ExceptionalResultSetTestProxies("ENABLE(ROW_BASED)", 2,
+            new DfException("Expected failure in first group")),
+        ImmutableMap.<String, String>of());
+    adaptor.groupTraverser.setSleeper(NO_SLEEP);
+    thrown.expect(IOException.class);
+    thrown.expectMessage("Expected failure in first group");
+    getGroups(adaptor);
+  }
+
+  @Test
+  public void testGetGroupsThrownExceptionMidGroup()
+      throws Exception {
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    insertGroup("Group1", "User1", "User2", "User3");
+    insertGroup("Group2", "User1", "User2", "User3", "User4");
+    insertGroup("Group5", "User5");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+       expected = ImmutableMap.of(
+           new GroupPrincipal("Group1", "NS_Local"),
+               ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                               new UserPrincipal("User2", "NS"),
+                               new UserPrincipal("User3", "NS")),
+           new GroupPrincipal("Group2", "NS_Local"),
+               ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                               new UserPrincipal("User2", "NS"),
+                               new UserPrincipal("User3", "NS"),
+                               new UserPrincipal("User4", "NS")),
+           new GroupPrincipal("Group5", "NS_Local"),
+               ImmutableSet.of(new UserPrincipal("User5", "NS")));
+
+    // Fetch all the groups in various sized batches, throwing an exception
+    // mid-group. Note: a batch size of 0, means no batching.
+    for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize += 2) {
+      DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+          new ExceptionalResultSetTestProxies("ENABLE(ROW_BASED)", 6,
+              new DfException("Expected failure at batch size " + batchSize)),
+          ImmutableMap.of("documentum.queryBatchSize", batchSize));
+      adaptor.groupTraverser.setSleeper(NO_SLEEP);
+      assertEquals(expected, filterDmWorld(getGroups(adaptor)));
+    }
+  }
+
+  @Test
+  public void testGetGroupsThrownExceptionLastGroup()
+      throws Exception {
+    insertUsers("User1", "User2", "User3", "User4");
+    insertGroup("Group1", "User1", "User2");
+    insertGroup("Group2", "User1", "User2", "User3", "User4");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+       expected = ImmutableMap.of(
+           new GroupPrincipal("Group1", "NS_Local"),
+               ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                               new UserPrincipal("User2", "NS")),
+           new GroupPrincipal("Group2", "NS_Local"),
+               ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                               new UserPrincipal("User2", "NS"),
+                               new UserPrincipal("User3", "NS"),
+                               new UserPrincipal("User4", "NS")));
+
+    // Fetch all the groups in various sized batches, throwing an exception
+    // mid-group. Note: a batch size of 0, means no batching.
+    for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize += 2) {
+      DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+          new ExceptionalResultSetTestProxies("ENABLE(ROW_BASED)", 5,
+              new DfException("Expected failure at batch size " + batchSize)),
+          ImmutableMap.of("documentum.queryBatchSize", batchSize));
+      adaptor.groupTraverser.setSleeper(NO_SLEEP);
+      assertEquals(expected, filterDmWorld(getGroups(adaptor)));
+    }
+  }
+
+  @Test
+  public void testGetGroupsThrownExceptionAlwaysFailGroup()
+      throws Exception {
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    insertGroup("Group1", "User1");
+    insertGroup("Group2", "User1", "User2", "User3", "User4");
+    insertGroup("Group5", "User5");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+       expected = ImmutableMap.of(new GroupPrincipal("Group1", "NS_Local"),
+           ImmutableSet.of(new UserPrincipal("User1", "NS")));
+
+    // This should fail on Group2 the first time, and again on retry,
+    // so only the first group will get pushed.
+    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+        new ExceptionalResultSetTestProxies("ENABLE(ROW_BASED)", 3,
+            new DfException("Expected repeat failure")),
+        ImmutableMap.<String, String>of());
+    adaptor.groupTraverser.setSleeper(NO_SLEEP);
+    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
+
+    try {
+      adaptor.getDocIds(pusher);
+      fail("Expected IOException, but there was none");
+    } catch (IOException e) {
+      assertTrue(e.getMessage(),
+          e.getMessage().contains("Expected repeat failure"));
+    }
+    assertEquals(expected, filterDmWorld(pusher.getGroups()));
   }
 
   @Test
