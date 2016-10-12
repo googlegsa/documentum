@@ -366,26 +366,29 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         Boolean.parseBoolean(config.getValue("adaptor.markAllDocsAsPublic"));
     logger.log(Level.CONFIG, "adaptor.markAllDocsAsPublic: {0}",
         markAllDocsAsPublic);
-    if (!markAllDocsAsPublic) {
-      globalNamespace = config.getValue("adaptor.namespace").trim();
-      logger.log(Level.CONFIG, "adaptor.namespace: {0}", globalNamespace);
-      localNamespace = globalNamespace + "_" + docbase;
-      logger.log(Level.CONFIG, "local namespace: {0}", localNamespace);
-      windowsDomain = config.getValue("documentum.windowsDomain").trim();
-      logger.log(Level.CONFIG, "documentum.windowsDomain: {0}", windowsDomain);
-      pushLocalGroupsOnly = Boolean.parseBoolean(
-          config.getValue("documentum.pushLocalGroupsOnly"));
-      logger.log(Level.CONFIG, "documentum.pushLocalGroupsOnly: {0}",
-          pushLocalGroupsOnly);
-      if (config.getValue("adaptor.caseSensitivityType").equals(
-          CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE.toString())) {
-        caseSensitivityType = CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE;
-      } else {
-        caseSensitivityType = CaseSensitivityType.EVERYTHING_CASE_SENSITIVE;
-      }
-      logger.log(Level.CONFIG, "adaptor.caseSensitivityType: {0}",
-          caseSensitivityType);
+
+    // This block of properties should not be used if markAllDocsAsPublic
+    // is true, but globalNamespace and localNamespace must not be null,
+    // and it's useful to always log them.
+    globalNamespace = config.getValue("adaptor.namespace").trim();
+    logger.log(Level.CONFIG, "adaptor.namespace: {0}", globalNamespace);
+    localNamespace = globalNamespace + "_" + docbase;
+    logger.log(Level.CONFIG, "local namespace: {0}", localNamespace);
+    windowsDomain = config.getValue("documentum.windowsDomain").trim();
+    logger.log(Level.CONFIG, "documentum.windowsDomain: {0}", windowsDomain);
+    pushLocalGroupsOnly = Boolean.parseBoolean(
+        config.getValue("documentum.pushLocalGroupsOnly"));
+    logger.log(Level.CONFIG, "documentum.pushLocalGroupsOnly: {0}",
+        pushLocalGroupsOnly);
+    if (config.getValue("adaptor.caseSensitivityType").equals(
+            CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE.toString())) {
+      caseSensitivityType = CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE;
+    } else {
+      caseSensitivityType = CaseSensitivityType.EVERYTHING_CASE_SENSITIVE;
     }
+    logger.log(Level.CONFIG, "adaptor.caseSensitivityType: {0}",
+        caseSensitivityType);
+
     String src = config.getValue("documentum.src");
     logger.log(Level.CONFIG, "documentum.src: {0}", src);
     String separator = config.getValue("documentum.src.separator");
