@@ -3655,6 +3655,56 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
+  public void testGetGroupsThrownExceptionInFirstCandidate()
+      throws Exception {
+    insertUsers("User1", "User2");
+    insertGroup("Group1", "User1");
+    insertGroup("Group2", "User2");
+
+    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+        new ExceptionalResultSetTestProxies(
+            "SELECT r_object_id FROM dm_group", 0,
+            new DfException("Expected failure in first candidate")),
+        ImmutableMap.of("documentum.queryBatchSize", 10));
+    adaptor.groupTraverser.setSleeper(NO_SLEEP);
+    thrown.expect(IOException.class);
+    thrown.expectMessage("Expected failure in first candidate");
+    getGroups(adaptor);
+  }
+
+  @Test
+  public void testGetGroupsThrownExceptionInCandidates()
+      throws Exception {
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    insertGroup("Group1", "User1");
+    insertGroup("Group2", "User2");
+    insertGroup("Group3", "User3");
+    insertGroup("Group4", "User4");
+    insertGroup("Group5", "User5");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+       expected = ImmutableMap.of(
+           new GroupPrincipal("Group1", "NS_Local"),
+               ImmutableSet.of(new UserPrincipal("User1", "NS")),
+           new GroupPrincipal("Group2", "NS_Local"),
+               ImmutableSet.of(new UserPrincipal("User2", "NS")),
+           new GroupPrincipal("Group3", "NS_Local"),
+               ImmutableSet.of(new UserPrincipal("User3", "NS")),
+           new GroupPrincipal("Group4", "NS_Local"),
+               ImmutableSet.of(new UserPrincipal("User4", "NS")),
+           new GroupPrincipal("Group5", "NS_Local"),
+               ImmutableSet.of(new UserPrincipal("User5", "NS")));
+
+    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+        new ExceptionalResultSetTestProxies(
+            "SELECT r_object_id FROM dm_group", 2,
+            new DfException("Expected failure in candidates")),
+        ImmutableMap.of("documentum.queryBatchSize", 10));
+    adaptor.groupTraverser.setSleeper(NO_SLEEP);
+    assertEquals(expected, filterDmWorld(getGroups(adaptor)));
+  }
+
+  @Test
   public void testGetGroupsThrownExceptionBetweenGroups()
       throws Exception {
     insertUsers("User1", "User2", "User3", "User4", "User5");

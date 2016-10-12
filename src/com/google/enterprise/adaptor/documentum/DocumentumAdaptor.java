@@ -820,6 +820,14 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
             }
             stopObjectId = objectId;
           }
+        } catch (DfException e) {
+          if (stopObjectId == null) {
+            throw e;
+          } else {
+            // Continue on with a reduced BETWEEN range.
+            logger.log(Level.WARNING, "Processing through group "
+                       + stopObjectId + " after error.", e);
+          }
         } finally {
           result.close();
         }
