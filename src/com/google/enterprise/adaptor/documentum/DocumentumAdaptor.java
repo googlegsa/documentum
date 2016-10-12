@@ -1502,8 +1502,14 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     resp.setContentType(contentType);
     resp.setDisplayUrl(new URI(MessageFormat.format(displayUrl,
         dmSysbObj.getObjectId(), docIdToPath(id))));
-    try (InputStream inStream = dmSysbObj.getContent()) {
-      IOHelper.copyStream(inStream, resp.getOutputStream());
+
+    // getContent throws an exception when r_page_cnt is zero.
+    // The GSA does not support files larger than 2 GB.
+    if (dmSysbObj.getPageCount() > 0 && dmSysbObj.getContentSize() > 0
+        && dmSysbObj.getContentSize() <= (2L << 30)) {
+      try (InputStream inStream = dmSysbObj.getContent()) {
+        IOHelper.copyStream(inStream, resp.getOutputStream());
+      }
     }
   }
 

@@ -166,7 +166,7 @@ public class DocumentumAdaptorTest {
       "create table dm_sysobject "
       + "(r_object_id varchar, r_modify_date timestamp, r_object_type varchar, "
       + "object_name varchar, a_content_type varchar, i_folder_id varchar, "
-      + "r_is_virtual_doc boolean, "
+      + "r_is_virtual_doc boolean, r_content_size bigint, "
       // Note: mock_content ia an artifact that stores the content as a string,
       // and mock_object_path is an artifact used to emulate FOLDER predicate,
       // and to assist getObjectByPath.
@@ -1041,6 +1041,8 @@ public class DocumentumAdaptorTest {
       private final String id;
       private final String name;
       private final String type;
+      private final long contentSize;
+      private final int pageCount;
       private final String contentType;
       private final String content;
       private final String aclId;
@@ -1052,6 +1054,8 @@ public class DocumentumAdaptorTest {
         id = rs.getString("r_object_id");
         name = rs.getString("object_name");
         type = rs.getString("r_object_type");
+        contentSize = rs.getLong("r_content_size");
+        pageCount = rs.wasNull() ? 0 : 1;
         contentType = rs.getString("a_content_type");
         content = rs.getString("mock_content");
         aclId = rs.getString("mock_acl_id");
@@ -1076,11 +1080,20 @@ public class DocumentumAdaptorTest {
         }
       }
 
-      public InputStream getContent() {
-        if (content == null) {
-          return null;
+      public int getPageCount() {
+        return pageCount;
+      }
+
+      public long getContentSize() {
+        return contentSize;
+      }
+
+      public InputStream getContent() throws DfException {
+        if (pageCount == 0) {
+          throw new DfException("Invalid page number");
+        } else {
+          return new ByteArrayInputStream(content.getBytes(UTF_8));
         }
-        return new ByteArrayInputStream(content.getBytes(UTF_8));
       }
 
       public IDfType getType() {
@@ -1673,16 +1686,23 @@ public class DocumentumAdaptorTest {
     executeUpdate(String.format(
         "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
         + "r_object_type, a_content_type, mock_content, r_modify_date, "
-        + "mock_acl_id) "
-        + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'}, '%s')",
+        + "mock_acl_id, r_content_size) "
+        + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'}, '%s', %d)",
         "09" + name, name, path, "dm_document", contentType, content,
-        dateFormat.format(lastModified), DEFAULT_ACL));
+        dateFormat.format(lastModified), DEFAULT_ACL,
+        (content == null) ? null : content.length()));
   }
 
   private void insertDocument(String lastModified, String id, String path,
       String... folderIds) throws SQLException {
     String name = path.substring(path.lastIndexOf("/") + 1);
     insertSysObject(lastModified, id, name, path, "dm_document", folderIds);
+  }
+
+  private void setDocumentSize(String id, long size) throws SQLException {
+    executeUpdate(String.format(
+        "UPDATE dm_sysobject SET r_content_size = %d "
+        + "WHERE r_object_id = '%s'", size, id));
   }
 
   private void insertFolder(String lastModified, String id, String... paths)
@@ -1732,8 +1752,8 @@ public class DocumentumAdaptorTest {
 
     if (expectNotModified) {
       assertTrue(response.notModified);
-      assertNull(response.contentType);
-      assertNull(response.content);
+      assertEquals(null, response.contentType);
+      assertEquals(null, response.content);
     } else {
       assertFalse(response.notModified);
       assertEquals(contentType, response.contentType);
@@ -1800,6 +1820,47 @@ public class DocumentumAdaptorTest {
     Date lastModified =
         new Date(lastCrawled.getTime() - (72 * 60 * 60 * 1000L));
     testDocContent(lastCrawled, lastModified, true);
+  }
+
+  private MockResponse getNoContent(String content, long... size)
+      throws Exception {
+    String path = START_PATH + "/object1";
+    insertDocument(new Date(), path, "text/plain", content);
+
+    // This hack with essentially an optional argument is instead of a
+    // hack to treat 0 specially.
+    if (size.length > 0) {
+      assertEquals(1, size.length);
+      setDocumentSize("09object1", size[0]);
+    }
+
+    return getDocContent(path);
+  }
+
+  @Test
+  public void testGetDocContent_noFile() throws Exception {
+    MockResponse response = getNoContent(null);
+    assertEquals(null, response.content);
+  }
+
+  @Test
+  public void testGetDocContent_emptyFile() throws Exception {
+    MockResponse response = getNoContent("");
+    assertEquals(null, response.content);
+  }
+
+  @Test
+  public void testGetDocContent_largeFile() throws Exception {
+    MockResponse response =
+        getNoContent("hello, world", Integer.MAX_VALUE + 1L);
+    assertEquals("hello, world", response.content.toString());
+  }
+
+  @Test
+  public void testGetDocContent_hugeFile() throws Exception {
+    MockResponse response =
+        getNoContent("Call me Ishmael....", Integer.MAX_VALUE + 2L);
+    assertEquals(null, response.content);
   }
 
   private String getDisplayUrl(String displayUrlPattern, String path)
@@ -2071,10 +2132,10 @@ public class DocumentumAdaptorTest {
     executeUpdate(String.format(
         "INSERT INTO dm_sysobject(r_object_id, object_name, mock_object_path, "
         + "r_object_type, r_is_virtual_doc, a_content_type, mock_content, "
-        + "r_modify_date, mock_acl_id) "
-        + "VALUES('%s', '%s', '%s', '%s', TRUE, '%s', '%s', {ts '%s'}, '%s')",
+        + "r_modify_date, mock_acl_id, r_content_size) VALUES("
+        + "'%s', '%s', '%s', '%s', TRUE, '%s', '%s', {ts '%s'}, '%s', %d)",
         vdocId, name, vdocPath, "dm_document_virtual", contentType, content,
-        now, DEFAULT_ACL));
+        now, DEFAULT_ACL, (content == null) ? null : content.length()));
     for (String child : children) {
       insertDocument(now, "09" + child, vdocPath + "/" + child, vdocId);
     }
