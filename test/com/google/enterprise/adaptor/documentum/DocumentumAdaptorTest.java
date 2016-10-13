@@ -1536,8 +1536,11 @@ public class DocumentumAdaptorTest {
 
   private void insertCabinets(String... cabinets) throws SQLException {
     for (String cabinet : cabinets) {
+      // The extra row with a null r_folder_path simulates a row-based query
+      // result. Our fake getValueCount correctly returns 0 for that row.
       executeUpdate(String.format("INSERT INTO dm_cabinet "
-          + "(r_object_id, r_folder_path, object_name) VALUES('%s','%s','%s')",
+          + "(r_object_id, r_folder_path, object_name) "
+          + "VALUES('%1$s',null,'%3$s'),('%1$s','%2$s','%3$s')",
           "0c" + cabinet, "/" + cabinet, cabinet));
     }
   }

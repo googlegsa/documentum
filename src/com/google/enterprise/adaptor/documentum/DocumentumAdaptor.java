@@ -1420,8 +1420,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    */
   private void getRootContent(Response resp, IDfSession session, DocId id)
       throws DfException, IOException {
+    // Select r_object_id to allow an object- or row-based query. See
+    // "To return results by object ID" in the DQL Reference Manual.
     String queryStr = MessageFormat.format(
-       "SELECT r_folder_path FROM dm_cabinet{0,choice,0#|0< WHERE {1}}",
+       "SELECT r_object_id, r_folder_path FROM dm_cabinet"
+       + "{0,choice,0#|0< WHERE {1}}",
         cabinetWhereCondition.length(), cabinetWhereCondition);
     // Don't use MessageFormat syntax for this log message for testing purposes.
     logger.log(Level.FINER, "Get All Cabinets Query: " + queryStr);
@@ -1441,20 +1444,24 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
           new HtmlResponseWriter(writer, docIdEncoder, Locale.ENGLISH)) {
         htmlWriter.start(id, "/");
         for (int i = 0; i < maxHtmlSize && result.next(); i++) {
-          String cabinet = result.getString("r_folder_path");
-          logger.log(Level.FINER, "Cabinet: {0}", cabinet);
-          DocId docid = docIdFromPath(cabinet);
-          htmlWriter.addLink(docid, docid.getUniqueId());
+          for (int j = 0; j < result.getValueCount("r_folder_path"); j++) {
+            String cabinet = result.getRepeatingString("r_folder_path", j);
+            logger.log(Level.FINER, "Cabinet: {0}", cabinet);
+            DocId docid = docIdFromPath(cabinet);
+            htmlWriter.addLink(docid, docid.getUniqueId());
+          }
         }
         htmlWriter.finish();
       }
 
       // Add the remaining cabinets as external anchors.
       while (result.next()) {
-        String cabinet = result.getString("r_folder_path");
-        logger.log(Level.FINER, "Cabinet: {0}", cabinet);
-        DocId docid = docIdFromPath(cabinet);
-        resp.addAnchor(docIdEncoder.encodeDocId(docid), docid.getUniqueId());
+        for (int j = 0; j < result.getValueCount("r_folder_path"); j++) {
+          String cabinet = result.getRepeatingString("r_folder_path", j);
+          logger.log(Level.FINER, "Cabinet: {0}", cabinet);
+          DocId docid = docIdFromPath(cabinet);
+          resp.addAnchor(docIdEncoder.encodeDocId(docid), docid.getUniqueId());
+        }
       }
 
       // Finally, write out the generated HTML links as content.
