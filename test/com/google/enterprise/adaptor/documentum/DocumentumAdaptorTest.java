@@ -103,6 +103,7 @@ import java.util.Date;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -1485,13 +1486,18 @@ public class DocumentumAdaptorTest {
       a result set. */
   private class ExceptionalResultSetTestProxies extends H2BackedTestProxies {
     private final String queryFragment;
-    private final int failIteration;
+    private final Iterator<Integer> failIterations;
     private final DfException exceptionToThrow;
 
     ExceptionalResultSetTestProxies(String queryFragment, int failIteration,
         DfException exceptionToThrow) {
+      this(queryFragment, Iterators.cycle(failIteration), exceptionToThrow);
+    }
+
+    ExceptionalResultSetTestProxies(String queryFragment,
+        Iterator<Integer> failIterations, DfException exceptionToThrow) {
       this.queryFragment = queryFragment;
-      this.failIteration = failIteration;
+      this.failIterations = failIterations;
       this.exceptionToThrow = exceptionToThrow;
     }
 
@@ -1506,15 +1512,19 @@ public class DocumentumAdaptorTest {
           throws DfException {
         return Proxies.newProxyInstance(IDfCollection.class,
             (query.contains(queryFragment))
-            ? new ExceptionalCollectionMock(query) : new CollectionMock(query));
+            ? new ExceptionalCollectionMock(query, failIterations.next())
+            : new CollectionMock(query));
       }
     }
 
     private class ExceptionalCollectionMock extends CollectionMock {
+      private final int failIteration;
       private int iteration;
 
-      public ExceptionalCollectionMock(String query) throws DfException {
+      public ExceptionalCollectionMock(String query, int failIteration)
+          throws DfException {
         super(query);
+        this.failIteration = failIteration;
         iteration = 0;
       }
 
@@ -3090,8 +3100,12 @@ public class DocumentumAdaptorTest {
   private Map<DocId, Acl> testUpdateAcls(Checkpoint checkpoint,
       Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
-    DocumentumAdaptor adaptor = getObjectUnderTest();
+    return testUpdateAcls(getObjectUnderTest(), checkpoint, expectedCheckpoint);
+  }
 
+  private Map<DocId, Acl> testUpdateAcls(DocumentumAdaptor adaptor,
+      Checkpoint checkpoint, Checkpoint expectedCheckpoint)
+      throws DfException, IOException, InterruptedException {
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.modifiedAclTraverser.setCheckpoint(checkpoint);
     adaptor.getModifiedDocIds(pusher);
@@ -3248,50 +3262,69 @@ public class DocumentumAdaptorTest {
         expectedCheckpoint);
   }
 
-  /*
-   * TODO(jlacey): A hack of sizeable proportions. To mimic an
-   * exception thrown from the loop in getUpdateAcls, we create an
-   * non-destroy audit event with no corresponding ACL. The mock
-   * getObject throws an AssertionError.
-   */
-  private DocumentumAcls getUpdateAclsAndFail() throws Exception {
-    H2BackedTestProxies proxyCls = new H2BackedTestProxies();
-    IDfClientX dmClientX = proxyCls.getProxyClientX();
-    IDfSessionManager dmSessionManager =
-        dmClientX.getLocalClient().newSessionManager();
-    IDfSession dmSession = dmSessionManager.getSession("testdocbase");
-    DocumentumAcls dctmAcls = new DocumentumAcls(dmClientX, dmSession,
-        new Principals(dmSession, "localNS", "globalNS", null),
-        CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE);
-
-    Map<DocId, Acl> aclMap = new HashMap<>();
-    try {
-      dctmAcls.getUpdateAcls(Checkpoint.incremental(), 0, aclMap);
-      fail("Expected an AssertionError");
-    } catch (AssertionError expected) {
-    }
-    return dctmAcls;
-  }
-
-  @Test
-  public void testUpdateAclsFirstRowFailure() throws Exception {
+  public void testUpdateAclsFirstRowException() throws Exception {
+    createAcl("4501081f80000100");
+    createAcl("4501081f80000101");
     String dateStr = getNowPlusMinutes(5);
     insertAclAudit("123", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "4501081f80000101", "dm_saveasnew", dateStr);
+    insertAclAudit("125", "4501081f80000102", "dm_destroy", dateStr);
 
-    DocumentumAcls dctmAcls = getUpdateAclsAndFail();
-    assertEquals(Checkpoint.incremental(), dctmAcls.getCheckpoint());
+    DocumentumAdaptor adaptor = getObjectUnderTest(
+        new ExceptionalResultSetTestProxies(
+            "FROM dm_audittrail_acl", 0,
+            new DfException("Expected failure in first event")),
+        ImmutableMap.<String, String>of());
+    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
+
+    thrown.expect(IOException.class);
+    thrown.expectMessage("Expected failure in first event");
+    adaptor.getModifiedDocIds(pusher);
   }
 
-  @Test
-  public void testUpdateAclsSecondRowFailure() throws Exception {
-    createAcl("4501081f80000100");
-    String dateStr = getNowPlusMinutes(3);
-    insertAclAudit("123", "4501081f80000100", "dm_save", dateStr);
-    insertAclAudit("124", "4501081f80000101", "dm_saveasnew",
-      getNowPlusMinutes(5));
+  private void testUpdateAclsExceptions(Iterator<Integer> failIterations,
+      Set<DocId> expectedAclIds, Checkpoint expectedCheckpoint)
+      throws DfException, IOException, InterruptedException {
+    DocumentumAdaptor adaptor = getObjectUnderTest(
+        new ExceptionalResultSetTestProxies(
+            "FROM dm_audittrail_acl", failIterations,
+            new DfException("Expected failure")),
+        ImmutableMap.<String, String>of());
 
-    DocumentumAcls dctmAcls = getUpdateAclsAndFail();
-    assertEquals(new Checkpoint(dateStr, "123"), dctmAcls.getCheckpoint());
+    Map<DocId, Acl> aclMap =
+        testUpdateAcls(adaptor, Checkpoint.incremental(), expectedCheckpoint);
+    assertEquals(expectedAclIds, aclMap.keySet());
+  }
+
+  public void testUpdateAclsOtherRowsException() throws Exception {
+    createAcl("4501081f80000100");
+    createAcl("4501081f80000101");
+    String dateStr = getNowPlusMinutes(5);
+    insertAclAudit("123", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "4501081f80000101", "dm_saveasnew", dateStr);
+    insertAclAudit("125", "4501081f80000102", "dm_destroy", dateStr);
+
+    testUpdateAclsExceptions(Iterators.cycle(1),
+        ImmutableSet.of(
+            new DocId("4501081f80000100"),
+            new DocId("4501081f80000101"),
+            new DocId("4501081f80000102")),
+        new Checkpoint(dateStr, "125"));
+  }
+
+  public void testUpdateAclsPartialRowsException() throws Exception {
+    createAcl("4501081f80000100");
+    createAcl("4501081f80000101");
+    String dateStr = getNowPlusMinutes(5);
+    insertAclAudit("123", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "4501081f80000101", "dm_saveasnew", dateStr);
+    insertAclAudit("125", "4501081f80000102", "dm_destroy", dateStr);
+
+    testUpdateAclsExceptions(Iterators.forArray(2, 0),
+        ImmutableSet.of(
+            new DocId("4501081f80000100"),
+            new DocId("4501081f80000101")),
+        new Checkpoint(dateStr, "125"));
   }
 
   private void insertAuditTrailEvent(String date, String id, String eventName,
