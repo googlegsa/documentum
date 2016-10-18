@@ -1497,16 +1497,19 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
 
     // Return the content.
-    String contentType = dmSysbObj.getContentType();
-    logger.log(Level.FINER, "Content Type: {0}", contentType);
-    resp.setContentType(contentType);
     resp.setDisplayUrl(new URI(MessageFormat.format(displayUrl,
         dmSysbObj.getObjectId(), docIdToPath(id))));
 
     // getContent throws an exception when r_page_cnt is zero.
     // The GSA does not support files larger than 2 GB.
+    // The GSA will not index empty documents with binary content types,
+    // so include the content type only when supplying content.
     if (dmSysbObj.getPageCount() > 0 && dmSysbObj.getContentSize() > 0
         && dmSysbObj.getContentSize() <= (2L << 30)) {
+      String contentType = dmSysbObj.getFormat().getMIMEType();
+      logger.log(Level.FINER, "Content Type: {0}", contentType);
+      resp.setContentType(contentType);
+
       try (InputStream inStream = dmSysbObj.getContent()) {
         IOHelper.copyStream(inStream, resp.getOutputStream());
       }

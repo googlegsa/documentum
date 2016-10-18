@@ -60,6 +60,7 @@ import com.documentum.fc.client.IDfClient;
 import com.documentum.fc.client.IDfCollection;
 import com.documentum.fc.client.IDfEnumeration;
 import com.documentum.fc.client.IDfFolder;
+import com.documentum.fc.client.IDfFormat;
 import com.documentum.fc.client.IDfGroup;
 import com.documentum.fc.client.IDfObjectPath;
 import com.documentum.fc.client.IDfPermit;
@@ -167,12 +168,16 @@ public class DocumentumAdaptorTest {
   private static final String CREATE_TABLE_SYSOBJECT =
       "create table dm_sysobject "
       + "(r_object_id varchar, r_modify_date timestamp, r_object_type varchar, "
-      + "object_name varchar, a_content_type varchar, i_folder_id varchar, "
+      + "object_name varchar, i_folder_id varchar, "
       + "r_is_virtual_doc boolean, r_content_size bigint, "
       // Note: mock_content ia an artifact that stores the content as a string,
       // and mock_object_path is an artifact used to emulate FOLDER predicate,
       // and to assist getObjectByPath.
       + "mock_content varchar, mock_object_path varchar, "
+      // Note: mock_mime_type is an artifact that stores the mime type that
+      // would actually be stored in dm_format. It is used to create FormatMock
+      // in SysObjectMock.
+      + "mock_mime_type varchar, "
       // Note: mock_acl_id is ACL id for the document, and is used to
       // create AclMock in SysObjectMock.
       + "mock_acl_id varchar )";
@@ -1045,7 +1050,7 @@ public class DocumentumAdaptorTest {
       private final String type;
       private final long contentSize;
       private final int pageCount;
-      private final String contentType;
+      private final String mimeType;
       private final String content;
       private final String aclId;
       private final Date lastModified;
@@ -1058,7 +1063,7 @@ public class DocumentumAdaptorTest {
         type = rs.getString("r_object_type");
         contentSize = rs.getLong("r_content_size");
         pageCount = rs.wasNull() ? 0 : 1;
-        contentType = rs.getString("a_content_type");
+        mimeType = rs.getString("mock_mime_type");
         content = rs.getString("mock_content");
         aclId = rs.getString("mock_acl_id");
         lastModified = new Date(rs.getTimestamp("r_modify_date").getTime());
@@ -1102,8 +1107,9 @@ public class DocumentumAdaptorTest {
         return Proxies.newProxyInstance(IDfType.class, new TypeMock(type));
       }
 
-      public String getContentType() {
-        return contentType;
+      public IDfFormat getFormat() {
+        return Proxies.newProxyInstance(IDfFormat.class,
+            new FormatMock(mimeType));
       }
 
       public IDfTime getTime(String attr) {
@@ -1144,6 +1150,18 @@ public class DocumentumAdaptorTest {
       public IDfACL getACL() {
         return Proxies.newProxyInstance(IDfACL.class,
             new AclMock(aclId.toString()));
+      }
+    }
+
+    private class FormatMock {
+      private final String mimeType;
+
+      public FormatMock(String mimeType) {
+        this.mimeType = mimeType;
+      }
+
+      public String getMIMEType() {
+        return mimeType;
       }
     }
 
@@ -1692,14 +1710,14 @@ public class DocumentumAdaptorTest {
   }
 
   private void insertDocument(Date lastModified, String path,
-       String contentType, String content) throws SQLException {
+       String mimeType, String content) throws SQLException {
     String name = path.substring(path.lastIndexOf("/") + 1);
     executeUpdate(String.format(
         "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
-        + "r_object_type, a_content_type, mock_content, r_modify_date, "
+        + "r_object_type, mock_mime_type, mock_content, r_modify_date, "
         + "mock_acl_id, r_content_size) "
         + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'}, '%s', %d)",
-        "09" + name, name, path, "dm_document", contentType, content,
+        "09" + name, name, path, "dm_document", mimeType, content,
         dateFormat.format(lastModified), DEFAULT_ACL,
         (content == null) ? null : content.length()));
   }
@@ -1754,9 +1772,9 @@ public class DocumentumAdaptorTest {
   private void testDocContent(Date lastCrawled, Date lastModified,
       boolean expectNotModified) throws DfException, IOException, SQLException {
     String path = START_PATH + "/object1";
-    String contentType = "crtext/html";
+    String mimeType = "text/html";
     String content = "<html><body>Hello</body></html>";
-    insertDocument(lastModified, path, contentType, content);
+    insertDocument(lastModified, path, mimeType, content);
 
     MockResponse response = getDocContent(ImmutableMap.<String, String>of(),
         new MockRequest(DocumentumAdaptor.docIdFromPath(path), lastCrawled));
@@ -1767,7 +1785,7 @@ public class DocumentumAdaptorTest {
       assertEquals(null, response.content);
     } else {
       assertFalse(response.notModified);
-      assertEquals(contentType, response.contentType);
+      assertEquals(mimeType, response.contentType);
       assertEquals(content, response.content.toString(UTF_8.name()));
     }
   }
@@ -1851,12 +1869,14 @@ public class DocumentumAdaptorTest {
   @Test
   public void testGetDocContent_noFile() throws Exception {
     MockResponse response = getNoContent(null);
+    assertEquals(null, response.contentType);
     assertEquals(null, response.content);
   }
 
   @Test
   public void testGetDocContent_emptyFile() throws Exception {
     MockResponse response = getNoContent("");
+    assertEquals(null, response.contentType);
     assertEquals(null, response.content);
   }
 
@@ -1864,6 +1884,7 @@ public class DocumentumAdaptorTest {
   public void testGetDocContent_largeFile() throws Exception {
     MockResponse response =
         getNoContent("hello, world", Integer.MAX_VALUE + 1L);
+    assertEquals("text/plain", response.contentType);
     assertEquals("hello, world", response.content.toString());
   }
 
@@ -1871,6 +1892,7 @@ public class DocumentumAdaptorTest {
   public void testGetDocContent_hugeFile() throws Exception {
     MockResponse response =
         getNoContent("Call me Ishmael....", Integer.MAX_VALUE + 2L);
+    assertEquals(null, response.contentType);
     assertEquals(null, response.content);
   }
 
@@ -2135,17 +2157,17 @@ public class DocumentumAdaptorTest {
     testMetadata(attributes, expected);
   }
 
-  private void insertVirtualDocument(String vdocPath, String contentType,
+  private void insertVirtualDocument(String vdocPath, String mimeType,
       String content, String... children) throws SQLException {
     String name = vdocPath.substring(vdocPath.lastIndexOf("/") + 1);
     String vdocId = "09" + name;
     String now = getNowPlusMinutes(0);
     executeUpdate(String.format(
         "INSERT INTO dm_sysobject(r_object_id, object_name, mock_object_path, "
-        + "r_object_type, r_is_virtual_doc, a_content_type, mock_content, "
+        + "r_object_type, r_is_virtual_doc, mock_mime_type, mock_content, "
         + "r_modify_date, mock_acl_id, r_content_size) VALUES("
         + "'%s', '%s', '%s', '%s', TRUE, '%s', '%s', {ts '%s'}, '%s', %d)",
-        vdocId, name, vdocPath, "dm_document_virtual", contentType, content,
+        vdocId, name, vdocPath, "dm_document_virtual", mimeType, content,
         now, DEFAULT_ACL, (content == null) ? null : content.length()));
     for (String child : children) {
       insertDocument(now, "09" + child, vdocPath + "/" + child, vdocId);
@@ -2155,13 +2177,13 @@ public class DocumentumAdaptorTest {
   @Test
   public void testVirtualDocContentNoChildren() throws Exception {
     String path = START_PATH + "/vdoc";
-    String objectContentType = "crtext/html";
+    String objectMimeType = "text/html";
     String objectContent = "<html><body>Hello</body></html>";
-    insertVirtualDocument(path, objectContentType, objectContent);
+    insertVirtualDocument(path, objectMimeType, objectContent);
 
     MockResponse response = getDocContent(path);
 
-    assertEquals(objectContentType, response.contentType);
+    assertEquals(objectMimeType, response.contentType);
     assertEquals(objectContent, response.content.toString(UTF_8.name()));
     assertTrue(response.anchors.isEmpty());
   }
@@ -2169,14 +2191,14 @@ public class DocumentumAdaptorTest {
   @Test
   public void testVirtualDocContentWithChildren() throws Exception {
     String path = START_PATH + "/vdoc";
-    String objectContentType = "crtext/html";
+    String objectMimeType = "text/html";
     String objectContent = "<html><body>Hello</body></html>";
-    insertVirtualDocument(path, objectContentType, objectContent,
+    insertVirtualDocument(path, objectMimeType, objectContent,
         "object1", "object2", "object3");
 
     MockResponse response = getDocContent(path);
 
-    assertEquals(objectContentType, response.contentType);
+    assertEquals(objectMimeType, response.contentType);
     assertEquals(objectContent, response.content.toString(UTF_8.name()));
 
     // Verify child links.
