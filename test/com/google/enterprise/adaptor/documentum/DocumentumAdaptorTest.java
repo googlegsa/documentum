@@ -3101,17 +3101,25 @@ public class DocumentumAdaptorTest {
   private Map<DocId, Acl> testUpdateAcls(Checkpoint checkpoint,
       Set<DocId> expectedAclIds, Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
-    return testUpdateAcls(getObjectUnderTest(), checkpoint, expectedAclIds,
-        expectedCheckpoint);
+    return testUpdateAcls(getObjectUnderTest(), checkpoint, false,
+        expectedAclIds, expectedCheckpoint);
   }
 
   private Map<DocId, Acl> testUpdateAcls(DocumentumAdaptor adaptor,
-      Checkpoint checkpoint, Set<DocId> expectedAclIds,
+      Checkpoint checkpoint, boolean throwsException, Set<DocId> expectedAclIds,
       Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.modifiedAclTraverser.setCheckpoint(checkpoint);
-    adaptor.getModifiedDocIds(pusher);
+    try {
+      adaptor.getModifiedDocIds(pusher);
+      assertFalse("Expected an exception at " + checkpoint.toString(),
+          throwsException);
+    } catch (IOException e) {
+      if (!throwsException) {
+        throw e;
+      }
+    }
     assertEquals(expectedCheckpoint,
         adaptor.modifiedAclTraverser.getCheckpoint());
 
@@ -3293,6 +3301,7 @@ public class DocumentumAdaptorTest {
         expectedCheckpoint);
   }
 
+  @Test
   public void testUpdateAclsFirstRowException() throws Exception {
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
@@ -3314,7 +3323,8 @@ public class DocumentumAdaptorTest {
   }
 
   private void testUpdateAclsExceptions(Iterator<Integer> failIterations,
-      Set<DocId> expectedAclIds, Checkpoint expectedCheckpoint)
+      boolean throwsException, Set<DocId> expectedAclIds,
+      Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
     DocumentumAdaptor adaptor = getObjectUnderTest(
         new ExceptionalResultSetTestProxies(
@@ -3322,10 +3332,11 @@ public class DocumentumAdaptorTest {
             new DfException("Expected failure")),
         ImmutableMap.<String, String>of());
 
-    testUpdateAcls(adaptor, Checkpoint.incremental(), expectedAclIds,
-        expectedCheckpoint);
+    testUpdateAcls(adaptor, Checkpoint.incremental(), throwsException,
+        expectedAclIds, expectedCheckpoint);
   }
 
+  @Test
   public void testUpdateAclsOtherRowsException() throws Exception {
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
@@ -3334,7 +3345,7 @@ public class DocumentumAdaptorTest {
     insertAclAudit("124", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "4501081f80000102", "dm_destroy", dateStr);
 
-    testUpdateAclsExceptions(Iterators.cycle(1),
+    testUpdateAclsExceptions(Iterators.cycle(1), false,
         ImmutableSet.of(
             new DocId("4501081f80000100"),
             new DocId("4501081f80000101"),
@@ -3342,6 +3353,7 @@ public class DocumentumAdaptorTest {
         new Checkpoint(dateStr, "125"));
   }
 
+  @Test
   public void testUpdateAclsPartialRowsException() throws Exception {
     createAcl("4501081f80000100");
     createAcl("4501081f80000101");
@@ -3350,11 +3362,11 @@ public class DocumentumAdaptorTest {
     insertAclAudit("124", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "4501081f80000102", "dm_destroy", dateStr);
 
-    testUpdateAclsExceptions(Iterators.forArray(2, 0),
+    testUpdateAclsExceptions(Iterators.forArray(2, 0), true,
         ImmutableSet.of(
             new DocId("4501081f80000100"),
             new DocId("4501081f80000101")),
-        new Checkpoint(dateStr, "125"));
+        new Checkpoint(dateStr, "124"));
   }
 
   private void insertAuditTrailEvent(String date, String id, String eventName,
