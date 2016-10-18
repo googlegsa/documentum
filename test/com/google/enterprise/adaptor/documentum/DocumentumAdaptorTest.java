@@ -4502,6 +4502,23 @@ public class DocumentumAdaptorTest {
     return ImmutableList.copyOf(paths);
   }
 
+  private List<Record> getModifiedDocIdsPushed(DocumentumAdaptor adaptor,
+      boolean throwsException, Checkpoint checkpoint)
+          throws IOException, InterruptedException {
+    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
+    adaptor.modifiedDocumentTraverser.setCheckpoint(checkpoint);
+    try {
+      adaptor.getModifiedDocIds(pusher);
+      assertFalse("Expected an exception at " + checkpoint.toString(),
+          throwsException);
+    } catch (IOException e) {
+      if (!throwsException) {
+        throw e;
+      }
+    }
+    return pusher.getRecords();
+  }
+
   private void checkModifiedDocIdsPushed(List<String> startPaths,
       Checkpoint checkpoint, List<Record> expectedRecords,
       Checkpoint expectedCheckpoint)
@@ -4509,11 +4526,8 @@ public class DocumentumAdaptorTest {
     DocumentumAdaptor adaptor = getObjectUnderTest(
         ImmutableMap.of("documentum.src", Joiner.on(",").join(startPaths)));
 
-    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
-    adaptor.modifiedDocumentTraverser.setCheckpoint(checkpoint);
-    adaptor.getModifiedDocIds(pusher);
-
-    assertEquals(expectedRecords, pusher.getRecords());
+    assertEquals(expectedRecords,
+        getModifiedDocIdsPushed(adaptor, false, checkpoint));
     assertEquals(expectedCheckpoint,
         adaptor.modifiedDocumentTraverser.getCheckpoint());
   }
@@ -4776,6 +4790,78 @@ public class DocumentumAdaptorTest {
         new Checkpoint(FEB_1970, folder),
         makeExpectedDocIds(folder, "foo", "bar", "baz"),
         new Checkpoint(MAR_1970, "0b01081f80001003"));
+  }
+
+  @Test
+  public void testUpdateDocsFirstRowException()
+      throws Exception {
+    String folderId = "0b01081f80001000";
+    String folder = "/Folder1";
+    insertFolder(EPOCH_1970, folderId, folder);
+    insertDocument(JAN_1970, "0901081f80001001", folder + "/foo", folderId);
+    insertDocument(FEB_1970, "0901081f80001002", folder + "/bar", folderId);
+    insertDocument(MAR_1970, "0901081f80001003", folder + "/baz", folderId);
+
+    DocumentumAdaptor adaptor =
+        getObjectUnderTest(new ExceptionalResultSetTestProxies(
+            "FROM dm_sysobject WHERE", 0,
+            new DfException("Expected failure in first event")),
+            ImmutableMap.of("documentum.src",
+                Joiner.on(",").join(startPaths(folder))));
+
+    thrown.expect(IOException.class);
+    thrown.expectMessage("Expected failure in first event");
+    getModifiedDocIdsPushed(adaptor, false,
+        new Checkpoint(JAN_1970, "0901081f80001001"));
+  }
+
+  private void testUpdateDocsExceptions(String folder,
+      Iterator<Integer> failIterations, boolean throwsException,
+      Checkpoint checkpoint, List<Record> expected,
+      Checkpoint expectedCheckpoint) throws Exception {
+    DocumentumAdaptor adaptor =
+        getObjectUnderTest(new ExceptionalResultSetTestProxies(
+            "FROM dm_sysobject WHERE", failIterations,
+            new DfException("Expected failure")),
+            ImmutableMap.of("documentum.src",
+                Joiner.on(",").join(startPaths(folder))));
+
+    assertEquals(expected,
+        getModifiedDocIdsPushed(adaptor, throwsException, checkpoint));
+    assertEquals(expectedCheckpoint,
+        adaptor.modifiedDocumentTraverser.getCheckpoint());
+  }
+
+  @Test
+  public void testUpdateDocsOtherRowsException()
+      throws Exception {
+    String folderId = "0b01081f80001000";
+    String folder = "/Folder1";
+    insertFolder(EPOCH_1970, folderId, folder);
+    insertDocument(JAN_1970, "0901081f80001001", folder + "/foo", folderId);
+    insertDocument(FEB_1970, "0901081f80001002", folder + "/bar", folderId);
+    insertDocument(MAR_1970, "0901081f80001003", folder + "/baz", folderId);
+
+    testUpdateDocsExceptions(folder, Iterators.cycle(1), false,
+        new Checkpoint(JAN_1970, "0901081f80001001"),
+        makeExpectedDocIds(folder, "bar", "baz"),
+        new Checkpoint(MAR_1970, "0901081f80001003"));
+  }
+
+  @Test
+  public void testUpdateDocsPartialRowsException()
+      throws Exception {
+    String folderId = "0b01081f80001000";
+    String folder = "/Folder1";
+    insertFolder(EPOCH_1970, folderId, folder);
+    insertDocument(JAN_1970, "0901081f80001001", folder + "/foo", folderId);
+    insertDocument(FEB_1970, "0901081f80001002", folder + "/bar", folderId);
+    insertDocument(MAR_1970, "0901081f80001003", folder + "/baz", folderId);
+
+    testUpdateDocsExceptions(folder, Iterators.forArray(1, 0), true,
+        new Checkpoint(JAN_1970, "0901081f80001001"),
+        makeExpectedDocIds(folder, "bar"),
+        new Checkpoint(FEB_1970, "0901081f80001002"));
   }
 
   private DocumentumAdaptor getObjectUnderTestDocumentTypes(String... types)
