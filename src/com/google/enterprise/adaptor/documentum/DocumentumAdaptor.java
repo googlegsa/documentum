@@ -1361,24 +1361,22 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       logger.log(Level.FINER, "Object Id: {0}; Type: {1}",
           new Object[] {dmObjId, type.getName()});
 
-      Date lastCrawled = req.getLastAccessTime();
-      if (lastCrawled != null) {
-        Date lastModified = dmPersObj.getTime("r_modify_date").getDate();
-        if (lastModified != null) {
-          // To avoid issues with time zones, we only count an object as
-          // unmodified if its last modified time is more than a day before
-          // the last crawl time.
-          if (lastModified.before(
-              new Date(lastCrawled.getTime() - ONE_DAY_MILLIS))) {
-            logger.log(Level.FINER, "Not Modified: {0}", dmObjId);
-            resp.respondNotModified();
-            return;
-          }
-        }
-      }
-
       if (isValidatedDocumentType(type)) {
-        getDocumentContent(resp, (IDfSysObject) dmPersObj, id);
+        // To avoid issues with time zones, we only count an object as
+        // unmodified if its last modified time is more than a day before
+        // the last crawl time.
+        Date lastModified = dmPersObj.getTime("r_modify_date").getDate();
+        boolean respondNoContent = (lastModified != null)
+            && req.canRespondWithNoContent(
+                   new Date(lastModified.getTime() + ONE_DAY_MILLIS));
+
+        getDocumentContent(resp, (IDfSysObject) dmPersObj, id,
+            !respondNoContent);
+        if (respondNoContent) {
+          logger.log(Level.FINER,
+              "Content not modified since last crawl: {0}", dmObjId);
+          resp.respondNoContent();
+        }
       } else if (type.isTypeOf("dm_folder")) {
         getFolderContent(resp, (IDfFolder) dmPersObj, id);
       } else {
@@ -1484,7 +1482,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   /** Copies the Documentum document content into the response.
    * @throws URISyntaxException */
   private void getDocumentContent(Response resp, IDfSysObject dmSysbObj,
-      DocId id) throws DfException, IOException, URISyntaxException {
+      DocId id, boolean returnContent)
+      throws DfException, IOException, URISyntaxException {
     if (!markAllDocsAsPublic) {
       getACL(resp, dmSysbObj, id);
     }
@@ -1504,7 +1503,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     // The GSA does not support files larger than 2 GB.
     // The GSA will not index empty documents with binary content types,
     // so include the content type only when supplying content.
-    if (dmSysbObj.getPageCount() > 0 && dmSysbObj.getContentSize() > 0
+    if (returnContent
+        && dmSysbObj.getPageCount() > 0 && dmSysbObj.getContentSize() > 0
         && dmSysbObj.getContentSize() <= (2L << 30)) {
       String contentType = dmSysbObj.getFormat().getMIMEType();
       logger.log(Level.FINER, "Content Type: {0}", contentType);

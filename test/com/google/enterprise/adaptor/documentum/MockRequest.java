@@ -36,7 +36,8 @@ class MockRequest implements Request {
 
   @Override
   public boolean hasChangedSinceLastAccess(Date lastModified) {
-    return lastModified.after(lastAccess);
+    return (lastAccess == null || lastModified == null) ? true
+        : lastModified.after(lastAccess);
   }
 
   @Override
@@ -50,7 +51,7 @@ class MockRequest implements Request {
   }
 
   @Override
-  public boolean canRespondWithNoContent(Date d) {
-    throw new UnsupportedOperationException();
+  public boolean canRespondWithNoContent(Date lastModified) {
+    return !hasChangedSinceLastAccess(lastModified);
   }
 }

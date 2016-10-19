@@ -1770,7 +1770,7 @@ public class DocumentumAdaptorTest {
   }
 
   private void testDocContent(Date lastCrawled, Date lastModified,
-      boolean expectNotModified) throws DfException, IOException, SQLException {
+      boolean expectNoContent) throws DfException, IOException, SQLException {
     String path = START_PATH + "/object1";
     String mimeType = "text/html";
     String content = "<html><body>Hello</body></html>";
@@ -1779,12 +1779,15 @@ public class DocumentumAdaptorTest {
     MockResponse response = getDocContent(ImmutableMap.<String, String>of(),
         new MockRequest(DocumentumAdaptor.docIdFromPath(path), lastCrawled));
 
-    if (expectNotModified) {
-      assertTrue(response.notModified);
+    assertFalse(response.notModified);
+    assertFalse(response.metadata.isEmpty());
+    assertNotNull(response.acl);
+    if (expectNoContent) {
+      assertTrue(response.noContent);
       assertEquals(null, response.contentType);
       assertEquals(null, response.content);
     } else {
-      assertFalse(response.notModified);
+      assertFalse(response.noContent);
       assertEquals(mimeType, response.contentType);
       assertEquals(content, response.content.toString(UTF_8.name()));
     }

@@ -34,7 +34,7 @@ import java.util.Map;
 // Copied from the Filesystem Adaptor, enhanced to support anchors and
 // multivalued metadata.
 class MockResponse implements Response {
-
+  boolean noContent = false;
   boolean notModified = false;
   boolean notFound = false;
   boolean noIndex = false;
@@ -46,6 +46,11 @@ class MockResponse implements Response {
   Map<String, Acl> namedResources = new HashMap<String, Acl>();
   Map<String, URI> anchors = new HashMap<String, URI>();
   ByteArrayOutputStream content;
+
+  @Override
+  public void respondNoContent() {
+    noContent = true;
+  }
 
   @Override
   public void respondNotModified() throws IOException {
@@ -125,11 +130,6 @@ class MockResponse implements Response {
 
   @Override
   public void setLock(boolean lock) {
-    throw new UnsupportedOperationException();
-  }
-
-  @Override
-  public void respondNoContent() {
     throw new UnsupportedOperationException();
   }
 
