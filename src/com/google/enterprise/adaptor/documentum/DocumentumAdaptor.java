@@ -1613,14 +1613,18 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
   }
 
-  /** Returns the Folder's contents as links in a generated HTML document. */
+  /** Returns the Folder's contents as links in a generated HTML document.
+   * @throws URISyntaxException */
   private void getFolderContent(Response resp, IDfFolder dmFolder, DocId id)
-      throws DfException, IOException {
+      throws DfException, IOException, URISyntaxException {
     if (!markAllDocsAsPublic) {
       getACL(resp, dmFolder, id);
     }
     // Include folder attributes as metadata.
     getMetadata(resp, dmFolder, id);
+
+    resp.setDisplayUrl(new URI(MessageFormat.format(displayUrl,
+        dmFolder.getObjectId(), docIdToPath(id))));
 
     logger.log(Level.FINER, "Listing contents of folder: {0} ",
         dmFolder.getObjectName());

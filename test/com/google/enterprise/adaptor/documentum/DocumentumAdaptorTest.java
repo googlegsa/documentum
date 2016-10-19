@@ -2244,6 +2244,19 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
+  public void testFolderDisplayUrl() throws Exception {
+    String now = getNowPlusMinutes(0);
+    String folderId = "0b01081f80078d29";
+    String folder = START_PATH + "/path2";
+    insertFolder(now, folderId, folder);
+    MockResponse response = getDocContent(folder);
+
+    assertNotNull(response.displayUrl);
+    assertEquals("http://webtop/drl/0b01081f80078d29",
+        response.displayUrl.toString());
+  }
+
+  @Test
   public void testGetDocContentNotFound() throws Exception {
     String path = START_PATH + "/doesNotExist";
     assertTrue(getDocContent(path).notFound);
