@@ -4144,11 +4144,27 @@ public class DocumentumAdaptorTest {
       Map<GroupPrincipal, ? extends Collection<? extends Principal>>
       expectedGroups, Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
-    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
-        ImmutableMap.of("documentum.pushLocalGroupsOnly", localGroupsOnly));
+    checkModifiedGroupsPushed(getObjectUnderTestNamespaces(
+        ImmutableMap.of("documentum.pushLocalGroupsOnly", localGroupsOnly)),
+        false, checkpoint, expectedGroups, expectedCheckpoint);
+  }
+
+  private void checkModifiedGroupsPushed(DocumentumAdaptor adaptor,
+      boolean throwsException, Checkpoint checkpoint,
+      Map<GroupPrincipal, ? extends Collection<? extends Principal>>
+      expectedGroups, Checkpoint expectedCheckpoint)
+      throws DfException, IOException, InterruptedException {
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.modifiedGroupTraverser.setCheckpoint(checkpoint);
-    adaptor.getModifiedDocIds(pusher);
+
+    try {
+      adaptor.getModifiedDocIds(pusher);
+      assertFalse("Expected an exception at " + checkpoint, throwsException);
+    } catch (IOException e) {
+      if (!throwsException) {
+        throw e;
+      }
+    }
 
     assertEquals(expectedGroups, pusher.getGroups());
     assertEquals(expectedCheckpoint,
@@ -4249,6 +4265,93 @@ public class DocumentumAdaptorTest {
     checkModifiedGroupsPushed(LocalGroupsOnly.TRUE,
         new Checkpoint(JAN_1970, "12Group1"), expected,
         new Checkpoint(FEB_1970, "12Group2"));
+  }
+
+  @Test
+  public void testGetGroupUpdatesFirstRowException() throws Exception {
+    insertUsers("User1", "User2");
+    String dateStr = getNowPlusMinutes(5);
+    insertModifiedGroup(dateStr, "Group1", "User1");
+    insertModifiedGroup(dateStr, "Group2", "User2");
+
+    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+        new ExceptionalResultSetTestProxies(
+            "AS r_modify_date_str FROM dm_group", 0,
+            new DfException("Expected failure in first event")),
+        ImmutableMap.<String, String>of());
+    adaptor.modifiedGroupTraverser.setCheckpoint(Checkpoint.incremental());
+
+    thrown.expect(IOException.class);
+    thrown.expectMessage("Expected failure in first event");
+    adaptor.getModifiedDocIds(new AccumulatingDocIdPusher());
+  }
+
+  private void testGetGroupUpdatesExceptions(Iterator<Integer> failIterations,
+      boolean throwsException,
+      Map<GroupPrincipal, ? extends Collection<? extends Principal>>
+      expectedGroups, Checkpoint expectedCheckpoint)
+      throws DfException, IOException, InterruptedException {
+    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+        new ExceptionalResultSetTestProxies(
+            "AS r_modify_date_str FROM dm_group", failIterations,
+            new DfException("Expected failure")),
+        ImmutableMap.<String, String>of());
+    // TODO (bmj): Check other exception tests for setting the sleeper.
+    adaptor.modifiedGroupTraverser.setSleeper(NO_SLEEP);
+    checkModifiedGroupsPushed(adaptor, throwsException,
+         Checkpoint.incremental(), expectedGroups, expectedCheckpoint);
+  }
+
+  @Test
+  public void testGetGroupUpdatesOtherRowsException() throws Exception {
+    insertUsers("User0", "User1", "User2");
+    String dateStr = getNowPlusMinutes(5);
+    insertModifiedGroup(dateStr, "Group0", "User0");
+    insertModifiedGroup(dateStr, "Group1", "User1");
+    insertModifiedGroup(dateStr, "Group2", "User2");
+
+    testGetGroupUpdatesExceptions(Iterators.cycle(2), false,
+        ImmutableMap.of(new GroupPrincipal("Group0", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User0", "NS")),
+            new GroupPrincipal("Group1", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User1", "NS")),
+            new GroupPrincipal("Group2", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User2", "NS"))),
+        new Checkpoint(dateStr, "12Group2"));
+  }
+
+  @Test
+  public void testGetGroupUpdatesMidGroupException() throws Exception {
+    insertUsers("User0", "User1", "User2");
+    String dateStr = getNowPlusMinutes(5);
+    insertModifiedGroup(dateStr, "Group0", "User0");
+    insertModifiedGroup(dateStr, "Group1", "User1", "User2");
+    insertModifiedGroup(dateStr, "Group2", "User2");
+
+    testGetGroupUpdatesExceptions(Iterators.forArray(2, -1), false,
+        ImmutableMap.of(new GroupPrincipal("Group0", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User0", "NS")),
+            new GroupPrincipal("Group1", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                new UserPrincipal("User2", "NS")),
+            new GroupPrincipal("Group2", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User2", "NS"))),
+        new Checkpoint(dateStr, "12Group2"));
+  }
+
+  @Test
+  public void testGetGroupUpdatesPartialRowsException() throws Exception {
+    insertUsers("User0", "User1", "User2");
+    String dateStr = getNowPlusMinutes(5);
+    insertModifiedGroup(dateStr, "Group0", "User0");
+    insertModifiedGroup(dateStr, "Group1", "User1", "User2");
+    insertModifiedGroup(dateStr, "Group2", "User2");
+
+    // Fail on group transition the second time.
+    testGetGroupUpdatesExceptions(Iterators.forArray(2, 2), true,
+        ImmutableMap.of(new GroupPrincipal("Group0", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User0", "NS"))),
+        new Checkpoint(dateStr, "12Group0"));
   }
 
   /**
