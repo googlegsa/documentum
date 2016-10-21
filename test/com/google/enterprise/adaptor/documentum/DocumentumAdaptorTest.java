@@ -222,6 +222,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.src", START_PATH);
     config.addKey("documentum.src.separator", ",");
     config.addKey("documentum.documentTypes", "dm_document");
+    config.addKey("documentum.indexFolders", "true");
     config.addKey("documentum.excludedAttributes", "");
     config.addKey("adaptor.namespace", "globalNS");
     config.addKey("documentum.windowsDomain", "");
@@ -1992,6 +1993,124 @@ public class DocumentumAdaptorTest {
 
     Acl acl = getACL(folder, MarkAllDocsPublic.TRUE);
     assertNull(acl);
+  }
+
+  private void testFolderAcl(boolean indexFolder, boolean allDocsPubilc,
+      boolean expectAcl) throws Exception {
+    String now = getNowPlusMinutes(0);
+    String folderId = "0bfolder1";
+    String folder = START_PATH + "/path2";
+    String folderACL = "45FolderAcl";
+    insertFolder(now, folderId, folder);
+    setSysObjectACL(folder, folderACL);
+
+    MockResponse response = getDocContent(ImmutableMap.of(
+            "adaptor.markAllDocsAsPublic", allDocsPubilc,
+            "documentum.indexFolders", indexFolder),
+            new MockRequest(DocumentumAdaptor.docIdFromPath(folder)));
+
+    if (expectAcl) {
+      assertNotNull(response.acl);
+      assertEquals(new DocId(folderACL), response.acl.getInheritFrom());
+    } else {
+      assertNull(response.acl);
+    }
+  }
+
+  @Test
+  public void testFolderAcl_noIndex_public() throws Exception {
+    testFolderAcl(false, true, false);
+  }
+
+  @Test
+  public void testFolderAcl_index_public() throws Exception {
+    testFolderAcl(true, true, false);
+  }
+
+  @Test
+  public void testFolderAcl_noIndex_nonPublic() throws Exception {
+    testFolderAcl(false, false, false);
+  }
+
+  @Test
+  public void testFolderAcl_index_nonPublic() throws Exception {
+    testFolderAcl(true, false, true);
+  }
+
+  private void testFolderMetadata(TreeMultimap<String, String> attrs,
+      Map<String, String> configOverrides,
+      TreeMultimap<String, String> expected) throws Exception {
+    String now = getNowPlusMinutes(0);
+    String folderId = "0bfolder1";
+    String folder = START_PATH + "/path2";
+    insertFolder(now, folderId, folder);
+    writeAttributes(folderId, attrs);
+
+    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(folder));
+    MockResponse response = getDocContent(configOverrides, request);
+
+    assertEquals(expected, response.metadata);
+  }
+
+  @Test
+  public void testFolderMetadata_default() throws Exception {
+    TreeMultimap<String, String> attributes = TreeMultimap.create();
+    attributes.put("attr1", "value1");
+    attributes.put("attr2", "value2");
+    attributes.put("attr3", "value3");
+    TreeMultimap<String, String> expected = TreeMultimap.create(attributes);
+    expected.put("r_object_id", "0bfolder1");
+
+    // documentum.indexFolders is set to true by default.
+    testFolderMetadata(attributes, ImmutableMap.of(), expected);
+  }
+
+  @Test
+  public void testFolderMetadata_noIndex() throws Exception {
+    TreeMultimap<String, String> attributes = TreeMultimap.create();
+    attributes.put("attr1", "value1");
+    attributes.put("attr2", "value2");
+    attributes.put("attr3", "value3");
+    TreeMultimap<String, String> expected = TreeMultimap.create();
+
+    testFolderMetadata(attributes,
+        ImmutableMap.of("documentum.indexFolders", "false"), expected);
+  }
+
+  @Test
+  public void testNoIndex_rootFolder() throws Exception {
+    insertCabinets("System", "Cabinet1", "Cabinet2");
+    MockResponse response =
+        getDocContent(ImmutableMap.of("documentum.src", "/"),
+            new MockRequest(DocumentumAdaptor.docIdFromPath("/")));
+
+    assertTrue(response.noIndex);
+  }
+
+  private void testNoIndex(Map<String, ?> configOverrides, boolean expected)
+      throws Exception {
+    String now = getNowPlusMinutes(0);
+    String folderId = "0bfolder1";
+    String folder = START_PATH + "/path2";
+    String folderACL = "45FolderAcl";
+    insertFolder(now, folderId, folder);
+    setSysObjectACL(folder, folderACL);
+
+    MockResponse response =
+        getDocContent(configOverrides,
+            new MockRequest(DocumentumAdaptor.docIdFromPath(folder)));
+
+    assertEquals(expected, response.noIndex);
+  }
+
+  @Test
+  public void testIndexFolder_default() throws Exception {
+    testNoIndex(ImmutableMap.of(), false);
+  }
+
+  @Test
+  public void testIndexFolder_false() throws Exception {
+    testNoIndex(ImmutableMap.of("documentum.indexFolders", "false"), true);
   }
 
   /*

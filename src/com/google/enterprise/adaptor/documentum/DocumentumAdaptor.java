@@ -115,6 +115,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       new CopyOnWriteArrayList<String>();
   private CopyOnWriteArrayList<String> validatedDocumentTypes =
       new CopyOnWriteArrayList<String>();
+  private boolean indexFolders;
 
   // The object attributes that should not be supplied as metadata.
   private Set<String> excludedAttributes;
@@ -321,6 +322,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     config.addKey("documentum.src", null);
     config.addKey("documentum.src.separator", ",");
     config.addKey("documentum.documentTypes", "dm_document");
+    config.addKey("documentum.indexFolders", "true");
     config.addKey("adaptor.namespace", Principal.DEFAULT_NAMESPACE);
     config.addKey("documentum.windowsDomain", "");
     config.addKey("documentum.pushLocalGroupsOnly", "false");
@@ -400,6 +402,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     documentTypes = ImmutableList.copyOf(Splitter.on(',').trimResults()
         .omitEmptyStrings().split(types));
     logger.log(Level.CONFIG, "document types: {0}", documentTypes);
+    indexFolders =
+        Boolean.parseBoolean(config.getValue("documentum.indexFolders"));
+    logger.log(Level.CONFIG, "documentum.indexFolders: {0}", indexFolders);
     queryBatchSize = getPositiveInt(config, "documentum.queryBatchSize");
     logger.log(Level.CONFIG, "documentum.queryBatchSize: {0}", queryBatchSize);
     maxHtmlSize = getPositiveInt(config, "documentum.maxHtmlSize");
@@ -1443,6 +1448,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    */
   private void getRootContent(Response resp, IDfSession session, DocId id)
       throws DfException, IOException {
+    resp.setNoIndex(true);
     // Select r_object_id to allow an object- or row-based query. See
     // "To return results by object ID" in the DQL Reference Manual.
     String queryStr = MessageFormat.format(
@@ -1633,14 +1639,16 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    * @throws URISyntaxException */
   private void getFolderContent(Response resp, IDfFolder dmFolder, DocId id)
       throws DfException, IOException, URISyntaxException {
-    if (!markAllDocsAsPublic) {
-      getACL(resp, dmFolder, id);
+    resp.setNoIndex(!indexFolders);
+    if (indexFolders) {
+      if (!markAllDocsAsPublic) {
+        getACL(resp, dmFolder, id);
+      }
+      // Include folder attributes as metadata.
+      getMetadata(resp, dmFolder, id);
+      resp.setDisplayUrl(new URI(MessageFormat.format(displayUrl,
+          dmFolder.getObjectId(), docIdToPath(id))));
     }
-    // Include folder attributes as metadata.
-    getMetadata(resp, dmFolder, id);
-
-    resp.setDisplayUrl(new URI(MessageFormat.format(displayUrl,
-        dmFolder.getObjectId(), docIdToPath(id))));
 
     logger.log(Level.FINER, "Listing contents of folder: {0} ",
         dmFolder.getObjectName());

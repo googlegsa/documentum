@@ -33,6 +33,9 @@ documentum.src =
 # its subtypes.
 # documentum.documentTypes = dm_document
 
+# Indicates whether to index folders and their metadata or not.
+# documentum.indexFolders = true
+
 # Global namespace. Local namespace is computed to be
 # “<adaptor.namespace>_<documentum.docbaseName>”.
 # adaptor.namespace = “Default”
