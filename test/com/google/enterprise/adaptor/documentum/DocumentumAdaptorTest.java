@@ -1509,11 +1509,6 @@ public class DocumentumAdaptorTest {
     private final Iterator<Integer> failIterations;
     private final DfException exceptionToThrow;
 
-    ExceptionalResultSetTestProxies(String queryFragment, int failIteration,
-        DfException exceptionToThrow) {
-      this(queryFragment, Iterators.cycle(failIteration), exceptionToThrow);
-    }
-
     ExceptionalResultSetTestProxies(String queryFragment,
         Iterator<Integer> failIterations, DfException exceptionToThrow) {
       this.queryFragment = queryFragment;
@@ -2680,7 +2675,8 @@ public class DocumentumAdaptorTest {
 
   private Map<DocId, Acl> getAllAcls() throws Exception {
     return getAllAcls(
-        getObjectUnderTestNamespaces(ImmutableMap.<String, String>of()));
+        getObjectUnderTestNamespaces(ImmutableMap.<String, String>of()),
+        null);
   }
 
   private Map<DocId, Acl> getAllAcls(String windowsDomain, int batchSize)
@@ -2688,13 +2684,22 @@ public class DocumentumAdaptorTest {
     return getAllAcls(getObjectUnderTestNamespaces(
         ImmutableMap.of(
             "documentum.windowsDomain", windowsDomain,
-            "documentum.queryBatchSize", batchSize)));
+            "documentum.queryBatchSize", batchSize)),
+        null);
   }
 
-  private Map<DocId, Acl> getAllAcls(DocumentumAdaptor adaptor)
+  private Map<DocId, Acl> getAllAcls(DocumentumAdaptor adaptor,
+      DfException expectedCause)
       throws DfException, IOException, InterruptedException {
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
-    adaptor.getDocIds(pusher);
+    try {
+      adaptor.getDocIds(pusher);
+      assertNull("Expected an exception: " + expectedCause, expectedCause);
+    } catch (IOException e) {
+      if (expectedCause == null || expectedCause != e.getCause()) {
+        throw e;
+      }
+    }
     return pusher.getNamedResources();
   }
 
@@ -2727,8 +2732,48 @@ public class DocumentumAdaptorTest {
     }
   }
 
+  private void testGetAclsExceptions(Iterator<Integer> failIterations,
+      Map<String, ?> configOverrides,
+      DfException expectedCause,
+      Set<DocId> expectedDocids)
+     throws DfException, IOException, InterruptedException {
+    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+        new ExceptionalResultSetTestProxies(
+            "FROM dm_acl", failIterations,
+            (expectedCause != null) ? expectedCause
+            : new DfException("Recoverable exception should be handled")),
+        configOverrides);
+    adaptor.aclTraverser.setSleeper(NO_SLEEP);
+    assertEquals(expectedDocids, getAllAcls(adaptor, expectedCause).keySet());
+  }
+
   @Test
-  public void testGetAllAclsThrownExceptions() throws Exception {
+  public void testGetAllAclsFirstRowException() throws Exception {
+    createAcls("4501081f80000100",
+        "4501081f80000101",  "4501081f80000102",  "4501081f80000103",
+        "4501081f80000104",  "4501081f80000105",  "4501081f80000106");
+
+    testGetAclsExceptions(Iterators.singletonIterator(0),
+        ImmutableMap.<String, String>of(),
+        new DfException("Expected exception on first ACL"),
+        ImmutableSet.<DocId>of());
+  }
+
+  @Test
+  public void testGetAllAclsPartialRowException() throws Exception {
+    createAcls("4501081f80000100",
+        "4501081f80000101",  "4501081f80000102",  "4501081f80000103",
+        "4501081f80000104",  "4501081f80000105",  "4501081f80000106");
+
+    testGetAclsExceptions(Iterators.forArray(2, 0),
+        ImmutableMap.<String, String>of(),
+        new DfException("Expected repeated exception"),
+        ImmutableSet.of(new DocId("4501081f80000100"),
+            new DocId("4501081f80000101")));
+  }
+
+  @Test
+  public void testGetAllAclsOtherRowsException() throws Exception {
     Set<DocId> expected = createAcls("4501081f80000100",
         "4501081f80000101",  "4501081f80000102",  "4501081f80000103",
         "4501081f80000104",  "4501081f80000105",  "4501081f80000106");
@@ -2739,13 +2784,10 @@ public class DocumentumAdaptorTest {
     for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize++) {
       int maxBatchSize = (batchSize == 0) ? expected.size() : batchSize;
       for (int failIter = 1; failIter <= maxBatchSize; failIter++) {
-        DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
-            new ExceptionalResultSetTestProxies("FROM dm_acl", failIter,
-                new DfException("Expected failure at iteration " + failIter)),
-            ImmutableMap.of("documentum.queryBatchSize", batchSize));
-        adaptor.aclTraverser.setSleeper(NO_SLEEP);
-        assertEquals("batchSize: " + batchSize + "  failIter: " + failIter,
-            expected, getAllAcls(adaptor).keySet());
+        testGetAclsExceptions(Iterators.cycle(failIter),
+            ImmutableMap.of("documentum.queryBatchSize", batchSize),
+            null,
+            expected);
       }
     }
   }
@@ -3258,22 +3300,21 @@ public class DocumentumAdaptorTest {
   private Map<DocId, Acl> testUpdateAcls(Checkpoint checkpoint,
       Set<DocId> expectedAclIds, Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
-    return testUpdateAcls(getObjectUnderTest(), checkpoint, false,
+    return testUpdateAcls(getObjectUnderTest(), checkpoint, null,
         expectedAclIds, expectedCheckpoint);
   }
 
   private Map<DocId, Acl> testUpdateAcls(DocumentumAdaptor adaptor,
-      Checkpoint checkpoint, boolean throwsException, Set<DocId> expectedAclIds,
-      Checkpoint expectedCheckpoint)
+      Checkpoint checkpoint, DfException expectedCause,
+      Set<DocId> expectedAclIds, Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.modifiedAclTraverser.setCheckpoint(checkpoint);
     try {
       adaptor.getModifiedDocIds(pusher);
-      assertFalse("Expected an exception at " + checkpoint.toString(),
-          throwsException);
+      assertNull("Expected an exception at " + checkpoint, expectedCause);
     } catch (IOException e) {
-      if (!throwsException) {
+      if (expectedCause == null || expectedCause != e.getCause()) {
         throw e;
       }
     }
@@ -3467,29 +3508,24 @@ public class DocumentumAdaptorTest {
     insertAclAudit("124", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "4501081f80000102", "dm_destroy", dateStr);
 
-    DocumentumAdaptor adaptor = getObjectUnderTest(
-        new ExceptionalResultSetTestProxies(
-            "FROM dm_audittrail_acl", 0,
-            new DfException("Expected failure in first event")),
-        ImmutableMap.<String, String>of());
-    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
-
-    thrown.expect(IOException.class);
-    thrown.expectMessage("Expected failure in first event");
-    adaptor.getModifiedDocIds(pusher);
+    testUpdateAclsExceptions(Iterators.singletonIterator(0),
+        new DfException("Expected failure in first row"),
+        ImmutableSet.<DocId>of(),
+        Checkpoint.incremental());
   }
 
   private void testUpdateAclsExceptions(Iterator<Integer> failIterations,
-      boolean throwsException, Set<DocId> expectedAclIds,
-      Checkpoint expectedCheckpoint)
+      DfException expectedCause,
+      Set<DocId> expectedAclIds, Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
     DocumentumAdaptor adaptor = getObjectUnderTest(
         new ExceptionalResultSetTestProxies(
             "FROM dm_audittrail_acl", failIterations,
-            new DfException("Expected failure")),
+            (expectedCause != null) ? expectedCause
+            : new DfException("Recoverable exception should be handled")),
         ImmutableMap.<String, String>of());
-
-    testUpdateAcls(adaptor, Checkpoint.incremental(), throwsException,
+    adaptor.modifiedAclTraverser.setSleeper(NO_SLEEP);
+    testUpdateAcls(adaptor, Checkpoint.incremental(), expectedCause,
         expectedAclIds, expectedCheckpoint);
   }
 
@@ -3502,7 +3538,8 @@ public class DocumentumAdaptorTest {
     insertAclAudit("124", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "4501081f80000102", "dm_destroy", dateStr);
 
-    testUpdateAclsExceptions(Iterators.cycle(1), false,
+    testUpdateAclsExceptions(Iterators.cycle(1),
+        null,
         ImmutableSet.of(
             new DocId("4501081f80000100"),
             new DocId("4501081f80000101"),
@@ -3519,7 +3556,8 @@ public class DocumentumAdaptorTest {
     insertAclAudit("124", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "4501081f80000102", "dm_destroy", dateStr);
 
-    testUpdateAclsExceptions(Iterators.forArray(2, 0), true,
+    testUpdateAclsExceptions(Iterators.forArray(2, 0),
+        new DfException("Expected Partial Rows Exception"),
         ImmutableSet.of(
             new DocId("4501081f80000100"),
             new DocId("4501081f80000101")),
@@ -3726,18 +3764,15 @@ public class DocumentumAdaptorTest {
   }
 
   private List<Record> getModifiedDocIds(DocumentumAdaptor adaptor,
-      boolean throwsException) throws Exception {
+      DfException expectedCause) throws Exception {
     Checkpoint docCheckpoint = insertTestDocuments();
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.modifiedDocumentTraverser.setCheckpoint(docCheckpoint);
-    adaptor.modifiedPermissionsTraverser
-        .setCheckpoint(Checkpoint.incremental());
     try {
       adaptor.getModifiedDocIds(pusher);
-      assertFalse("Expected an exception at "
-          + Checkpoint.incremental().toString(), throwsException);
+      assertNull("Expected an exception: " + expectedCause, expectedCause);
     } catch (IOException e) {
-      if (!throwsException) {
+      if (expectedCause == null || expectedCause != e.getCause()) {
         throw e;
       }
     }
@@ -3752,27 +3787,23 @@ public class DocumentumAdaptorTest {
     insertAuditTrailAclEvent(dateStr, "5f124", "09515");
     insertAuditTrailAclEvent(dateStr, "5f125", "09516");
 
-    DocumentumAdaptor adaptor =
-        getObjectUnderTest(new ExceptionalResultSetTestProxies(
-            "FROM dm_sysobject s, dm_audittrail a", 0,
-            new DfException("Expected failure in first event")),
-            ImmutableMap.<String, String>of());
-
-    thrown.expect(IOException.class);
-    thrown.expectMessage("Expected failure in first event");
-    getModifiedDocIds(adaptor, false);
+    testUpdatePermissionsExceptions(Iterators.singletonIterator(0),
+        new DfException("Expected failure in first row"),
+        ImmutableList.<Record>of(), Checkpoint.incremental());
   }
 
   private void testUpdatePermissionsExceptions(
-      Iterator<Integer> failIterations, boolean throwsException,
-      List<Record> expected, Checkpoint expectedCheckpoint) throws Exception {
+      Iterator<Integer> failIterations,
+      DfException expectedCause, List<Record> expectedRecords,
+      Checkpoint expectedCheckpoint) throws Exception {
     DocumentumAdaptor adaptor =
         getObjectUnderTest(new ExceptionalResultSetTestProxies(
             "FROM dm_sysobject s, dm_audittrail a", failIterations,
-            new DfException("Expected failure")),
+            (expectedCause != null) ? expectedCause
+            : new DfException("Recoverable exception should be handled")),
             ImmutableMap.<String, String>of());
-
-    assertEquals(expected, getModifiedDocIds(adaptor, throwsException));
+    adaptor.modifiedPermissionsTraverser.setSleeper(NO_SLEEP);
+    assertEquals(expectedRecords, getModifiedDocIds(adaptor, expectedCause));
     assertEquals(expectedCheckpoint,
         adaptor.modifiedPermissionsTraverser.getCheckpoint());
   }
@@ -3785,10 +3816,9 @@ public class DocumentumAdaptorTest {
     insertAuditTrailAclEvent(dateStr, "5f124", "09515");
     insertAuditTrailAclEvent(dateStr, "5f125", "09516");
 
-    List<Record> expected =
-        makeExpectedDocIds(START_PATH, "file1", "file2", "file3");
-
-    testUpdatePermissionsExceptions(Iterators.cycle(1), false, expected,
+    testUpdatePermissionsExceptions(Iterators.cycle(1),
+        null,
+        makeExpectedDocIds(START_PATH, "file1", "file2", "file3"),
         new Checkpoint(dateStr, "5f125"));
   }
 
@@ -3800,10 +3830,9 @@ public class DocumentumAdaptorTest {
     insertAuditTrailAclEvent(dateStr, "5f124", "09515");
     insertAuditTrailAclEvent(dateStr, "5f125", "09516");
 
-    List<Record> expected =
-        makeExpectedDocIds(START_PATH, "file1", "file2");
-
-    testUpdatePermissionsExceptions(Iterators.forArray(2, 0), true, expected,
+    testUpdatePermissionsExceptions(Iterators.forArray(2, 0),
+        new DfException("Expected Partial Rows Exception"),
+        makeExpectedDocIds(START_PATH, "file1", "file2"),
         new Checkpoint(dateStr, "5f124"));
   }
 
@@ -3833,14 +3862,21 @@ public class DocumentumAdaptorTest {
       Map<String, ?> configOverrides)
       throws DfException, IOException, InterruptedException {
     return getGroups(getObjectUnderTestNamespaces(
-        new H2BackedTestProxies(), configOverrides));
+        new H2BackedTestProxies(), configOverrides), null);
   }
 
   private Map<GroupPrincipal, ? extends Collection<Principal>> getGroups(
-      DocumentumAdaptor adaptor)
+      DocumentumAdaptor adaptor, DfException expectedCause)
       throws DfException, IOException, InterruptedException {
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
-    adaptor.getDocIds(pusher);
+    try {
+      adaptor.getDocIds(pusher);
+      assertNull("Expected an exception: " + expectedCause, expectedCause);
+    } catch (IOException e) {
+      if (expectedCause == null || expectedCause != e.getCause()) {
+        throw e;
+      }
+    }
     return pusher.getGroups();
   }
 
@@ -3889,8 +3925,44 @@ public class DocumentumAdaptorTest {
     }
   }
 
+  private void testDmWorldExceptions(Iterator<Integer> failIterations,
+      Map<String, ?> configOverrides,
+      DfException expectedCause,
+      Map<GroupPrincipal, ? extends Collection<? extends Principal>>
+      expectedGroups) throws DfException, IOException, InterruptedException {
+    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+        new ExceptionalResultSetTestProxies(
+            "FROM dm_user", failIterations,
+            (expectedCause != null) ? expectedCause
+            : new DfException("Recoverable exception should be handled")),
+        configOverrides);
+    adaptor.dmWorldTraverser.setSleeper(NO_SLEEP);
+    assertEquals(expectedGroups, getGroups(adaptor, expectedCause));
+  }
+
   @Test
-  public void testDmWorldTraversalThrownExceptions() throws Exception {
+  public void testDmWorldTraversalFirstRowException() throws Exception {
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+
+    testDmWorldExceptions(Iterators.singletonIterator(0),
+        ImmutableMap.<String, String>of(),
+        new DfException("Expected failure in first user"),
+        ImmutableMap.<GroupPrincipal, Set<Principal>>of());
+  }
+
+  @Test
+  public void testDmWorldTraversalPartialRowExceptions() throws Exception {
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+
+    // Double failure on User3 should abort effort to read all the users.
+    testDmWorldExceptions(Iterators.forArray(2, 0),
+        ImmutableMap.<String, String>of(),
+        new DfException("Expected Partial Row Exception"),
+        ImmutableMap.<GroupPrincipal, Set<Principal>>of());
+  }
+
+  @Test
+  public void testDmWorldTraversalOtherRowsExceptions() throws Exception {
     insertUsers("User1", "User2", "User3", "User4", "User5");
 
     // The only group should be the virtual group, dm_world, which consists
@@ -3909,13 +3981,10 @@ public class DocumentumAdaptorTest {
     for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize++) {
       int maxBatchSize = (batchSize == 0) ? expected.size() : batchSize;
       for (int failIter = 1; failIter <= maxBatchSize; failIter++) {
-        DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
-            new ExceptionalResultSetTestProxies("FROM dm_user", failIter,
-                new DfException("Expected failure at iteration " + failIter)),
-            ImmutableMap.of("documentum.queryBatchSize", batchSize));
-        adaptor.dmWorldTraverser.setSleeper(NO_SLEEP);
-        assertEquals("batchSize: " + batchSize + "  failIter: " + failIter,
-            expected, getGroups(adaptor));
+        testDmWorldExceptions(Iterators.cycle(failIter),
+            ImmutableMap.of("documentum.queryBatchSize", batchSize),
+            null,
+            expected);
       }
     }
   }
@@ -4030,6 +4099,22 @@ public class DocumentumAdaptorTest {
     }
   }
 
+  private void testGetGroupsExceptions(Iterator<Integer> failIterations,
+      String queryFragment, Map<String, ?> configOverrides,
+      DfException expectedCause,
+      Map<GroupPrincipal, ? extends Collection<? extends Principal>>
+      expectedGroups) throws DfException, IOException, InterruptedException {
+    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+        new ExceptionalResultSetTestProxies(
+            queryFragment, failIterations,
+            (expectedCause != null) ? expectedCause
+            : new DfException("Recoverable exception should be handled")),
+        configOverrides);
+    adaptor.groupTraverser.setSleeper(NO_SLEEP);
+    assertEquals(expectedGroups,
+        filterDmWorld(getGroups(adaptor, expectedCause)));
+  }
+
   @Test
   public void testGetGroupsThrownExceptionInFirstCandidate()
       throws Exception {
@@ -4037,15 +4122,11 @@ public class DocumentumAdaptorTest {
     insertGroup("Group1", "User1");
     insertGroup("Group2", "User2");
 
-    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
-        new ExceptionalResultSetTestProxies(
-            "SELECT r_object_id FROM dm_group", 0,
-            new DfException("Expected failure in first candidate")),
-        ImmutableMap.of("documentum.queryBatchSize", 10));
-    adaptor.groupTraverser.setSleeper(NO_SLEEP);
-    thrown.expect(IOException.class);
-    thrown.expectMessage("Expected failure in first candidate");
-    getGroups(adaptor);
+    testGetGroupsExceptions(Iterators.singletonIterator(0),
+        "SELECT r_object_id FROM dm_group",
+        ImmutableMap.of("documentum.queryBatchSize", 10),
+        new DfException("Expected failure in first candidate"),
+        ImmutableMap.<GroupPrincipal, Set<Principal>>of());
   }
 
   @Test
@@ -4058,8 +4139,11 @@ public class DocumentumAdaptorTest {
     insertGroup("Group4", "User4");
     insertGroup("Group5", "User5");
 
-    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-       expected = ImmutableMap.of(
+    testGetGroupsExceptions(Iterators.cycle(2),
+        "SELECT r_object_id FROM dm_group",
+        ImmutableMap.of("documentum.queryBatchSize", 10),
+        null,
+        ImmutableMap.of(
            new GroupPrincipal("Group1", "NS_Local"),
                ImmutableSet.of(new UserPrincipal("User1", "NS")),
            new GroupPrincipal("Group2", "NS_Local"),
@@ -4069,15 +4153,7 @@ public class DocumentumAdaptorTest {
            new GroupPrincipal("Group4", "NS_Local"),
                ImmutableSet.of(new UserPrincipal("User4", "NS")),
            new GroupPrincipal("Group5", "NS_Local"),
-               ImmutableSet.of(new UserPrincipal("User5", "NS")));
-
-    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
-        new ExceptionalResultSetTestProxies(
-            "SELECT r_object_id FROM dm_group", 2,
-            new DfException("Expected failure in candidates")),
-        ImmutableMap.of("documentum.queryBatchSize", 10));
-    adaptor.groupTraverser.setSleeper(NO_SLEEP);
-    assertEquals(expected, filterDmWorld(getGroups(adaptor)));
+               ImmutableSet.of(new UserPrincipal("User5", "NS"))));
   }
 
   @Test
@@ -4108,13 +4184,11 @@ public class DocumentumAdaptorTest {
     // single row in the result set.
     // Note: a batch size of 0, means no batching.
     for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize++) {
-      DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
-          new ExceptionalResultSetTestProxies("ENABLE(ROW_BASED)", 2,
-              new DfException("Expected failure at batch size " + batchSize)),
-          ImmutableMap.of("documentum.queryBatchSize", batchSize));
-      adaptor.groupTraverser.setSleeper(NO_SLEEP);
-      assertEquals("batchSize: " + batchSize,
-            expected, filterDmWorld(getGroups(adaptor)));
+      testGetGroupsExceptions(Iterators.cycle(2),
+          "ENABLE(ROW_BASED)",
+          ImmutableMap.of("documentum.queryBatchSize", batchSize),
+          null,
+          expected);
     }
   }
 
@@ -4125,14 +4199,11 @@ public class DocumentumAdaptorTest {
     insertGroup("Group1", "User1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
 
-    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
-        new ExceptionalResultSetTestProxies("ENABLE(ROW_BASED)", 2,
-            new DfException("Expected failure in first group")),
-        ImmutableMap.<String, String>of());
-    adaptor.groupTraverser.setSleeper(NO_SLEEP);
-    thrown.expect(IOException.class);
-    thrown.expectMessage("Expected failure in first group");
-    getGroups(adaptor);
+    testGetGroupsExceptions(Iterators.singletonIterator(1),
+        "ENABLE(ROW_BASED)",
+        ImmutableMap.<String, String>of(),
+        new DfException("Expected failure in first group"),
+        ImmutableMap.<GroupPrincipal, Set<Principal>>of());
   }
 
   @Test
@@ -4160,74 +4231,29 @@ public class DocumentumAdaptorTest {
     // Fetch all the groups in various sized batches, throwing an exception
     // mid-group. Note: a batch size of 0, means no batching.
     for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize += 2) {
-      DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
-          new ExceptionalResultSetTestProxies("ENABLE(ROW_BASED)", 6,
-              new DfException("Expected failure at batch size " + batchSize)),
-          ImmutableMap.of("documentum.queryBatchSize", batchSize));
-      adaptor.groupTraverser.setSleeper(NO_SLEEP);
-      assertEquals(expected, filterDmWorld(getGroups(adaptor)));
+      testGetGroupsExceptions(Iterators.cycle(5),
+          "ENABLE(ROW_BASED)",
+          ImmutableMap.of("documentum.queryBatchSize", batchSize),
+          null,
+          expected);
     }
   }
 
   @Test
-  public void testGetGroupsThrownExceptionLastGroup()
-      throws Exception {
-    insertUsers("User1", "User2", "User3", "User4");
-    insertGroup("Group1", "User1", "User2");
-    insertGroup("Group2", "User1", "User2", "User3", "User4");
-
-    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-       expected = ImmutableMap.of(
-           new GroupPrincipal("Group1", "NS_Local"),
-               ImmutableSet.of(new UserPrincipal("User1", "NS"),
-                               new UserPrincipal("User2", "NS")),
-           new GroupPrincipal("Group2", "NS_Local"),
-               ImmutableSet.of(new UserPrincipal("User1", "NS"),
-                               new UserPrincipal("User2", "NS"),
-                               new UserPrincipal("User3", "NS"),
-                               new UserPrincipal("User4", "NS")));
-
-    // Fetch all the groups in various sized batches, throwing an exception
-    // mid-group. Note: a batch size of 0, means no batching.
-    for (int batchSize = 0; batchSize <= expected.size() + 1; batchSize += 2) {
-      DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
-          new ExceptionalResultSetTestProxies("ENABLE(ROW_BASED)", 5,
-              new DfException("Expected failure at batch size " + batchSize)),
-          ImmutableMap.of("documentum.queryBatchSize", batchSize));
-      adaptor.groupTraverser.setSleeper(NO_SLEEP);
-      assertEquals(expected, filterDmWorld(getGroups(adaptor)));
-    }
-  }
-
-  @Test
-  public void testGetGroupsThrownExceptionAlwaysFailGroup()
-      throws Exception {
+  public void testGetGroupsPartialRowsException() throws Exception {
     insertUsers("User1", "User2", "User3", "User4", "User5");
     insertGroup("Group1", "User1");
     insertGroup("Group2", "User1", "User2", "User3", "User4");
     insertGroup("Group5", "User5");
 
-    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-       expected = ImmutableMap.of(new GroupPrincipal("Group1", "NS_Local"),
-           ImmutableSet.of(new UserPrincipal("User1", "NS")));
-
     // This should fail on Group2 the first time, and again on retry,
     // so only the first group will get pushed.
-    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
-        new ExceptionalResultSetTestProxies("ENABLE(ROW_BASED)", 3,
-            new DfException("Expected repeat failure")),
-        ImmutableMap.<String, String>of());
-    adaptor.groupTraverser.setSleeper(NO_SLEEP);
-    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
-
-    try {
-      adaptor.getDocIds(pusher);
-      fail("Expected IOException, but there was none");
-    } catch (IOException e) {
-      assertTrue(e.getMessage(),
-          e.getMessage().contains("Expected repeat failure"));
-    }
-    assertEquals(expected, filterDmWorld(pusher.getGroups()));
+    testGetGroupsExceptions(Iterators.cycle(2),
+        "ENABLE(ROW_BASED)",
+        ImmutableMap.<String, String>of(),
+        new DfException("Expected repeat failure"),
+        ImmutableMap.of(new GroupPrincipal("Group1", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User1", "NS"))));
   }
 
   @Test
@@ -4386,11 +4412,11 @@ public class DocumentumAdaptorTest {
       throws DfException, IOException, InterruptedException {
     checkModifiedGroupsPushed(getObjectUnderTestNamespaces(
         ImmutableMap.of("documentum.pushLocalGroupsOnly", localGroupsOnly)),
-        false, checkpoint, expectedGroups, expectedCheckpoint);
+        checkpoint, null, expectedGroups, expectedCheckpoint);
   }
 
   private void checkModifiedGroupsPushed(DocumentumAdaptor adaptor,
-      boolean throwsException, Checkpoint checkpoint,
+      Checkpoint checkpoint, DfException expectedCause,
       Map<GroupPrincipal, ? extends Collection<? extends Principal>>
       expectedGroups, Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
@@ -4399,9 +4425,9 @@ public class DocumentumAdaptorTest {
 
     try {
       adaptor.getModifiedDocIds(pusher);
-      assertFalse("Expected an exception at " + checkpoint, throwsException);
+      assertNull("Expected an exception at " + checkpoint, expectedCause);
     } catch (IOException e) {
-      if (!throwsException) {
+      if (expectedCause == null || expectedCause != e.getCause()) {
         throw e;
       }
     }
@@ -4514,32 +4540,27 @@ public class DocumentumAdaptorTest {
     insertModifiedGroup(dateStr, "Group1", "User1");
     insertModifiedGroup(dateStr, "Group2", "User2");
 
-    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
-        new ExceptionalResultSetTestProxies(
-            "AS r_modify_date_str FROM dm_group", 0,
-            new DfException("Expected failure in first event")),
-        ImmutableMap.<String, String>of());
-    adaptor.modifiedGroupTraverser.setCheckpoint(Checkpoint.incremental());
-
-    thrown.expect(IOException.class);
-    thrown.expectMessage("Expected failure in first event");
-    adaptor.getModifiedDocIds(new AccumulatingDocIdPusher());
+    testGetGroupUpdatesExceptions(Iterators.singletonIterator(0),
+        new DfException("Expected failure in first row"),
+        ImmutableMap.<GroupPrincipal, Set<Principal>>of(),
+        Checkpoint.incremental());
   }
 
   private void testGetGroupUpdatesExceptions(Iterator<Integer> failIterations,
-      boolean throwsException,
+      DfException expectedCause,
       Map<GroupPrincipal, ? extends Collection<? extends Principal>>
       expectedGroups, Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
     DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
         new ExceptionalResultSetTestProxies(
             "AS r_modify_date_str FROM dm_group", failIterations,
-            new DfException("Expected failure")),
+            (expectedCause != null) ? expectedCause
+            : new DfException("Recoverable exception should be handled")),
         ImmutableMap.<String, String>of());
     // TODO (bmj): Check other exception tests for setting the sleeper.
     adaptor.modifiedGroupTraverser.setSleeper(NO_SLEEP);
-    checkModifiedGroupsPushed(adaptor, throwsException,
-         Checkpoint.incremental(), expectedGroups, expectedCheckpoint);
+    checkModifiedGroupsPushed(adaptor, Checkpoint.incremental(),
+        expectedCause, expectedGroups, expectedCheckpoint);
   }
 
   @Test
@@ -4550,7 +4571,8 @@ public class DocumentumAdaptorTest {
     insertModifiedGroup(dateStr, "Group1", "User1");
     insertModifiedGroup(dateStr, "Group2", "User2");
 
-    testGetGroupUpdatesExceptions(Iterators.cycle(2), false,
+    testGetGroupUpdatesExceptions(Iterators.cycle(2),
+        null,
         ImmutableMap.of(new GroupPrincipal("Group0", "NS_Local"),
             ImmutableSet.of(new UserPrincipal("User0", "NS")),
             new GroupPrincipal("Group1", "NS_Local"),
@@ -4568,7 +4590,8 @@ public class DocumentumAdaptorTest {
     insertModifiedGroup(dateStr, "Group1", "User1", "User2");
     insertModifiedGroup(dateStr, "Group2", "User2");
 
-    testGetGroupUpdatesExceptions(Iterators.forArray(2, -1), false,
+    testGetGroupUpdatesExceptions(Iterators.forArray(2, -1),
+        null,
         ImmutableMap.of(new GroupPrincipal("Group0", "NS_Local"),
             ImmutableSet.of(new UserPrincipal("User0", "NS")),
             new GroupPrincipal("Group1", "NS_Local"),
@@ -4588,7 +4611,8 @@ public class DocumentumAdaptorTest {
     insertModifiedGroup(dateStr, "Group2", "User2");
 
     // Fail on group transition the second time.
-    testGetGroupUpdatesExceptions(Iterators.forArray(2, 2), true,
+    testGetGroupUpdatesExceptions(Iterators.forArray(2, 2),
+        new DfException("Expected Partial Rows Exception"),
         ImmutableMap.of(new GroupPrincipal("Group0", "NS_Local"),
             ImmutableSet.of(new UserPrincipal("User0", "NS"))),
         new Checkpoint(dateStr, "12Group0"));
@@ -4622,16 +4646,15 @@ public class DocumentumAdaptorTest {
   }
 
   private List<Record> getModifiedDocIdsPushed(DocumentumAdaptor adaptor,
-      boolean throwsException, Checkpoint checkpoint)
+          Checkpoint checkpoint, DfException expectedCause)
           throws IOException, InterruptedException {
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.modifiedDocumentTraverser.setCheckpoint(checkpoint);
     try {
       adaptor.getModifiedDocIds(pusher);
-      assertFalse("Expected an exception at " + checkpoint.toString(),
-          throwsException);
+      assertNull("Expected an exception at " + checkpoint, expectedCause);
     } catch (IOException e) {
-      if (!throwsException) {
+      if (expectedCause == null || expectedCause != e.getCause()) {
         throw e;
       }
     }
@@ -4646,7 +4669,7 @@ public class DocumentumAdaptorTest {
         ImmutableMap.of("documentum.src", Joiner.on(",").join(startPaths)));
 
     assertEquals(expectedRecords,
-        getModifiedDocIdsPushed(adaptor, false, checkpoint));
+        getModifiedDocIdsPushed(adaptor, checkpoint, null));
     assertEquals(expectedCheckpoint,
         adaptor.modifiedDocumentTraverser.getCheckpoint());
   }
@@ -4921,32 +4944,26 @@ public class DocumentumAdaptorTest {
     insertDocument(FEB_1970, "0901081f80001002", folder + "/bar", folderId);
     insertDocument(MAR_1970, "0901081f80001003", folder + "/baz", folderId);
 
-    DocumentumAdaptor adaptor =
-        getObjectUnderTest(new ExceptionalResultSetTestProxies(
-            "FROM dm_sysobject WHERE", 0,
-            new DfException("Expected failure in first event")),
-            ImmutableMap.of("documentum.src",
-                Joiner.on(",").join(startPaths(folder))));
-
-    thrown.expect(IOException.class);
-    thrown.expectMessage("Expected failure in first event");
-    getModifiedDocIdsPushed(adaptor, false,
-        new Checkpoint(JAN_1970, "0901081f80001001"));
+    Checkpoint checkpoint = new Checkpoint(JAN_1970, "0901081f80001001");
+    testUpdateDocsExceptions(Iterators.singletonIterator(0), folder, checkpoint,
+        new DfException("Expected failure in first event"),
+        ImmutableList.<Record>of(), checkpoint);
   }
 
-  private void testUpdateDocsExceptions(String folder,
-      Iterator<Integer> failIterations, boolean throwsException,
-      Checkpoint checkpoint, List<Record> expected,
-      Checkpoint expectedCheckpoint) throws Exception {
+  private void testUpdateDocsExceptions(Iterator<Integer> failIterations,
+      String folder, Checkpoint checkpoint, DfException expectedCause,
+      List<Record> expectedRecords, Checkpoint expectedCheckpoint)
+      throws Exception {
     DocumentumAdaptor adaptor =
         getObjectUnderTest(new ExceptionalResultSetTestProxies(
             "FROM dm_sysobject WHERE", failIterations,
-            new DfException("Expected failure")),
+            (expectedCause != null) ? expectedCause
+            : new DfException("Recoverable exception should be handled")),
             ImmutableMap.of("documentum.src",
                 Joiner.on(",").join(startPaths(folder))));
-
-    assertEquals(expected,
-        getModifiedDocIdsPushed(adaptor, throwsException, checkpoint));
+    adaptor.modifiedDocumentTraverser.setSleeper(NO_SLEEP);
+    assertEquals(expectedRecords,
+        getModifiedDocIdsPushed(adaptor, checkpoint, expectedCause));
     assertEquals(expectedCheckpoint,
         adaptor.modifiedDocumentTraverser.getCheckpoint());
   }
@@ -4961,8 +4978,9 @@ public class DocumentumAdaptorTest {
     insertDocument(FEB_1970, "0901081f80001002", folder + "/bar", folderId);
     insertDocument(MAR_1970, "0901081f80001003", folder + "/baz", folderId);
 
-    testUpdateDocsExceptions(folder, Iterators.cycle(1), false,
+    testUpdateDocsExceptions(Iterators.cycle(1), folder,
         new Checkpoint(JAN_1970, "0901081f80001001"),
+        null,
         makeExpectedDocIds(folder, "bar", "baz"),
         new Checkpoint(MAR_1970, "0901081f80001003"));
   }
@@ -4977,8 +4995,9 @@ public class DocumentumAdaptorTest {
     insertDocument(FEB_1970, "0901081f80001002", folder + "/bar", folderId);
     insertDocument(MAR_1970, "0901081f80001003", folder + "/baz", folderId);
 
-    testUpdateDocsExceptions(folder, Iterators.forArray(1, 0), true,
+    testUpdateDocsExceptions(Iterators.forArray(1, 0), folder,
         new Checkpoint(JAN_1970, "0901081f80001001"),
+        new DfException("Expected Partial Rows Exception"),
         makeExpectedDocIds(folder, "bar"),
         new Checkpoint(FEB_1970, "0901081f80001002"));
   }
