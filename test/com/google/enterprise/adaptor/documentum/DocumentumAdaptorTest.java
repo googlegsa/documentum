@@ -2062,7 +2062,7 @@ public class DocumentumAdaptorTest {
     expected.put("r_object_id", "0bfolder1");
 
     // documentum.indexFolders is set to true by default.
-    testFolderMetadata(attributes, ImmutableMap.of(), expected);
+    testFolderMetadata(attributes, ImmutableMap.<String, String>of(), expected);
   }
 
   @Test
@@ -2105,7 +2105,7 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testIndexFolder_default() throws Exception {
-    testNoIndex(ImmutableMap.of(), false);
+    testNoIndex(ImmutableMap.<String, String>of(), false);
   }
 
   @Test
