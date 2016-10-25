@@ -3499,21 +3499,6 @@ public class DocumentumAdaptorTest {
         expectedCheckpoint);
   }
 
-  @Test
-  public void testUpdateAclsFirstRowException() throws Exception {
-    createAcl("4501081f80000100");
-    createAcl("4501081f80000101");
-    String dateStr = getNowPlusMinutes(5);
-    insertAclAudit("123", "4501081f80000100", "dm_save", dateStr);
-    insertAclAudit("124", "4501081f80000101", "dm_saveasnew", dateStr);
-    insertAclAudit("125", "4501081f80000102", "dm_destroy", dateStr);
-
-    testUpdateAclsExceptions(Iterators.singletonIterator(0),
-        new DfException("Expected failure in first row"),
-        ImmutableSet.<DocId>of(),
-        Checkpoint.incremental());
-  }
-
   private void testUpdateAclsExceptions(Iterator<Integer> failIterations,
       DfException expectedCause,
       Set<DocId> expectedAclIds, Checkpoint expectedCheckpoint)
@@ -3527,6 +3512,21 @@ public class DocumentumAdaptorTest {
     adaptor.modifiedAclTraverser.setSleeper(NO_SLEEP);
     testUpdateAcls(adaptor, Checkpoint.incremental(), expectedCause,
         expectedAclIds, expectedCheckpoint);
+  }
+
+  @Test
+  public void testUpdateAclsFirstRowException() throws Exception {
+    createAcl("4501081f80000100");
+    createAcl("4501081f80000101");
+    String dateStr = getNowPlusMinutes(5);
+    insertAclAudit("123", "4501081f80000100", "dm_save", dateStr);
+    insertAclAudit("124", "4501081f80000101", "dm_saveasnew", dateStr);
+    insertAclAudit("125", "4501081f80000102", "dm_destroy", dateStr);
+
+    testUpdateAclsExceptions(Iterators.singletonIterator(0),
+        new DfException("Expected failure in first row"),
+        ImmutableSet.<DocId>of(),
+        Checkpoint.incremental());
   }
 
   @Test
@@ -3779,19 +3779,6 @@ public class DocumentumAdaptorTest {
     return pusher.getRecords();
   }
 
-  @Test
-  public void testUpdatePermissionsFirstRowException()
-      throws Exception {
-    String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", "09514");
-    insertAuditTrailAclEvent(dateStr, "5f124", "09515");
-    insertAuditTrailAclEvent(dateStr, "5f125", "09516");
-
-    testUpdatePermissionsExceptions(Iterators.singletonIterator(0),
-        new DfException("Expected failure in first row"),
-        ImmutableList.<Record>of(), Checkpoint.incremental());
-  }
-
   private void testUpdatePermissionsExceptions(
       Iterator<Integer> failIterations,
       DfException expectedCause, List<Record> expectedRecords,
@@ -3806,6 +3793,19 @@ public class DocumentumAdaptorTest {
     assertEquals(expectedRecords, getModifiedDocIds(adaptor, expectedCause));
     assertEquals(expectedCheckpoint,
         adaptor.modifiedPermissionsTraverser.getCheckpoint());
+  }
+
+  @Test
+  public void testUpdatePermissionsFirstRowException()
+      throws Exception {
+    String dateStr = getNowPlusMinutes(5);
+    insertAuditTrailAclEvent(dateStr, "5f123", "09514");
+    insertAuditTrailAclEvent(dateStr, "5f124", "09515");
+    insertAuditTrailAclEvent(dateStr, "5f125", "09516");
+
+    testUpdatePermissionsExceptions(Iterators.singletonIterator(0),
+        new DfException("Expected failure in first row"),
+        ImmutableList.<Record>of(), Checkpoint.incremental());
   }
 
   @Test
@@ -4533,19 +4533,6 @@ public class DocumentumAdaptorTest {
         new Checkpoint(FEB_1970, "12Group2"));
   }
 
-  @Test
-  public void testGetGroupUpdatesFirstRowException() throws Exception {
-    insertUsers("User1", "User2");
-    String dateStr = getNowPlusMinutes(5);
-    insertModifiedGroup(dateStr, "Group1", "User1");
-    insertModifiedGroup(dateStr, "Group2", "User2");
-
-    testGetGroupUpdatesExceptions(Iterators.singletonIterator(0),
-        new DfException("Expected failure in first row"),
-        ImmutableMap.<GroupPrincipal, Set<Principal>>of(),
-        Checkpoint.incremental());
-  }
-
   private void testGetGroupUpdatesExceptions(Iterator<Integer> failIterations,
       DfException expectedCause,
       Map<GroupPrincipal, ? extends Collection<? extends Principal>>
@@ -4561,6 +4548,19 @@ public class DocumentumAdaptorTest {
     adaptor.modifiedGroupTraverser.setSleeper(NO_SLEEP);
     checkModifiedGroupsPushed(adaptor, Checkpoint.incremental(),
         expectedCause, expectedGroups, expectedCheckpoint);
+  }
+
+  @Test
+  public void testGetGroupUpdatesFirstRowException() throws Exception {
+    insertUsers("User1", "User2");
+    String dateStr = getNowPlusMinutes(5);
+    insertModifiedGroup(dateStr, "Group1", "User1");
+    insertModifiedGroup(dateStr, "Group2", "User2");
+
+    testGetGroupUpdatesExceptions(Iterators.singletonIterator(0),
+        new DfException("Expected failure in first row"),
+        ImmutableMap.<GroupPrincipal, Set<Principal>>of(),
+        Checkpoint.incremental());
   }
 
   @Test
@@ -4934,22 +4934,6 @@ public class DocumentumAdaptorTest {
         new Checkpoint(MAR_1970, "0b01081f80001003"));
   }
 
-  @Test
-  public void testUpdateDocsFirstRowException()
-      throws Exception {
-    String folderId = "0b01081f80001000";
-    String folder = "/Folder1";
-    insertFolder(EPOCH_1970, folderId, folder);
-    insertDocument(JAN_1970, "0901081f80001001", folder + "/foo", folderId);
-    insertDocument(FEB_1970, "0901081f80001002", folder + "/bar", folderId);
-    insertDocument(MAR_1970, "0901081f80001003", folder + "/baz", folderId);
-
-    Checkpoint checkpoint = new Checkpoint(JAN_1970, "0901081f80001001");
-    testUpdateDocsExceptions(Iterators.singletonIterator(0), folder, checkpoint,
-        new DfException("Expected failure in first event"),
-        ImmutableList.<Record>of(), checkpoint);
-  }
-
   private void testUpdateDocsExceptions(Iterator<Integer> failIterations,
       String folder, Checkpoint checkpoint, DfException expectedCause,
       List<Record> expectedRecords, Checkpoint expectedCheckpoint)
@@ -4966,6 +4950,22 @@ public class DocumentumAdaptorTest {
         getModifiedDocIdsPushed(adaptor, checkpoint, expectedCause));
     assertEquals(expectedCheckpoint,
         adaptor.modifiedDocumentTraverser.getCheckpoint());
+  }
+
+  @Test
+  public void testUpdateDocsFirstRowException()
+      throws Exception {
+    String folderId = "0b01081f80001000";
+    String folder = "/Folder1";
+    insertFolder(EPOCH_1970, folderId, folder);
+    insertDocument(JAN_1970, "0901081f80001001", folder + "/foo", folderId);
+    insertDocument(FEB_1970, "0901081f80001002", folder + "/bar", folderId);
+    insertDocument(MAR_1970, "0901081f80001003", folder + "/baz", folderId);
+
+    Checkpoint checkpoint = new Checkpoint(JAN_1970, "0901081f80001001");
+    testUpdateDocsExceptions(Iterators.singletonIterator(0), folder, checkpoint,
+        new DfException("Expected failure in first event"),
+        ImmutableList.<Record>of(), checkpoint);
   }
 
   @Test
