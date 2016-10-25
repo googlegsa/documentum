@@ -3199,26 +3199,11 @@ public class DocumentumAdaptorTest {
     assertEquals(ImmutableSet.of(), acl2.getDenyGroups());
   }
 
-  private Map<DocId, Acl> getAclMap(MarkAllDocsPublic markAllDocsPublic,
-      CaseSensitivityType caseSensitivityType) throws Exception {
-    ImmutableMap.Builder<String, Object> builder = ImmutableMap.builder();
-    builder.put("adaptor.markAllDocsAsPublic", markAllDocsPublic);
-    if (caseSensitivityType != null) {
-      builder.put("adaptor.caseSensitivityType", caseSensitivityType);
-    }
-    DocumentumAdaptor adaptor = getObjectUnderTest(builder.build());
-    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
-    adaptor.getDocIds(pusher);
-    return pusher.getNamedResources();
-  }
-
-  private Map<DocId, Acl> getAclMap() throws Exception {
-    return getAclMap(MarkAllDocsPublic.FALSE, null);
-  }
-
   @Test
   public void testAclMarkAllDocsPublic() throws Exception {
-    Map<DocId, Acl> aclMap = getAclMap(MarkAllDocsPublic.TRUE, null);
+    DocumentumAdaptor adaptor = getObjectUnderTest(
+        ImmutableMap.of("adaptor.markAllDocsAsPublic", MarkAllDocsPublic.TRUE));
+    Map<DocId, Acl> aclMap = getAllAcls(adaptor, NO_EXCEPTION);
     assertNotNull(aclMap);
     assertTrue(aclMap.isEmpty());
   }
@@ -3226,7 +3211,7 @@ public class DocumentumAdaptorTest {
   @Test
   public void testAclCaseSensitivity_basic() throws Exception {
     createAcl("4501081f80000100");
-    Map<DocId, Acl> aclMap = getAclMap();
+    Map<DocId, Acl> aclMap = getAllAcls(getObjectUnderTest(), NO_EXCEPTION);
     Acl acl = aclMap.get(new DocId("4501081f80000100"));
     assertTrue("Expected everything-case-sensitive",
         acl.isEverythingCaseSensitive());
@@ -3238,7 +3223,7 @@ public class DocumentumAdaptorTest {
     insertGroup("Group1", "User2", "User3");
     createAcl("4501081f80000100");
     addRequiredGroupToAcl("4501081f80000100", "Group1");
-    Map<DocId, Acl> aclMap = getAclMap();
+    Map<DocId, Acl> aclMap = getAllAcls(getObjectUnderTest(), NO_EXCEPTION);
     Acl acl = aclMap.get(new DocId("4501081f80000100_Group1"));
     assertTrue("Expected everything-case-sensitive",
         acl.isEverythingCaseSensitive());
@@ -3247,8 +3232,10 @@ public class DocumentumAdaptorTest {
   @Test
   public void testAclCaseSensitivity_sensitive() throws Exception {
     createAcl("4501081f80000100");
-    Map<DocId, Acl> aclMap = getAclMap(MarkAllDocsPublic.FALSE,
-        CaseSensitivityType.EVERYTHING_CASE_SENSITIVE);
+    DocumentumAdaptor adaptor = getObjectUnderTest(
+        ImmutableMap.of("adaptor.caseSensitivityType",
+                        CaseSensitivityType.EVERYTHING_CASE_SENSITIVE));
+    Map<DocId, Acl> aclMap = getAllAcls(adaptor, NO_EXCEPTION);
     Acl acl = aclMap.get(new DocId("4501081f80000100"));
     assertTrue("Expected everything-case-sensitive",
         acl.isEverythingCaseSensitive());
@@ -3257,8 +3244,10 @@ public class DocumentumAdaptorTest {
   @Test
   public void testAclCaseSensitivity_insensitive() throws Exception {
     createAcl("4501081f80000100");
-    Map<DocId, Acl> aclMap = getAclMap(MarkAllDocsPublic.FALSE,
-        CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE);
+    DocumentumAdaptor adaptor = getObjectUnderTest(
+        ImmutableMap.of("adaptor.caseSensitivityType",
+                        CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE));
+    Map<DocId, Acl> aclMap = getAllAcls(adaptor, NO_EXCEPTION);
     Acl acl = aclMap.get(new DocId("4501081f80000100"));
     assertTrue("Expected everything-case-insensitive",
         acl.isEverythingCaseInsensitive());
@@ -3270,8 +3259,10 @@ public class DocumentumAdaptorTest {
     insertGroup("Group1", "User2", "User3");
     createAcl("4501081f80000100");
     addRequiredGroupToAcl("4501081f80000100", "Group1");
-    Map<DocId, Acl> aclMap = getAclMap(MarkAllDocsPublic.FALSE,
-        CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE);
+    DocumentumAdaptor adaptor = getObjectUnderTest(
+        ImmutableMap.of("adaptor.caseSensitivityType",
+                        CaseSensitivityType.EVERYTHING_CASE_INSENSITIVE));
+    Map<DocId, Acl> aclMap = getAllAcls(adaptor, NO_EXCEPTION);
     Acl acl = aclMap.get(new DocId("4501081f80000100_Group1"));
     assertTrue("Expected everything-case-insensitive",
         acl.isEverythingCaseInsensitive());
@@ -3765,26 +3756,11 @@ public class DocumentumAdaptorTest {
         new Checkpoint(dateStr, "5f123"));
   }
 
-  private List<Record> getModifiedDocIds(DocumentumAdaptor adaptor,
-      DfException expectedCause) throws Exception {
-    Checkpoint docCheckpoint = insertTestDocuments();
-    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
-    adaptor.modifiedDocumentTraverser.setCheckpoint(docCheckpoint);
-    try {
-      adaptor.getModifiedDocIds(pusher);
-      assertNull("Expected an exception: " + expectedCause, expectedCause);
-    } catch (IOException e) {
-      if (expectedCause == NO_EXCEPTION || expectedCause != e.getCause()) {
-        throw e;
-      }
-    }
-    return pusher.getRecords();
-  }
-
   private void testUpdatePermissionsExceptions(
       Iterator<Integer> failIterations,
       DfException expectedCause, List<Record> expectedRecords,
       Checkpoint expectedCheckpoint) throws Exception {
+    Checkpoint docCheckpoint = insertTestDocuments();
     DocumentumAdaptor adaptor =
         getObjectUnderTest(new ExceptionalResultSetTestProxies(
             "FROM dm_sysobject s, dm_audittrail a", failIterations,
@@ -3792,7 +3768,8 @@ public class DocumentumAdaptorTest {
             : new DfException("Recoverable exception should be handled")),
             ImmutableMap.<String, String>of());
     adaptor.modifiedPermissionsTraverser.setSleeper(NO_SLEEP);
-    assertEquals(expectedRecords, getModifiedDocIds(adaptor, expectedCause));
+    assertEquals(expectedRecords,
+        getModifiedDocIdsPushed(adaptor, docCheckpoint, expectedCause));
     assertEquals(expectedCheckpoint,
         adaptor.modifiedPermissionsTraverser.getCheckpoint());
   }
@@ -4670,7 +4647,7 @@ public class DocumentumAdaptorTest {
         ImmutableMap.of("documentum.src", Joiner.on(",").join(startPaths)));
 
     assertEquals(expectedRecords,
-        getModifiedDocIdsPushed(adaptor, checkpoint, null));
+        getModifiedDocIdsPushed(adaptor, checkpoint, NO_EXCEPTION));
     assertEquals(expectedCheckpoint,
         adaptor.modifiedDocumentTraverser.getCheckpoint());
   }
@@ -5065,11 +5042,8 @@ public class DocumentumAdaptorTest {
             "documentum.src", Joiner.on(",").join(startPaths),
             "documentum.documentTypes", docTypes));
 
-    AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
-    adaptor.modifiedDocumentTraverser.setCheckpoint(checkpoint);
-    adaptor.getModifiedDocIds(pusher);
-
-    assertEquals(expectedRecords, pusher.getRecords());
+    assertEquals(expectedRecords,
+        getModifiedDocIdsPushed(adaptor, checkpoint, NO_EXCEPTION));
   }
 
   private void testCustomType(String docTypes, String... expect)
