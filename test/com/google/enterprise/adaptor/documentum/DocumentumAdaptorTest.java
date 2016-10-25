@@ -190,6 +190,8 @@ public class DocumentumAdaptorTest {
         }
       };
 
+  private static final DfException NO_EXCEPTION = null;
+
   @Before
   public void setUp() throws Exception {
     Principals.clearCache();
@@ -2696,7 +2698,7 @@ public class DocumentumAdaptorTest {
       adaptor.getDocIds(pusher);
       assertNull("Expected an exception: " + expectedCause, expectedCause);
     } catch (IOException e) {
-      if (expectedCause == null || expectedCause != e.getCause()) {
+      if (expectedCause == NO_EXCEPTION || expectedCause != e.getCause()) {
         throw e;
       }
     }
@@ -2740,7 +2742,7 @@ public class DocumentumAdaptorTest {
     DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
         new ExceptionalResultSetTestProxies(
             "FROM dm_acl", failIterations,
-            (expectedCause != null) ? expectedCause
+            (expectedCause != NO_EXCEPTION) ? expectedCause
             : new DfException("Recoverable exception should be handled")),
         configOverrides);
     adaptor.aclTraverser.setSleeper(NO_SLEEP);
@@ -2786,7 +2788,7 @@ public class DocumentumAdaptorTest {
       for (int failIter = 1; failIter <= maxBatchSize; failIter++) {
         testGetAclsExceptions(Iterators.cycle(failIter),
             ImmutableMap.of("documentum.queryBatchSize", batchSize),
-            null,
+            NO_EXCEPTION,
             expected);
       }
     }
@@ -3300,8 +3302,8 @@ public class DocumentumAdaptorTest {
   private Map<DocId, Acl> testUpdateAcls(Checkpoint checkpoint,
       Set<DocId> expectedAclIds, Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
-    return testUpdateAcls(getObjectUnderTest(), checkpoint, null,
-        expectedAclIds, expectedCheckpoint);
+    return testUpdateAcls(getObjectUnderTest(), checkpoint,
+        NO_EXCEPTION, expectedAclIds, expectedCheckpoint);
   }
 
   private Map<DocId, Acl> testUpdateAcls(DocumentumAdaptor adaptor,
@@ -3314,7 +3316,7 @@ public class DocumentumAdaptorTest {
       adaptor.getModifiedDocIds(pusher);
       assertNull("Expected an exception at " + checkpoint, expectedCause);
     } catch (IOException e) {
-      if (expectedCause == null || expectedCause != e.getCause()) {
+      if (expectedCause == NO_EXCEPTION || expectedCause != e.getCause()) {
         throw e;
       }
     }
@@ -3506,7 +3508,7 @@ public class DocumentumAdaptorTest {
     DocumentumAdaptor adaptor = getObjectUnderTest(
         new ExceptionalResultSetTestProxies(
             "FROM dm_audittrail_acl", failIterations,
-            (expectedCause != null) ? expectedCause
+            (expectedCause != NO_EXCEPTION) ? expectedCause
             : new DfException("Recoverable exception should be handled")),
         ImmutableMap.<String, String>of());
     adaptor.modifiedAclTraverser.setSleeper(NO_SLEEP);
@@ -3539,7 +3541,7 @@ public class DocumentumAdaptorTest {
     insertAclAudit("125", "4501081f80000102", "dm_destroy", dateStr);
 
     testUpdateAclsExceptions(Iterators.cycle(1),
-        null,
+        NO_EXCEPTION,
         ImmutableSet.of(
             new DocId("4501081f80000100"),
             new DocId("4501081f80000101"),
@@ -3772,7 +3774,7 @@ public class DocumentumAdaptorTest {
       adaptor.getModifiedDocIds(pusher);
       assertNull("Expected an exception: " + expectedCause, expectedCause);
     } catch (IOException e) {
-      if (expectedCause == null || expectedCause != e.getCause()) {
+      if (expectedCause == NO_EXCEPTION || expectedCause != e.getCause()) {
         throw e;
       }
     }
@@ -3786,7 +3788,7 @@ public class DocumentumAdaptorTest {
     DocumentumAdaptor adaptor =
         getObjectUnderTest(new ExceptionalResultSetTestProxies(
             "FROM dm_sysobject s, dm_audittrail a", failIterations,
-            (expectedCause != null) ? expectedCause
+            (expectedCause != NO_EXCEPTION) ? expectedCause
             : new DfException("Recoverable exception should be handled")),
             ImmutableMap.<String, String>of());
     adaptor.modifiedPermissionsTraverser.setSleeper(NO_SLEEP);
@@ -3817,7 +3819,7 @@ public class DocumentumAdaptorTest {
     insertAuditTrailAclEvent(dateStr, "5f125", "09516");
 
     testUpdatePermissionsExceptions(Iterators.cycle(1),
-        null,
+        NO_EXCEPTION,
         makeExpectedDocIds(START_PATH, "file1", "file2", "file3"),
         new Checkpoint(dateStr, "5f125"));
   }
@@ -3873,7 +3875,7 @@ public class DocumentumAdaptorTest {
       adaptor.getDocIds(pusher);
       assertNull("Expected an exception: " + expectedCause, expectedCause);
     } catch (IOException e) {
-      if (expectedCause == null || expectedCause != e.getCause()) {
+      if (expectedCause == NO_EXCEPTION || expectedCause != e.getCause()) {
         throw e;
       }
     }
@@ -3933,7 +3935,7 @@ public class DocumentumAdaptorTest {
     DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
         new ExceptionalResultSetTestProxies(
             "FROM dm_user", failIterations,
-            (expectedCause != null) ? expectedCause
+            (expectedCause != NO_EXCEPTION) ? expectedCause
             : new DfException("Recoverable exception should be handled")),
         configOverrides);
     adaptor.dmWorldTraverser.setSleeper(NO_SLEEP);
@@ -3983,7 +3985,7 @@ public class DocumentumAdaptorTest {
       for (int failIter = 1; failIter <= maxBatchSize; failIter++) {
         testDmWorldExceptions(Iterators.cycle(failIter),
             ImmutableMap.of("documentum.queryBatchSize", batchSize),
-            null,
+            NO_EXCEPTION,
             expected);
       }
     }
@@ -4107,7 +4109,7 @@ public class DocumentumAdaptorTest {
     DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
         new ExceptionalResultSetTestProxies(
             queryFragment, failIterations,
-            (expectedCause != null) ? expectedCause
+            (expectedCause != NO_EXCEPTION) ? expectedCause
             : new DfException("Recoverable exception should be handled")),
         configOverrides);
     adaptor.groupTraverser.setSleeper(NO_SLEEP);
@@ -4142,7 +4144,7 @@ public class DocumentumAdaptorTest {
     testGetGroupsExceptions(Iterators.cycle(2),
         "SELECT r_object_id FROM dm_group",
         ImmutableMap.of("documentum.queryBatchSize", 10),
-        null,
+        NO_EXCEPTION,
         ImmutableMap.of(
            new GroupPrincipal("Group1", "NS_Local"),
                ImmutableSet.of(new UserPrincipal("User1", "NS")),
@@ -4187,7 +4189,7 @@ public class DocumentumAdaptorTest {
       testGetGroupsExceptions(Iterators.cycle(2),
           "ENABLE(ROW_BASED)",
           ImmutableMap.of("documentum.queryBatchSize", batchSize),
-          null,
+          NO_EXCEPTION,
           expected);
     }
   }
@@ -4234,7 +4236,7 @@ public class DocumentumAdaptorTest {
       testGetGroupsExceptions(Iterators.cycle(5),
           "ENABLE(ROW_BASED)",
           ImmutableMap.of("documentum.queryBatchSize", batchSize),
-          null,
+          NO_EXCEPTION,
           expected);
     }
   }
@@ -4412,7 +4414,7 @@ public class DocumentumAdaptorTest {
       throws DfException, IOException, InterruptedException {
     checkModifiedGroupsPushed(getObjectUnderTestNamespaces(
         ImmutableMap.of("documentum.pushLocalGroupsOnly", localGroupsOnly)),
-        checkpoint, null, expectedGroups, expectedCheckpoint);
+        checkpoint, NO_EXCEPTION, expectedGroups, expectedCheckpoint);
   }
 
   private void checkModifiedGroupsPushed(DocumentumAdaptor adaptor,
@@ -4427,7 +4429,7 @@ public class DocumentumAdaptorTest {
       adaptor.getModifiedDocIds(pusher);
       assertNull("Expected an exception at " + checkpoint, expectedCause);
     } catch (IOException e) {
-      if (expectedCause == null || expectedCause != e.getCause()) {
+      if (expectedCause == NO_EXCEPTION || expectedCause != e.getCause()) {
         throw e;
       }
     }
@@ -4541,10 +4543,9 @@ public class DocumentumAdaptorTest {
     DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
         new ExceptionalResultSetTestProxies(
             "AS r_modify_date_str FROM dm_group", failIterations,
-            (expectedCause != null) ? expectedCause
+            (expectedCause != NO_EXCEPTION) ? expectedCause
             : new DfException("Recoverable exception should be handled")),
         ImmutableMap.<String, String>of());
-    // TODO (bmj): Check other exception tests for setting the sleeper.
     adaptor.modifiedGroupTraverser.setSleeper(NO_SLEEP);
     checkModifiedGroupsPushed(adaptor, Checkpoint.incremental(),
         expectedCause, expectedGroups, expectedCheckpoint);
@@ -4572,7 +4573,7 @@ public class DocumentumAdaptorTest {
     insertModifiedGroup(dateStr, "Group2", "User2");
 
     testGetGroupUpdatesExceptions(Iterators.cycle(2),
-        null,
+        NO_EXCEPTION,
         ImmutableMap.of(new GroupPrincipal("Group0", "NS_Local"),
             ImmutableSet.of(new UserPrincipal("User0", "NS")),
             new GroupPrincipal("Group1", "NS_Local"),
@@ -4591,7 +4592,7 @@ public class DocumentumAdaptorTest {
     insertModifiedGroup(dateStr, "Group2", "User2");
 
     testGetGroupUpdatesExceptions(Iterators.forArray(2, -1),
-        null,
+        NO_EXCEPTION,
         ImmutableMap.of(new GroupPrincipal("Group0", "NS_Local"),
             ImmutableSet.of(new UserPrincipal("User0", "NS")),
             new GroupPrincipal("Group1", "NS_Local"),
@@ -4654,7 +4655,7 @@ public class DocumentumAdaptorTest {
       adaptor.getModifiedDocIds(pusher);
       assertNull("Expected an exception at " + checkpoint, expectedCause);
     } catch (IOException e) {
-      if (expectedCause == null || expectedCause != e.getCause()) {
+      if (expectedCause == NO_EXCEPTION || expectedCause != e.getCause()) {
         throw e;
       }
     }
@@ -4941,7 +4942,7 @@ public class DocumentumAdaptorTest {
     DocumentumAdaptor adaptor =
         getObjectUnderTest(new ExceptionalResultSetTestProxies(
             "FROM dm_sysobject WHERE", failIterations,
-            (expectedCause != null) ? expectedCause
+            (expectedCause != NO_EXCEPTION) ? expectedCause
             : new DfException("Recoverable exception should be handled")),
             ImmutableMap.of("documentum.src",
                 Joiner.on(",").join(startPaths(folder))));
@@ -4980,7 +4981,7 @@ public class DocumentumAdaptorTest {
 
     testUpdateDocsExceptions(Iterators.cycle(1), folder,
         new Checkpoint(JAN_1970, "0901081f80001001"),
-        null,
+        NO_EXCEPTION,
         makeExpectedDocIds(folder, "bar", "baz"),
         new Checkpoint(MAR_1970, "0901081f80001003"));
   }
