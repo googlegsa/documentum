@@ -1871,14 +1871,14 @@ public class DocumentumAdaptorTest {
   public void testGetDocContent_noFile() throws Exception {
     MockResponse response = getNoContent(null);
     assertEquals(null, response.contentType);
-    assertEquals(null, response.content);
+    assertEquals("", response.content.toString(UTF_8.name()));
   }
 
   @Test
   public void testGetDocContent_emptyFile() throws Exception {
     MockResponse response = getNoContent("");
     assertEquals(null, response.contentType);
-    assertEquals(null, response.content);
+    assertEquals("", response.content.toString(UTF_8.name()));
   }
 
   @Test
@@ -1886,7 +1886,7 @@ public class DocumentumAdaptorTest {
     MockResponse response =
         getNoContent("hello, world", Integer.MAX_VALUE + 1L);
     assertEquals("text/plain", response.contentType);
-    assertEquals("hello, world", response.content.toString());
+    assertEquals("hello, world", response.content.toString(UTF_8.name()));
   }
 
   @Test
@@ -1894,7 +1894,7 @@ public class DocumentumAdaptorTest {
     MockResponse response =
         getNoContent("Call me Ishmael....", Integer.MAX_VALUE + 2L);
     assertEquals(null, response.contentType);
-    assertEquals(null, response.content);
+    assertEquals("", response.content.toString(UTF_8.name()));
   }
 
   private String getDisplayUrl(String displayUrlPattern, String path)
