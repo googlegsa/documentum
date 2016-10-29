@@ -439,6 +439,7 @@ public class DocumentumAdaptorTest {
         this.objectId = objectId;
       }
 
+      @Override
       public String toString() {
         return objectId;
       }
@@ -1313,6 +1314,7 @@ public class DocumentumAdaptorTest {
         this.objectId = objectId;
       }
 
+      @Override
       public String toString() {
         return objectId;
       }
@@ -3862,6 +3864,7 @@ public class DocumentumAdaptorTest {
   /* Filters the 'dm_world' group out of the map of groups. */
   private <T> Map<GroupPrincipal, T> filterDmWorld(Map<GroupPrincipal, T> map) {
     return Maps.filterKeys(map, new Predicate<GroupPrincipal>() {
+        @Override
         public boolean apply(GroupPrincipal principal) {
           return !"dm_world".equals(principal.getName());
         }

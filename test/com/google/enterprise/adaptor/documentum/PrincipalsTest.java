@@ -101,7 +101,7 @@ public class PrincipalsTest {
         .getName());
   }
 
-  private class SessionMock {
+  private static class SessionMock {
     public Object getObjectByQualification(String query) throws DfException {
       if (query.contains("user:")) {
         return Proxies.newProxyInstance(IDfUser.class, new UserMock(query));
@@ -113,7 +113,7 @@ public class PrincipalsTest {
     }
   }
 
-  private class UserMock {
+  private static class UserMock {
     private final String loginName;
     private final String source;
     private final String ldapDn;

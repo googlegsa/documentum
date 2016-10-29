@@ -1275,6 +1275,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       super(Checkpoint.incremental());
     }
 
+    @Override
     protected boolean getGroups(IDfSession session, Principals principals)
         throws DfException {
       String queryStr = makeUpdatedGroupsQuery(groupsCheckpoint);
