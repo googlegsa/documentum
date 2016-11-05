@@ -1646,15 +1646,14 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private void getFolderContent(Response resp, IDfFolder dmFolder, DocId id)
       throws DfException, IOException, URISyntaxException {
     resp.setNoIndex(!indexFolders);
-    if (indexFolders) {
-      if (!markAllDocsAsPublic) {
-        getACL(resp, dmFolder, id);
-      }
-      // Include folder attributes as metadata.
-      getMetadata(resp, dmFolder, id);
-      resp.setDisplayUrl(new URI(MessageFormat.format(displayUrl,
-          dmFolder.getObjectId(), docIdToPath(id))));
+
+    if (!markAllDocsAsPublic) {
+      getACL(resp, dmFolder, id);
     }
+    // Include folder attributes as metadata.
+    getMetadata(resp, dmFolder, id);
+    resp.setDisplayUrl(new URI(MessageFormat.format(displayUrl,
+        dmFolder.getObjectId(), docIdToPath(id))));
 
     logger.log(Level.FINER, "Listing contents of folder: {0} ",
         dmFolder.getObjectName());

@@ -2028,7 +2028,7 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testFolderAcl_noIndex_nonPublic() throws Exception {
-    testFolderAcl(false, false, false);
+    testFolderAcl(false, false, true);
   }
 
   @Test
@@ -2070,7 +2070,8 @@ public class DocumentumAdaptorTest {
     attributes.put("attr1", "value1");
     attributes.put("attr2", "value2");
     attributes.put("attr3", "value3");
-    TreeMultimap<String, String> expected = TreeMultimap.create();
+    TreeMultimap<String, String> expected = TreeMultimap.create(attributes);
+    expected.put("r_object_id", "0bfolder1");
 
     testFolderMetadata(attributes,
         ImmutableMap.of("documentum.indexFolders", "false"), expected);
