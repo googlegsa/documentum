@@ -1383,24 +1383,31 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       logger.log(Level.FINER, "Object Id: {0}; Type: {1}",
           new Object[] {dmObjId, type.getName()});
 
-      if (isValidatedDocumentType(type)) {
-        // To avoid issues with time zones, we only count an object as
-        // unmodified if its last modified time is more than a day before
-        // the last crawl time.
+      if (type.isTypeOf("dm_sysobject")) {
         Date lastModified = dmPersObj.getTime("r_modify_date").getDate();
-        boolean respondNoContent = (lastModified != null)
-            && req.canRespondWithNoContent(
-                   new Date(lastModified.getTime() + ONE_DAY_MILLIS));
+        resp.setLastModified(lastModified);
 
-        getDocumentContent(resp, (IDfSysObject) dmPersObj, id,
-            !respondNoContent);
-        if (respondNoContent) {
-          logger.log(Level.FINER,
-              "Content not modified since last crawl: {0}", dmObjId);
-          resp.respondNoContent();
+        if (isValidatedDocumentType(type)) {
+          // To avoid issues with time zones, we only count an object as
+          // unmodified if its last modified time is more than a day before
+          // the last crawl time.
+          boolean respondNoContent = (lastModified != null)
+              && req.canRespondWithNoContent(
+                  new Date(lastModified.getTime() + ONE_DAY_MILLIS));
+
+          getDocumentContent(resp, (IDfSysObject) dmPersObj, id,
+              !respondNoContent);
+          if (respondNoContent) {
+            logger.log(Level.FINER,
+                "Content not modified since last crawl: {0}", dmObjId);
+            resp.respondNoContent();
+          }
+        } else if (type.isTypeOf("dm_folder")) {
+          getFolderContent(resp, (IDfFolder) dmPersObj, id);
+        } else {
+          logger.log(Level.WARNING, "Excluded type: {0}", type);
+          resp.respondNotFound();
         }
-      } else if (type.isTypeOf("dm_folder")) {
-        getFolderContent(resp, (IDfFolder) dmPersObj, id);
       } else {
         logger.log(Level.WARNING, "Unsupported type: {0}", type);
         resp.respondNotFound();

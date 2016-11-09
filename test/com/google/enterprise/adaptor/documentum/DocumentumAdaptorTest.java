@@ -1256,11 +1256,14 @@ public class DocumentumAdaptorTest {
     private class TypeMock {
       private final String type;
       private final ImmutableMap<String, String> superTypes =
-          ImmutableMap.of("dm_document_subtype", "dm_document",
-                          "dm_document", "dm_sysobject",
-                          "dm_sysobject_subtype", "dm_sysobject",
-                          "dm_folder_subtype", "dm_folder",
-                          "dm_folder", "dm_sysobject");
+          ImmutableMap.<String, String>builder()
+          .put("dm_document_subtype", "dm_document")
+          .put("dm_document_virtual", "dm_sysobject")
+          .put("dm_document", "dm_sysobject")
+          .put("dm_sysobject_subtype", "dm_sysobject")
+          .put("dm_folder_subtype", "dm_folder")
+          .put("dm_folder", "dm_sysobject")
+          .build();
 
       public TypeMock(String type) {
         this.type = type;
@@ -1779,6 +1782,9 @@ public class DocumentumAdaptorTest {
     MockResponse response = getDocContent(ImmutableMap.<String, String>of(),
         new MockRequest(DocumentumAdaptor.docIdFromPath(path), lastCrawled));
 
+    // Our mocks, like Documentum, only store seconds, not milliseconds.
+    assertEquals(new Date((lastModified.getTime() / 1000) * 1000),
+        response.lastModified);
     assertFalse(response.notModified);
     assertFalse(response.metadata.isEmpty());
     assertNotNull(response.acl);
@@ -2360,6 +2366,17 @@ public class DocumentumAdaptorTest {
     assertFalse(response.notFound);
     assertEquals("text/html; charset=UTF-8", response.contentType);
     assertEquals(expected.toString(), response.content.toString(UTF_8.name()));
+  }
+
+  @Test
+  public void testFolderLastModified() throws Exception {
+    String now = getNowPlusMinutes(0);
+    String folderId = "0b01081f80078d29";
+    String folder = START_PATH + "/path2";
+    insertFolder(now, folderId, folder);
+    MockResponse response = getDocContent(folder);
+
+    assertEquals(dateFormat.parse(now), response.lastModified);
   }
 
   @Test
