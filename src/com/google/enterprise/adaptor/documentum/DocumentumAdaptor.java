@@ -77,6 +77,7 @@ import java.util.Date;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -500,6 +501,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   /**
    * Validate start paths and add the valid ones to validatedStartPaths list.
    */
+  // TODO (bmj): Don't catch DfException here. Let it throw out (or use a
+  // savedException stack). Handle the exception in init(). It will already
+  // be handled correctly in getDocIds().
   private void validateStartPaths(IDfSession dmSession) {
     List<String> validStartPaths = new ArrayList<String>(startPaths.size());
     for (String startPath : startPaths) {
@@ -528,6 +532,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     validatedStartPaths.addAllAbsent(validStartPaths);
   }
 
+  // TODO (bmj): Don't catch DfException here. Let it throw out (or use a
+  // savedException stack). Handle the exception in init(). Empty validTypes
+  // will result in only folders getting indexed.
   private void validateDocumentTypes(IDfSession dmSession) {
     List<String> validTypes = new ArrayList<String>(documentTypes.size());
     for (String typeName : documentTypes) {
@@ -588,16 +595,25 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     logger.entering("DocumentumAdaptor", "getDocIds");
 
     IDfSession dmSession = getDfSession();
+    ArrayDeque<DfException> savedExceptions = new ArrayDeque<>();
     try {
       // Push the start paths to initiate crawl.
       validateStartPaths(dmSession);
       validateDocumentTypes(dmSession);
       ArrayList<DocId> docIds = new ArrayList<DocId>();
       for (String startPath : validatedStartPaths) {
-        docIds.add(docIdFromPath(startPath));
+        if (startPath.equals("/")) {
+          for (String cabinet : listRootCabinets(dmSession)) {
+            docIds.add(docIdFromPath(cabinet));
+          }
+        } else {
+          docIds.add(docIdFromPath(startPath));
+        }
       }
       logger.log(Level.FINER, "DocumentumAdaptor DocIds: {0}", docIds);
       pusher.pushDocIds(docIds);
+    } catch (DfException e) {
+      savedExceptions.add(e);
     } finally {
       dmSessionManager.release(dmSession);
     }
@@ -605,21 +621,50 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     if (!markAllDocsAsPublic) {
       // Push the ACLs and groups.
       Principals.clearCache();
-      ArrayDeque<DfException> savedExceptions = new ArrayDeque<>();
       aclTraverser.run(pusher, savedExceptions);
       groupTraverser.run(pusher, savedExceptions);
       dmWorldTraverser.run(pusher, savedExceptions);
+    }
 
-      if (!savedExceptions.isEmpty()) {
-        DfException cause = savedExceptions.removeFirst();
-        for (DfException e : savedExceptions) {
-          cause.addSuppressed(e);
-        }
-        throw new IOException(cause);
+    if (!savedExceptions.isEmpty()) {
+      DfException cause = savedExceptions.removeFirst();
+      for (DfException e : savedExceptions) {
+        cause.addSuppressed(e);
       }
+      throw new IOException(cause);
     }
 
     logger.exiting("DocumentumAdaptor", "getDocIds");
+  }
+
+  /** Returns a list of paths for all the docbase's cabinets. */
+  private List<String>listRootCabinets(IDfSession session) throws DfException {
+    ImmutableList.Builder<String> cabinets = ImmutableList.builder();
+
+    // Select r_object_id to allow an object- or row-based query. See
+    // "To return results by object ID" in the DQL Reference Manual.
+    String queryStr = MessageFormat.format(
+       "SELECT r_object_id, r_folder_path FROM dm_cabinet"
+       + "{0,choice,0#|0< WHERE {1}}",
+        cabinetWhereCondition.length(), cabinetWhereCondition);
+    // Don't use MessageFormat syntax for this log message for testing purposes.
+    logger.log(Level.FINER, "Get All Cabinets Query: " + queryStr);
+    IDfQuery query = dmClientX.getQuery();
+    query.setDQL(queryStr);
+    IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
+    try {
+      while (result.next()) {
+        for (int j = 0; j < result.getValueCount("r_folder_path"); j++) {
+          String cabinet = result.getRepeatingString("r_folder_path", j);
+          logger.log(Level.FINER, "Cabinet: {0}", cabinet);
+          cabinets.add(cabinet);
+        }
+      }
+    } finally {
+      result.close();
+    }
+
+    return cabinets.build();
   }
 
   @VisibleForTesting
@@ -1354,7 +1399,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
       // Special root path "/" means return all cabinets.
       if (path.equals("/")) {
-        getRootContent(resp, dmSession, id);
+        getRootContent(resp, id, listRootCabinets(dmSession));
         return;
       }
 
@@ -1454,59 +1499,37 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    * Returns all the docbase's cabinets as links in a generated HTML document
    * and as external links.
    */
-  private void getRootContent(Response resp, IDfSession session, DocId id)
-      throws DfException, IOException {
+  private void getRootContent(Response resp, DocId id, List<String> cabinets)
+      throws IOException {
+    Iterator<String> iterator = cabinets.iterator();
     resp.setNoIndex(true);
-    // Select r_object_id to allow an object- or row-based query. See
-    // "To return results by object ID" in the DQL Reference Manual.
-    String queryStr = MessageFormat.format(
-       "SELECT r_object_id, r_folder_path FROM dm_cabinet"
-       + "{0,choice,0#|0< WHERE {1}}",
-        cabinetWhereCondition.length(), cabinetWhereCondition);
-    // Don't use MessageFormat syntax for this log message for testing purposes.
-    logger.log(Level.FINER, "Get All Cabinets Query: " + queryStr);
-    IDfQuery query = dmClientX.getQuery();
-    query.setDQL(queryStr);
-    IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
-    try {
-      // Large Documentum deployments can have tens or hundreds of thousands
-      // of cabinets. The GSA truncates large HTML documents at 2.5MB, so return
-      // the first maxHtmlLinks worth as HTML content and the rest as external
-      // anchors. But we cannot start writing the HTML content to the response
-      // until after we add all the external anchor metadata. So spool the HTML
-      // for now and copy it to the response later.
-      SharedByteArrayOutputStream htmlOut = new SharedByteArrayOutputStream();
-      Writer writer = new OutputStreamWriter(htmlOut, CHARSET);
-      try (HtmlResponseWriter htmlWriter =
-          new HtmlResponseWriter(writer, docIdEncoder, Locale.ENGLISH)) {
-        htmlWriter.start(id, "/");
-        for (int i = 0; i < maxHtmlSize && result.next(); i++) {
-          for (int j = 0; j < result.getValueCount("r_folder_path"); j++) {
-            String cabinet = result.getRepeatingString("r_folder_path", j);
-            logger.log(Level.FINER, "Cabinet: {0}", cabinet);
-            DocId docid = docIdFromPath(cabinet);
-            htmlWriter.addLink(docid, docid.getUniqueId());
-          }
-        }
-        htmlWriter.finish();
+    // Large Documentum deployments can have tens or hundreds of thousands
+    // of cabinets. The GSA truncates large HTML documents at 2.5MB, so return
+    // the first maxHtmlLinks worth as HTML content and the rest as external
+    // anchors. But we cannot start writing the HTML content to the response
+    // until after we add all the external anchor metadata. So spool the HTML
+    // for now and copy it to the response later.
+    SharedByteArrayOutputStream htmlOut = new SharedByteArrayOutputStream();
+    Writer writer = new OutputStreamWriter(htmlOut, CHARSET);
+    try (HtmlResponseWriter htmlWriter =
+         new HtmlResponseWriter(writer, docIdEncoder, Locale.ENGLISH)) {
+      htmlWriter.start(id, "/");
+      for (int i = 0; i < maxHtmlSize && iterator.hasNext(); i++) {
+        DocId docid = docIdFromPath(iterator.next());
+        htmlWriter.addLink(docid, docid.getUniqueId());
       }
-
-      // Add the remaining cabinets as external anchors.
-      while (result.next()) {
-        for (int j = 0; j < result.getValueCount("r_folder_path"); j++) {
-          String cabinet = result.getRepeatingString("r_folder_path", j);
-          logger.log(Level.FINER, "Cabinet: {0}", cabinet);
-          DocId docid = docIdFromPath(cabinet);
-          resp.addAnchor(docIdEncoder.encodeDocId(docid), docid.getUniqueId());
-        }
-      }
-
-      // Finally, write out the generated HTML links as content.
-      resp.setContentType("text/html; charset=" + CHARSET.name());
-      IOHelper.copyStream(htmlOut.getInputStream(), resp.getOutputStream());
-    } finally {
-      result.close();
+      htmlWriter.finish();
     }
+
+    // Add the remaining cabinets as external anchors.
+    while (iterator.hasNext()) {
+      DocId docid = docIdFromPath(iterator.next());
+      resp.addAnchor(docIdEncoder.encodeDocId(docid), docid.getUniqueId());
+    }
+
+    // Finally, write out the generated HTML links as content.
+    resp.setContentType("text/html; charset=" + CHARSET.name());
+    IOHelper.copyStream(htmlOut.getInputStream(), resp.getOutputStream());
   }
 
   /** Copies the Documentum document content into the response.

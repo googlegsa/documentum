@@ -83,7 +83,6 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -207,9 +206,6 @@ public class DocumentumAdaptorTest {
   public void tearDown() throws Exception {
     dropAllObjects();
   }
-
-  @Rule
-  public ExpectedException thrown = ExpectedException.none();
 
   private Config getTestAdaptorConfig() {
     return initTestAdaptorConfig(ProxyAdaptorContext.getInstance());
@@ -1642,11 +1638,13 @@ public class DocumentumAdaptorTest {
     }
   }
 
+  /** @see #testGetDocIdsRootStartPathNoCabinets() */
   @Test
   public void testGetRootContentNoCabinets() throws Exception {
     checkGetRootContent("1=1", 100);
   }
 
+  /** @see #testGetDocIdsRootStartPathEmptyWhereClause()  */
   @Test
   public void testGetRootContentEmptyWhereClause() throws Exception {
     insertCabinets("System", "Cabinet1", "Cabinet2");
@@ -1672,6 +1670,7 @@ public class DocumentumAdaptorTest {
        "Cabinet4");
   }
 
+  /** @see #testGetDocIdsRootStartPathAddedWhereClause()  */
   @Test
   public void testGetRootContentAddedWhereClause() throws Exception {
     insertCabinets("System", "Temp", "Cabinet1", "Cabinet2");
@@ -1679,6 +1678,7 @@ public class DocumentumAdaptorTest {
         100, "Cabinet1", "Cabinet2");
   }
 
+  /** @see #testGetDocIdsRootStartPathDefaultWhereClause() */
   @Test
   public void testGetRootContentDefaultWhereClause() throws Exception {
     executeUpdate(
@@ -1697,6 +1697,7 @@ public class DocumentumAdaptorTest {
         100, "Cabinet1", "Cabinet2");
   }
 
+  /** @see #testGetDocIdsRootStartPathInvalidWhereClause() */
   @Test
   public void testGetRootContentInvalidWhereClause() throws Exception {
     insertCabinets("Cabinet1", "Cabinet2");
@@ -2445,9 +2446,15 @@ public class DocumentumAdaptorTest {
   private void testGetDocIds(List<String> startPaths,
       List<Record> expectedRecords)
       throws DfException, IOException, InterruptedException {
-    DocumentumAdaptor adaptor = getObjectUnderTest(
-        ImmutableMap.of("documentum.src", Joiner.on(",").join(startPaths)));
+    testGetDocIds(
+        ImmutableMap.of("documentum.src", Joiner.on(",").join(startPaths)),
+        expectedRecords);
+  }
 
+  private void testGetDocIds(Map<String, ?> configMap,
+      List<Record> expectedRecords)
+      throws DfException, IOException, InterruptedException {
+    DocumentumAdaptor adaptor = getObjectUnderTest(configMap);
     AccumulatingDocIdPusher pusher = new AccumulatingDocIdPusher();
     adaptor.getDocIds(pusher);
 
@@ -2456,7 +2463,81 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testGetDocIdsRootStartPath() throws Exception {
-    testGetDocIds(startPaths("/"), expectedRecordsFor("/"));
+    insertCabinets("Cabinet1", "Cabinet2", "Cabinet3");
+    testGetDocIds(startPaths("/"),
+        expectedRecordsFor("/Cabinet1", "/Cabinet2", "/Cabinet3"));
+  }
+
+  /** @see #testGetRootContentNoCabinets() */
+  @Test
+  public void testGetDocIdsRootStartPathNoCabinets() throws Exception {
+    testGetDocIds(
+        ImmutableMap.of(
+            "documentum.src", "/",
+            "documentum.cabinetWhereCondition", "1=1"),
+        expectedRecordsFor());
+  }
+
+  /** @see #testGetRootContentEmptyWhereClause() */
+  @Test
+  public void testGetDocIdsRootStartPathEmptyWhereClause() throws Exception {
+    insertCabinets("System", "Temp", "Cabinet1", "Cabinet2");
+    testGetDocIds(
+        ImmutableMap.of(
+            "documentum.src", "/",
+            "documentum.cabinetWhereCondition", ""),
+        expectedRecordsFor("/System", "/Temp", "/Cabinet1", "/Cabinet2"));
+  }
+
+  /** @see #testGetRootContentAddedWhereClause() */
+  @Test
+  public void testGetDocIdsRootStartPathAddedWhereClause() throws Exception {
+    insertCabinets("System", "Temp", "Cabinet1", "Cabinet2");
+    testGetDocIds(
+        ImmutableMap.of(
+            "documentum.src", "/",
+            "documentum.cabinetWhereCondition",
+                "object_name NOT IN ('System', 'Temp')"),
+        expectedRecordsFor("/Cabinet1", "/Cabinet2"));
+  }
+
+  /** @see #testGetRootContentDefaultWhereClause() */
+  @Test
+  public void testGetDocIdsRootStartPathDefaultWhereClause() throws Exception {
+    executeUpdate(
+        "CREATE TABLE dm_docbase_config (owner_name varchar)",
+        "INSERT INTO dm_docbase_config (owner_name) VALUES('Owner')",
+        "CREATE TABLE dm_server_config (r_install_owner varchar)",
+        "INSERT INTO dm_server_config (r_install_owner) VALUES('Installer')");
+    insertCabinets("Integration", "Resources", "System");
+    insertCabinets("Temp", "Templates", "Owner", "Installer");
+    insertCabinets("Cabinet1", "Cabinet2", "Cabinet3");
+
+    Config config = ProxyAdaptorContext.getInstance().getConfig();
+    new DocumentumAdaptor(null).initConfig(config);
+
+    testGetDocIds(
+        ImmutableMap.of(
+            "documentum.src", "/",
+            "documentum.cabinetWhereCondition",
+                config.getValue("documentum.cabinetWhereCondition")),
+        expectedRecordsFor("/Cabinet1", "/Cabinet2", "/Cabinet3"));
+  }
+
+  /** @see #testGetRootContentInvalidWhereClause() */
+  @Test
+  public void testGetDocIdsRootStartPathInvalidWhereClause() throws Exception {
+    insertCabinets("Cabinet1", "Cabinet2");
+    try {
+      testGetDocIds(
+          ImmutableMap.of(
+              "documentum.src", "/",
+              "documentum.cabinetWhereCondition", "( xyzzy"),
+          expectedRecordsFor());
+      fail("Expected exception not thrown.");
+    } catch (IOException expected) {
+      assertTrue(expected.getCause() instanceof DfException);
+    }
   }
 
   @Test
