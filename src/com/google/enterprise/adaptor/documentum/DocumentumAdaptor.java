@@ -271,16 +271,20 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
   // Returns a DocId of a path with optional name to append.
   @VisibleForTesting
-  static DocId docIdFromPath(String path, String name) {
+  static DocId docIdFromPath(String path, String name, String id) {
+    //TODO (Srinivas): Clean up empty and null names.
     if (Strings.isNullOrEmpty(name)) {
-      return docIdFromPath(path);
+      if (path.endsWith("/")) {
+        path = path.substring(0, path.length() - 1);
+      }
+      return docIdFromPath(path + ":" + id);
     } else if (path.endsWith("/")) {
-      return docIdFromPath(path + name);
+      return docIdFromPath(path + name + ":" + id);
     } else {
-      return docIdFromPath(path + "/" + name);
+      return docIdFromPath(path + "/" + name + ":" + id);
     }
   }
-  
+
   // Strip leading and trailing slashes so our DocIds show up
   // as children of the baseDocUrl.
   @VisibleForTesting
@@ -297,12 +301,20 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
   // Restore the leading slash, so we have a valid Documentum path.
   @VisibleForTesting
-  static String docIdToPath(DocId docId) {
+  static String docIdToRawPath(DocId docId) {
     return "/" + docId.getUniqueId();
   }
 
   private static String normalizePath(String path) {
-    return docIdToPath(docIdFromPath(path));
+    return docIdToRawPath(docIdFromPath(path));
+  }
+
+  private static String docIdToPath(DocId docId) {
+    String path = docIdToRawPath(docId);
+    if (path.matches(".*:\\p{XDigit}{16}")) {
+      path = path.substring(0, path.length() - 17);
+    }
+    return path;
   }
 
   public DocumentumAdaptor() {
@@ -1258,7 +1270,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     while (enumPaths.hasMoreElements()) {
       IDfObjectPath objPath = (IDfObjectPath) enumPaths.nextElement();
       String path = objPath.getFullPath();
-      DocId docId = docIdFromPath(path, name);
+      DocId docId = docIdFromPath(path, name, objectId);
       if (isUnderStartPath(docIdToPath(docId), validatedStartPaths)) {
         builder.add(new Record.Builder(docId)
             .setCrawlImmediately(true).build());
@@ -1388,7 +1400,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     DocId id = req.getDocId();
     logger.log(Level.FINER, "Get content for id: {0}", id);
 
-    String path = docIdToPath(id);
+    String path = docIdToRawPath(id);
     if (!isUnderStartPath(path, validatedStartPaths)) {
       resp.respondNotFound();
       return;
@@ -1407,7 +1419,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       IDfPersistentObject dmPersObj;
       if (path.matches(".*:\\p{XDigit}{16}")) {
         String objId = path.substring(path.length() - 16);
-        logger.log(Level.FINER, "VDoc Child Object Id: {0}", objId);
+        logger.log(Level.FINER, "Object Id: {0}", objId);
         try {
           dmPersObj = dmSession.getObject(new DfId(objId));
         } catch (DfIdNotFoundException e) {
@@ -1426,6 +1438,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
       IDfId dmObjId = dmPersObj.getObjectId();
       IDfType type = dmPersObj.getType();
+      //TODO (Srinivas): remove this code
+      id = docIdFromPath(path, null, dmPersObj.getObjectId().toString());
       logger.log(Level.FINER, "Object Id: {0}; Type: {1}",
           new Object[] {dmObjId, type.getName()});
 
@@ -1665,7 +1679,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       String objName = child.getString("object_name");
       logger.log(Level.FINER, "VDoc Child Object Id: {0}; Name: {1}",
           new Object[] {objId, objName});
-      DocId childDocId = docIdFromPath(docIdToPath(id), objName + ":" + objId);
+      DocId childDocId = docIdFromPath(docIdToPath(id), objName, objId);
       logger.log(Level.FINER, "VDoc Child Object DocId: {0}",
           childDocId.toString());
       resp.addAnchor(docIdEncoder.encodeDocId(childDocId), objName);
@@ -1699,7 +1713,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         String objName = dmCollection.getString("object_name");
         logger.log(Level.FINER, "Object Id: {0}; Name: {1}",
             new Object[] {objId, objName});
-        DocId childDocId = docIdFromPath(docIdToPath(id), objName);
+        DocId childDocId = docIdFromPath(docIdToPath(id), objName, objId);
         htmlWriter.addLink(childDocId, objName);
       }
       htmlWriter.finish();

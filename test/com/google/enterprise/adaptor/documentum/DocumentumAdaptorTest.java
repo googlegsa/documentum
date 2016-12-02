@@ -14,6 +14,7 @@
 
 package com.google.enterprise.adaptor.documentum;
 
+import static com.google.common.base.Strings.padStart;
 import static com.google.enterprise.adaptor.documentum.JdbcFixture.dropAllObjects;
 import static com.google.enterprise.adaptor.documentum.JdbcFixture.executeUpdate;
 import static com.google.enterprise.adaptor.documentum.JdbcFixture.getConnection;
@@ -26,6 +27,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import com.google.common.base.Joiner;
+import com.google.common.base.Preconditions;
 import com.google.common.base.Predicate;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
@@ -191,6 +193,23 @@ public class DocumentumAdaptorTest {
       };
 
   private static final DfException NO_EXCEPTION = null;
+
+  private class ObjectIdFactory {
+    private final String tag;
+
+    ObjectIdFactory(String tag) {
+      this.tag = tag;
+    }
+
+    public String pad(String name) {
+      Preconditions.checkArgument(name.length() <= 14,
+          "Name needs to be less than or equal to 14 chars");
+      return tag + padStart(name, 14, '0');
+    }
+  }
+
+  private final ObjectIdFactory DOCUMENT = new ObjectIdFactory("09");
+  private final ObjectIdFactory FOLDER = new ObjectIdFactory("0b");
 
   @Before
   public void setUp() throws Exception {
@@ -553,10 +572,12 @@ public class DocumentumAdaptorTest {
   @Test
   public void testSlashAsStartPath() throws Exception {
     String root = "/";
-    DocId docid = DocumentumAdaptor.docIdFromPath(root);
-    assertEquals(root, DocumentumAdaptor.docIdToPath(docid));
-    assertEquals("/foo", DocumentumAdaptor.docIdToPath(
-        DocumentumAdaptor.docIdFromPath(root, "foo")));
+    String name = "aaa";
+    String id = DOCUMENT.pad(name);
+    assertEquals(root, DocumentumAdaptor.docIdToRawPath(
+        DocumentumAdaptor.docIdFromPath(root)));
+    assertEquals("/" + name + ":" + id, DocumentumAdaptor.docIdToRawPath(
+        DocumentumAdaptor.docIdFromPath(root, name, id)));
   }
 
   private void initializeAdaptor(DocumentumAdaptor adaptor, String src,
@@ -1715,16 +1736,16 @@ public class DocumentumAdaptorTest {
   }
 
   private void insertDocument(Date lastModified, String path,
-       String mimeType, String content) throws SQLException {
+      String mimeType, String content) throws SQLException {
     String name = path.substring(path.lastIndexOf("/") + 1);
     executeUpdate(String.format(
-        "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
-        + "r_object_type, mock_mime_type, mock_content, r_modify_date, "
-        + "mock_acl_id, r_content_size) "
-        + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'}, '%s', %d)",
-        "09" + name, name, path, "dm_document", mimeType, content,
-        dateFormat.format(lastModified), DEFAULT_ACL,
-        (content == null) ? null : content.length()));
+       "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
+       + "r_object_type, mock_mime_type, mock_content, r_modify_date, "
+       + "mock_acl_id, r_content_size) "
+       + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'}, '%s', %d)",
+       DOCUMENT.pad(name), name, path, "dm_document", mimeType,
+       content, dateFormat.format(lastModified), DEFAULT_ACL,
+       (content == null) ? null : content.length()));
   }
 
   private void insertDocument(String lastModified, String id, String path,
@@ -1864,14 +1885,14 @@ public class DocumentumAdaptorTest {
 
   private MockResponse getNoContent(String content, long... size)
       throws Exception {
-    String path = START_PATH + "/object1";
+    String path = START_PATH + "/aaa";
     insertDocument(new Date(), path, "text/plain", content);
 
     // This hack with essentially an optional argument is instead of a
     // hack to treat 0 specially.
     if (size.length > 0) {
       assertEquals(1, size.length);
-      setDocumentSize("09object1", size[0]);
+      setDocumentSize(DOCUMENT.pad("aaa"), size[0]);
     }
 
     return getDocContent(path);
@@ -1922,22 +1943,23 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testDisplayUrlWithId() throws Exception {
-    String path = "/Folder1/path1/object1";
-    assertEquals("http://webtopurl/drl/09object1",
+    String path = "/Folder1/path1/aaa";
+    assertEquals("http://webtopurl/drl/" + DOCUMENT.pad("aaa"),
         getDisplayUrl("http://webtopurl/drl/{0}", path));
   }
 
   @Test
   public void testDisplayUrlWithPath() throws Exception {
-    String path = "/Folder1/path1/object1";
-    assertEquals("http://webtopurl/drl//Folder1/path1/object1",
+    String path = "/Folder1/path1/aaa";
+    assertEquals("http://webtopurl/drl//Folder1/path1/aaa",
         getDisplayUrl("http://webtopurl/drl/{1}", path));
   }
 
   @Test
   public void testDisplayUrlWithIdAndPath() throws Exception {
-    String path = "/Folder1/path1/object1";
-    assertEquals("/Folder1/path1/object1-http://webtopurl/09object1/drl/",
+    String path = "/Folder1/path1/aaa";
+    assertEquals("/Folder1/path1/aaa"
+        + "-http://webtopurl/0900000000000aaa/drl/",
         getDisplayUrl("{1}-http://webtopurl/{0}/drl/", path));
   }
 
@@ -2203,8 +2225,8 @@ public class DocumentumAdaptorTest {
   private void testExcludeMetadata(TreeMultimap<String, String> attrs,
       String excludedAttrs, TreeMultimap<String, String> expected)
       throws Exception {
-    String path = START_PATH + "/object1";
-    String objectId = "09object1";
+    String path = START_PATH + "/aaa";
+    String objectId = DOCUMENT.pad("aaa");
     insertDocument(path);
     writeAttributes(objectId, attrs);
 
@@ -2230,7 +2252,7 @@ public class DocumentumAdaptorTest {
     attributes.put("attr2", "value2");
     attributes.put("attr3", "value3");
     TreeMultimap<String, String> expected = TreeMultimap.create(attributes);
-    expected.put("r_object_id", "09object1");
+    expected.put("r_object_id", DOCUMENT.pad("aaa"));
     testMetadata(attributes, expected);
   }
 
@@ -2243,7 +2265,7 @@ public class DocumentumAdaptorTest {
     assertEquals(1, attributes.keySet().size());
     assertEquals(3, attributes.get("attr1").size());
     TreeMultimap<String, String> expected = TreeMultimap.create(attributes);
-    expected.put("r_object_id", "09object1");
+    expected.put("r_object_id", DOCUMENT.pad("aaa"));
     testMetadata(attributes, expected);
   }
 
@@ -2255,7 +2277,7 @@ public class DocumentumAdaptorTest {
     attributes.put("attr2", "");
     attributes.put("attr3", "");
     TreeMultimap<String, String> expected = TreeMultimap.create(attributes);
-    expected.put("r_object_id", "09object1");
+    expected.put("r_object_id", DOCUMENT.pad("aaa"));
     testMetadata(attributes, expected);
   }
 
@@ -2280,7 +2302,7 @@ public class DocumentumAdaptorTest {
     attributes.put("r_object_type", "dm_document");
     attributes.put("attr2", "value2");
     TreeMultimap<String, String> expected = TreeMultimap.create(attributes);
-    expected.put("r_object_id", "09object1");
+    expected.put("r_object_id", DOCUMENT.pad("aaa"));
     expected.removeAll("r_object_type");
     expected.put("r_object_type", "dm_document");
     expected.put("r_object_type", "dm_sysobject");
@@ -2290,7 +2312,7 @@ public class DocumentumAdaptorTest {
   private void insertVirtualDocument(String vdocPath, String mimeType,
       String content, String... children) throws SQLException {
     String name = vdocPath.substring(vdocPath.lastIndexOf("/") + 1);
-    String vdocId = "09" + name;
+    String vdocId = DOCUMENT.pad(name);
     String now = getNowPlusMinutes(0);
     executeUpdate(String.format(
         "INSERT INTO dm_sysobject(r_object_id, object_name, mock_object_path, "
@@ -2300,7 +2322,7 @@ public class DocumentumAdaptorTest {
         vdocId, name, vdocPath, "dm_document_virtual", mimeType, content,
         now, DEFAULT_ACL, (content == null) ? null : content.length()));
     for (String child : children) {
-      insertDocument(now, "09" + child, vdocPath + "/" + child, vdocId);
+      insertDocument(now, DOCUMENT.pad(child), vdocPath + "/" + child, vdocId);
     }
   }
 
@@ -2320,11 +2342,11 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testVirtualDocContentWithChildren() throws Exception {
-    String path = START_PATH + "/vdoc";
+    String path = START_PATH + "/ddd";
     String objectMimeType = "text/html";
     String objectContent = "<html><body>Hello</body></html>";
     insertVirtualDocument(path, objectMimeType, objectContent,
-        "object1", "object2", "object3");
+        "aaa", "bbb", "ccc");
 
     MockResponse response = getDocContent(path);
 
@@ -2333,34 +2355,38 @@ public class DocumentumAdaptorTest {
 
     // Verify child links.
     assertEquals(3, response.anchors.size());
-    for (String name : ImmutableList.of("object1", "object2", "object3")) {
+    for (String name : ImmutableList.of("aaa", "bbb", "ccc")) {
       URI uri = response.anchors.get(name);
       assertNotNull(uri);
-      assertTrue(uri.toString().endsWith(path + "/" + name + ":09" + name));
+      assertTrue(uri.toString(), uri.toString().endsWith(path + "/" + name + ":"
+          + DOCUMENT.pad(name)));
     }
   }
 
   @Test
   public void testFolderDocContent() throws Exception {
     String now = getNowPlusMinutes(0);
-    String folderId = "0b01081f80078d29";
-    String folder = START_PATH + "/path2";
+    String folderId = FOLDER.pad("FFF1");
+    String folder = START_PATH + "/FFF1";
     insertFolder(now, folderId, folder);
-    insertDocument(now, "0901081f80079263", folder + "/file1", folderId);
-    insertDocument(now, "0901081f8007926d", folder + "/file2 evil<chars?",
+    insertDocument(now, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
+    insertDocument(now, DOCUMENT.pad("bbb"), folder + "/bbb evil<chars?",
         folderId);
-    insertDocument(now, "0901081f80079278", folder + "/file3", folderId);
+    insertDocument(now, DOCUMENT.pad("ccc"), folder + "/ccc", folderId);
 
     StringBuilder expected = new StringBuilder();
     expected.append("<!DOCTYPE html>\n<html><head><title>");
-    expected.append("Folder path2");
+    expected.append("Folder FFF1");
     expected.append("</title></head><body><h1>");
-    expected.append("Folder path2");
+    expected.append("Folder FFF1");
     expected.append("</h1>");
-    expected.append("<li><a href=\"path2/file1\">file1</a></li>");
-    expected.append("<li><a href=\"path2/file2%20evil%3Cchars%3F\">"
-        + "file2 evil&lt;chars?</a></li>");
-    expected.append("<li><a href=\"path2/file3\">file3</a></li>");
+    expected.append("<li><a href=");
+    expected.append("\"FFF1/aaa:0900000000000aaa\">aaa</a></li>");
+    expected.append("<li><a href=");
+    expected.append("\"FFF1/bbb%20evil%3Cchars%3F:0900000000000bbb\"");
+    expected.append(">bbb evil&lt;chars?</a></li>");
+    expected.append("<li><a href=");
+    expected.append("\"FFF1/ccc:0900000000000ccc\">ccc</a></li>");
     expected.append("</body></html>");
 
     MockResponse response = getDocContent(folder);
@@ -2372,16 +2398,16 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testFolderDocContent_CustomType() throws Exception {
-    String folderId = "0b001";
-    String folder = "/Folder1/path1/path";
+    String folderId = FOLDER.pad("FFF1");
+    String folder = "/Folder1/path1/FFF1";
     insertFolder(JAN_1970, folderId, folder);
-    insertDocument(JAN_1970, "09001", folder + "/file1", folderId);
+    insertDocument(JAN_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
     StringBuilder expected =
         new StringBuilder()
             .append("<!DOCTYPE html>\n")
-            .append("<html><head><title>Folder path</title></head><body>")
-            .append("<h1>Folder path</h1>")
-            .append("<li><a href=\"path/file1\">file1</a></li>")
+            .append("<html><head><title>Folder FFF1</title></head><body>")
+            .append("<h1>Folder FFF1</h1>")
+            .append("<li><a href=\"FFF1/aaa:0900000000000aaa\">aaa</a></li>")
             .append("</body></html>");
 
     MockResponse response =
@@ -3726,9 +3752,9 @@ public class DocumentumAdaptorTest {
     // To skip doc updates, set time for document creation 5 min earlier.
     String dateStr = getNowPlusMinutes(-5);
     insertFolder(dateStr, folderId, folder);
-    insertDocument(dateStr, "09514", folder + "/file1", folderId);
-    insertDocument(dateStr, "09515", folder + "/file2", folderId);
-    insertDocument(dateStr, "09516", folder + "/file3", folderId);
+    insertDocument(dateStr, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
+    insertDocument(dateStr, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
+    insertDocument(dateStr, DOCUMENT.pad("ccc"), folder + "/ccc", folderId);
 
     return new Checkpoint(dateStr, folderId);
   }
@@ -3738,12 +3764,12 @@ public class DocumentumAdaptorTest {
     Checkpoint docCheckpoint = insertTestDocuments();
 
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", "09514");
-    insertAuditTrailAclEvent(dateStr, "5f124", "09515");
-    insertAuditTrailAclEvent(dateStr, "5f125", "09516");
+    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(dateStr, "5f124", DOCUMENT.pad("bbb"));
+    insertAuditTrailAclEvent(dateStr, "5f125", DOCUMENT.pad("ccc"));
 
     testUpdatedPermissions(docCheckpoint, Checkpoint.incremental(),
-        makeExpectedDocIds(START_PATH, "file1", "file2", "file3"),
+        makeExpectedDocIds(START_PATH, "aaa", "bbb", "ccc"),
         new Checkpoint(dateStr, "5f125"));
   }
 
@@ -3752,12 +3778,12 @@ public class DocumentumAdaptorTest {
     Checkpoint docCheckpoint = insertTestDocuments();
 
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", "09514");
-    insertAuditTrailAclEvent(dateStr, "5f124", "09515");
-    insertAuditTrailAclEvent(dateStr, "5f125", "09516");
+    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(dateStr, "5f124", DOCUMENT.pad("bbb"));
+    insertAuditTrailAclEvent(dateStr, "5f125", DOCUMENT.pad("ccc"));
 
     testUpdatedPermissions(docCheckpoint, new Checkpoint(dateStr, "5f123"),
-        makeExpectedDocIds(START_PATH, "file2", "file3"),
+        makeExpectedDocIds(START_PATH, "bbb", "ccc"),
         new Checkpoint(dateStr, "5f125"));
   }
 
@@ -3766,13 +3792,17 @@ public class DocumentumAdaptorTest {
     Checkpoint docCheckpoint = insertTestDocuments();
 
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(getNowPlusMinutes(3), "5f123", "09514");
-    insertAuditTrailAclEvent(getNowPlusMinutes(4), "5f124", "09514");
-    insertAuditTrailAclEvent(getNowPlusMinutes(5), "5f125", "09514");
-    insertAuditTrailAclEvent(getNowPlusMinutes(5), "5f126", "09515");
+    insertAuditTrailAclEvent(getNowPlusMinutes(3), "5f123",
+        DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(getNowPlusMinutes(4), "5f124",
+        DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(getNowPlusMinutes(5), "5f125",
+        DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(getNowPlusMinutes(5), "5f126",
+        DOCUMENT.pad("bbb"));
 
     testUpdatedPermissions(docCheckpoint, Checkpoint.incremental(),
-        makeExpectedDocIds(START_PATH, "file1", "file2"),
+        makeExpectedDocIds(START_PATH, "aaa", "bbb"),
         new Checkpoint(dateStr, "5f126"));
   }
 
@@ -3781,12 +3811,12 @@ public class DocumentumAdaptorTest {
     Checkpoint docCheckpoint = insertTestDocuments();
 
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", "09514", "09234");
-    insertAuditTrailAclEvent(dateStr, "5f124", "09515", "09234");
-    insertAuditTrailAclEvent(dateStr, "5f125", "09516", "09234");
+    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"), "09234");
+    insertAuditTrailAclEvent(dateStr, "5f124", DOCUMENT.pad("bbb"), "09234");
+    insertAuditTrailAclEvent(dateStr, "5f125", DOCUMENT.pad("ccc"), "09234");
 
     testUpdatedPermissions(docCheckpoint, Checkpoint.incremental(),
-        makeExpectedDocIds(START_PATH, "file1"),
+        makeExpectedDocIds(START_PATH, "aaa"),
         new Checkpoint(dateStr, "5f125"));
   }
 
@@ -3808,39 +3838,43 @@ public class DocumentumAdaptorTest {
   public void testUpdatedPermissions_MultiplePaths() throws Exception {
     // To skip doc updates, set time for document creation 5 min earlier.
     String min5back = getNowPlusMinutes(-5);
-    insertFolder(min5back, "0bd30", START_PATH + "/folder1");
-    insertFolder(min5back, "0bd31", START_PATH + "/folder2");
-    insertFolder(min5back, "0bd32", START_PATH + "/folder/folder3");
-    insertSysObject(min5back, "09514", "file1", START_PATH + "/folder1/file1,"
-        + START_PATH + "/folder2/file1," + START_PATH + "/folder/folder3/file1",
-        "dm_document", "0bd30", "0bd31", "0bd32");
+    insertFolder(min5back, FOLDER.pad("FFF1"), START_PATH + "/FFF1");
+    insertFolder(min5back, FOLDER.pad("FFF2"), START_PATH + "/FFF2");
+    insertFolder(min5back, FOLDER.pad("FFF3"), START_PATH + "/folder/FFF3");
+    insertSysObject(min5back, DOCUMENT.pad("aaa"), "aaa",
+        START_PATH + "/FFF1/aaa," + START_PATH + "/FFF2/aaa," + START_PATH
+            + "/folder/FFF3/aaa", "dm_document",
+        FOLDER.pad("FFF1"), FOLDER.pad("FFF2"), FOLDER.pad("FFF3"));
 
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", "09514");
+    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"));
 
-    testUpdatedPermissions(new Checkpoint(min5back, "0bd32"),
+    testUpdatedPermissions(
+        new Checkpoint(min5back, FOLDER.pad("FFF3")),
         Checkpoint.incremental(),
-        makeExpectedDocIds(START_PATH, "folder1/file1", "folder2/file1",
-            "folder/folder3/file1"), new Checkpoint(dateStr, "5f123"));
+        makeExpectedDocIds(START_PATH, "FFF1/aaa", "FFF2/aaa",
+            "folder/FFF3/aaa"), new Checkpoint(dateStr, "5f123"));
   }
 
   @Test
   public void testUpdatedPermissions_InvalidStartPath() throws Exception {
     // To skip doc updates, set time for document creation 5 min earlier.
     String min5back = getNowPlusMinutes(-5);
-    insertFolder(min5back, "0bd30", START_PATH + "/folder1");
-    insertFolder(min5back, "0bd31", START_PATH + "/folder2");
-    insertFolder(min5back, "0bd32", "/Folder2/folder3");
-    insertSysObject(min5back, "09514", "file1", START_PATH + "/folder1/file1,"
-        + START_PATH + "/folder2/file1," + "/Folder2/folder3/file1",
-        "dm_document", "0bd30", "0bd31", "0bd32");
+    insertFolder(min5back, FOLDER.pad("FFF1"), START_PATH + "/FFF1");
+    insertFolder(min5back, FOLDER.pad("FFF2"), START_PATH + "/FFF2");
+    insertFolder(min5back, FOLDER.pad("FFF3"), "/FFF2/FFF3");
+    insertSysObject(min5back, DOCUMENT.pad("aaa"), "aaa",
+        START_PATH + "/FFF1/file1," + START_PATH + "/FFF2/file1,"
+            + "/FFF2/FFF3/aaa", "dm_document",
+        FOLDER.pad("FFF1"), FOLDER.pad("FFF2"), FOLDER.pad("FFF3"));
 
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", "09514");
+    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"));
 
-    testUpdatedPermissions(new Checkpoint(min5back, "0bd32"),
+    testUpdatedPermissions(
+        new Checkpoint(min5back, FOLDER.pad("FFF3")),
         Checkpoint.incremental(),
-        makeExpectedDocIds(START_PATH, "folder1/file1", "folder2/file1"),
+        makeExpectedDocIds(START_PATH, "FFF1/aaa", "FFF2/aaa"),
         new Checkpoint(dateStr, "5f123"));
   }
 
@@ -3851,12 +3885,12 @@ public class DocumentumAdaptorTest {
     String folderId = "0bd29";
     String folder = START_PATH;
     insertFolder(getNowPlusMinutes(-5), folderId, folder);
-    insertSysObject(dateStr, "09514", "file1", START_PATH + "/file1",
-        "dm_document", "0bd29");
-    insertAuditTrailAclEvent(dateStr, "5f123", "09514");
+    insertSysObject(dateStr, DOCUMENT.pad("aaa"), "aaa",
+        START_PATH + "/aaa", "dm_document", "0bd29");
+    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"));
 
     testUpdatedPermissions(docCheckpoint, Checkpoint.incremental(),
-        makeExpectedDocIds(START_PATH, "file1", "file1"),
+        makeExpectedDocIds(START_PATH, "aaa", "aaa"),
         new Checkpoint(dateStr, "5f123"));
   }
 
@@ -3866,17 +3900,17 @@ public class DocumentumAdaptorTest {
     String dateStr = getNowPlusMinutes(5);
 
     insertAuditTrailEvent(dateStr, "5f123", "dm_save", "acl_name=",
-        "09514", "09514");
+        DOCUMENT.pad("aaa"), DOCUMENT.pad("aaa"));
     insertAuditTrailEvent(dateStr, "5f124", "dm_link", "acl_name=",
-        "09515", "09515");
+        DOCUMENT.pad("bbb"), DOCUMENT.pad("bbb"));
     insertAuditTrailEvent(dateStr, "5f125", "dm_save", "object_name=",
-        "09516", "09516");
+        DOCUMENT.pad("ccc"), DOCUMENT.pad("ccc"));
     insertAuditTrailEvent(dateStr, "5f126", "dm_link", "object_name=",
-        "09517", "09517");
+        DOCUMENT.pad("ddd"), DOCUMENT.pad("ddd"));
 
     Checkpoint checkPoint = Checkpoint.incremental();
     testUpdatedPermissions(docCheckpoint, checkPoint,
-        makeExpectedDocIds(START_PATH, "file1"),
+        makeExpectedDocIds(START_PATH, "aaa"),
         new Checkpoint(dateStr, "5f123"));
   }
 
@@ -3915,13 +3949,13 @@ public class DocumentumAdaptorTest {
   public void testUpdatePermissionsOtherRowsException()
       throws Exception {
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", "09514");
-    insertAuditTrailAclEvent(dateStr, "5f124", "09515");
-    insertAuditTrailAclEvent(dateStr, "5f125", "09516");
+    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(dateStr, "5f124", DOCUMENT.pad("bbb"));
+    insertAuditTrailAclEvent(dateStr, "5f125", DOCUMENT.pad("ccc"));
 
     testUpdatePermissionsExceptions(Iterators.cycle(1),
         NO_EXCEPTION,
-        makeExpectedDocIds(START_PATH, "file1", "file2", "file3"),
+        makeExpectedDocIds(START_PATH, "aaa", "bbb", "ccc"),
         new Checkpoint(dateStr, "5f125"));
   }
 
@@ -3929,13 +3963,13 @@ public class DocumentumAdaptorTest {
   public void testUpdatePermissionsPartialRowsException()
       throws Exception {
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", "09514");
-    insertAuditTrailAclEvent(dateStr, "5f124", "09515");
-    insertAuditTrailAclEvent(dateStr, "5f125", "09516");
+    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(dateStr, "5f124", DOCUMENT.pad("bbb"));
+    insertAuditTrailAclEvent(dateStr, "5f125", DOCUMENT.pad("ccc"));
 
     testUpdatePermissionsExceptions(Iterators.forArray(2, 0),
         new DfException("Expected Partial Rows Exception"),
-        makeExpectedDocIds(START_PATH, "file1", "file2"),
+        makeExpectedDocIds(START_PATH, "aaa", "bbb"),
         new Checkpoint(dateStr, "5f124"));
   }
 
@@ -4733,12 +4767,22 @@ public class DocumentumAdaptorTest {
       String... objectNames) {
     ImmutableList.Builder<Record> builder = ImmutableList.builder();
     for (String name : objectNames) {
+      DocId docid;
       if (name.equals(folderPath)) {
-        name = null;
+        name = folderPath.substring(folderPath.lastIndexOf("/") + 1);
+        docid =
+            DocumentumAdaptor.docIdFromPath(folderPath, null, FOLDER.pad(name));
+      } else {
+        String path;
+        if (name.lastIndexOf("/") != -1) {
+          path = folderPath + "/" + name.substring(0, name.lastIndexOf("/"));
+          name = name.substring(name.lastIndexOf("/") + 1);
+        } else {
+          path = folderPath;
+        }
+        docid = DocumentumAdaptor.docIdFromPath(path, name, DOCUMENT.pad(name));
       }
-      DocId docid = DocumentumAdaptor.docIdFromPath(folderPath, name);
-      builder.add(
-          new Record.Builder(docid).setCrawlImmediately(true).build());
+      builder.add(new Record.Builder(docid).setCrawlImmediately(true).build());
     }
     return builder.build();
   }
@@ -4809,52 +4853,52 @@ public class DocumentumAdaptorTest {
     String folder = "/Folder1/Folder2";
     insertFolder(JAN_1970, folderId, folder);
     setParentFolderId(folderId, parentId);
-    insertDocument(FEB_1970, "09001", folder + "/foo", folderId);
-    insertDocument(FEB_1970, "09002", folder + "/bar", folderId);
+    insertDocument(FEB_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
+    insertDocument(FEB_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
 
     checkModifiedDocIdsPushed(startPaths(folder),
         new Checkpoint(JAN_1970, "0"),
-        makeExpectedDocIds(folder, folder, "foo", "bar"),
-        new Checkpoint(FEB_1970, "09002"));
+        makeExpectedDocIds(folder, "aaa", "bbb"),
+        new Checkpoint(FEB_1970, DOCUMENT.pad("bbb")));
   }
 
   @Test
   public void testModifiedDocumentsSameCheckpointTime() throws Exception {
-    String folderId = "0b01081f80001000";
-    String folder = "/Folder1";
-    insertFolder(JAN_1970, folderId, folder);
-    insertDocument(JAN_1970, "0b01081f80001001", folder + "/foo", folderId);
-    insertDocument(JAN_1970, "0b01081f80001002", folder + "/bar", folderId);
-    insertDocument(FEB_1970, "0b01081f80001003", folder + "/baz", folderId);
+    String folderId = FOLDER.pad("FFF1");
+    String folder = "/FFF1";
+    insertFolder(EPOCH_1970, folderId, folder);
+    insertDocument(JAN_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
+    insertDocument(JAN_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
+    insertDocument(FEB_1970, DOCUMENT.pad("ccc"), folder + "/ccc", folderId);
 
     checkModifiedDocIdsPushed(startPaths(folder),
-        new Checkpoint(JAN_1970, "0b01081f80001001"),
-        makeExpectedDocIds(folder, "bar", "baz"),
-        new Checkpoint(FEB_1970, "0b01081f80001003"));
+        new Checkpoint(JAN_1970, DOCUMENT.pad("aaa")),
+        makeExpectedDocIds(folder, "bbb", "ccc"),
+        new Checkpoint(FEB_1970, DOCUMENT.pad("ccc")));
   }
 
   @Test
   public void testModifiedDocumentsNewerModifyDate() throws Exception {
-    String folderId = "0b01081f80001000";
-    String folder = "/Folder1";
-    insertFolder(JAN_1970, folderId, folder);
-    insertDocument(JAN_1970, "0b01081f80001001", folder + "/foo", folderId);
-    insertDocument(FEB_1970, "0b01081f80001002", folder + "/bar", folderId);
-    insertDocument(MAR_1970, "0b01081f80001003", folder + "/baz", folderId);
+    String folderId = FOLDER.pad("FFF1");
+    String folder = "/FFF1";
+    insertFolder(EPOCH_1970, folderId, folder);
+    insertDocument(JAN_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
+    insertDocument(FEB_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
+    insertDocument(MAR_1970, DOCUMENT.pad("ccc"), folder + "/ccc", folderId);
 
     checkModifiedDocIdsPushed(startPaths(folder),
-        new Checkpoint(JAN_1970, "0b01081f80001001"),
-        makeExpectedDocIds(folder, "bar", "baz"),
-        new Checkpoint(MAR_1970, "0b01081f80001003"));
+        new Checkpoint(JAN_1970, DOCUMENT.pad("aaa")),
+        makeExpectedDocIds(folder, "bbb", "ccc"),
+        new Checkpoint(MAR_1970, DOCUMENT.pad("ccc")));
   }
 
   @Test
   public void testModifiedFolder() throws Exception {
-    String parentId = "0b001";
-    String parentFolder = "/Folder1";
+    String parentId = FOLDER.pad("FFF1");
+    String parentFolder = "/FFF1";
     insertFolder(EPOCH_1970, parentId, parentFolder);
-    String folderId = "0b002";
-    String folder = "/Folder1/Folder2";
+    String folderId = FOLDER.pad("FFF2");
+    String folder = "/FFF1/FFF2";
     insertFolder(FEB_1970, folderId, folder);
     setParentFolderId(folderId, parentId);
 
@@ -4866,175 +4910,175 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testModifiedFolderNewerThanChildren() throws Exception {
-    String parentId = "0b001";
-    String parentFolder = "/Folder1";
+    String parentId = FOLDER.pad("FFF1");
+    String parentFolder = "/FFF1";
     insertFolder(EPOCH_1970, parentId, parentFolder);
-    String folderId = "0b002";
-    String folder = "/Folder1/Folder2";
+    String folderId = FOLDER.pad("FFF2");
+    String folder = "/FFF1/FFF2";
     insertFolder(MAR_1970, folderId, folder);
     setParentFolderId(folderId, parentId);
-    insertDocument(JAN_1970, "09001", folder + "/foo", folderId);
-    insertDocument(FEB_1970, "09002", folder + "/bar", folderId);
-    insertDocument(MAR_1970, "09003", folder + "/baz", folderId);
+    insertDocument(JAN_1970, DOCUMENT.pad("aaa"), folder + "/foo", folderId);
+    insertDocument(FEB_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
+    insertDocument(MAR_1970, DOCUMENT.pad("ccc"), folder + "/ccc", folderId);
 
     checkModifiedDocIdsPushed(startPaths(folder),
-        new Checkpoint(JAN_1970, "09001"),
-        makeExpectedDocIds(folder, "bar", "baz", folder),
-        new Checkpoint(MAR_1970, "0b002"));
+        new Checkpoint(JAN_1970, DOCUMENT.pad("aaa")),
+        makeExpectedDocIds(folder, "bbb", "ccc", folder),
+        new Checkpoint(MAR_1970, FOLDER.pad("FFF2")));
   }
 
   @Test
   public void testModifiedDocumentsOutsideStartPath() throws Exception {
-    String folder1Id = "0b01081f80001000";
-    String folder1 = "/Folder1";
+    String folder1Id = FOLDER.pad("FFF1");
+    String folder1 = "/FFF1";
     insertFolder(JAN_1970, folder1Id, folder1);
-    insertDocument(FEB_1970, "0b01081f80001001", folder1 + "/foo", folder1Id);
-    insertDocument(FEB_1970, "0b01081f80001002", folder1 + "/bar", folder1Id);
-    String folder2Id = "0b01081f80002000";
-    String folder2 = "/Folder2";
+    insertDocument(FEB_1970, DOCUMENT.pad("aaa"), folder1 + "/aaa", folder1Id);
+    insertDocument(FEB_1970, DOCUMENT.pad("bbb"), folder1 + "/bbb", folder1Id);
+    String folder2Id = FOLDER.pad("FFF2");
+    String folder2 = "/FFF2";
     insertFolder(JAN_1970, folder2Id, folder2);
-    insertDocument(FEB_1970, "0b01081f80002001", folder2 + "/baz", folder2Id);
+    insertDocument(FEB_1970, DOCUMENT.pad("ccc"), folder2 + "/ccc", folder2Id);
 
     checkModifiedDocIdsPushed(startPaths(folder1),
         new Checkpoint(JAN_1970, folder1Id),
-        makeExpectedDocIds(folder1, "foo", "bar"),
-        new Checkpoint(FEB_1970, "0b01081f80001002"));
+        makeExpectedDocIds(folder1, "aaa", "bbb"),
+        new Checkpoint(FEB_1970, DOCUMENT.pad("bbb")));
   }
 
   @Test
   public void testModifiedDocumentsOneParentOutsideStartPath()
       throws Exception {
-    String folder1Id = "0b01081f80001000";
-    String folder1 = "/Folder1";
+    String folder1Id = FOLDER.pad("FFF1");
+    String folder1 = "/FFF1";
     insertFolder(JAN_1970, folder1Id, folder1);
-    String folder2Id = "0b01081f80002000";
-    String folder2 = "/Folder2";
+    String folder2Id = DOCUMENT.pad("FFF2");
+    String folder2 = "/FFF2";
     insertFolder(JAN_1970, folder2Id, folder2);
-    insertDocument(FEB_1970, "0b01081f80001001", folder1 + "/foo", folder1Id);
-    insertDocument(FEB_1970, "0b01081f80001002", folder1 + "/bar", folder1Id,
-                   folder2Id);
+    insertDocument(FEB_1970, DOCUMENT.pad("aaa"), folder1 + "/aaa", folder1Id);
+    insertDocument(FEB_1970, DOCUMENT.pad("bbb"), folder1 + "/bbb", folder1Id,
+        folder2Id);
 
     checkModifiedDocIdsPushed(startPaths(folder1),
         new Checkpoint(JAN_1970, folder1Id),
-        makeExpectedDocIds(folder1, "foo", "bar"),
-        new Checkpoint(FEB_1970, "0b01081f80001002"));
+        makeExpectedDocIds(folder1, "aaa", "bbb"),
+        new Checkpoint(FEB_1970, DOCUMENT.pad("bbb")));
   }
 
   @Test
   public void testModifiedDocumentsMultipleParentsInStartPaths()
       throws Exception {
-    String folder1Id = "0b01081f80001000";
-    String folder1 = "/Folder1";
-    insertFolder(JAN_1970, folder1Id, folder1);
-    String folder2Id = "0b01081f80002000";
-    String folder2 = "/Folder2";
-    insertFolder(JAN_1970, folder2Id, folder2);
-    insertDocument(FEB_1970, "0b01081f80001001", folder1 + "/foo", folder1Id);
-    insertDocument(FEB_1970, "0b01081f80001002", folder1 + "/bar", folder1Id,
-                   folder2Id);
+    String folder1Id = FOLDER.pad("FFF1");
+    String folder1 = "/FFF1";
+    insertFolder(EPOCH_1970, folder1Id, folder1);
+    String folder2Id = FOLDER.pad("FFF2");
+    String folder2 = "/FFF2";
+    insertFolder(EPOCH_1970, folder2Id, folder2);
+    insertDocument(FEB_1970, DOCUMENT.pad("aaa"), folder1 + "/aaa", folder1Id);
+    insertDocument(FEB_1970, DOCUMENT.pad("bbb"), folder1 + "/bbb", folder1Id,
+        folder2Id);
 
     checkModifiedDocIdsPushed(startPaths(folder1, folder2),
-        new Checkpoint(FEB_1970, folder1Id),
+        new Checkpoint(JAN_1970, folder1Id),
         new ImmutableList.Builder<Record>()
-           .addAll(makeExpectedDocIds(folder1, "foo", "bar"))
-           .addAll(makeExpectedDocIds(folder2, "bar"))
+           .addAll(makeExpectedDocIds(folder1, "aaa", "bbb"))
+           .addAll(makeExpectedDocIds(folder2, "bbb"))
            .build(),
-        new Checkpoint(FEB_1970, "0b01081f80001002"));
+        new Checkpoint(FEB_1970, DOCUMENT.pad("bbb")));
   }
 
   @Test
   public void testModifiedDocumentsMultipleStartPaths() throws Exception {
-    String folder1Id = "0b01081f80001000";
-    String folder1 = "/Folder1";
+    String folder1Id = FOLDER.pad("FFF1");
+    String folder1 = "/FFF1";
     insertFolder(JAN_1970, folder1Id, folder1);
-    insertDocument(MAR_1970, "0b01081f80001001", folder1 + "/foo", folder1Id);
-    insertDocument(MAR_1970, "0b01081f80001002", folder1 + "/bar", folder1Id);
-    String folder2Id = "0b01081f80002000";
-    String folder2 = "/Folder2";
+    insertDocument(MAR_1970, DOCUMENT.pad("aaa"), folder1 + "/aaa", folder1Id);
+    insertDocument(MAR_1970, DOCUMENT.pad("bbb"), folder1 + "/bbb", folder1Id);
+    String folder2Id = DOCUMENT.pad("aaa");
+    String folder2 = "/FFF2";
     insertFolder(JAN_1970, folder2Id, folder2);
-    insertDocument(MAR_1970, "0b01081f80002001", folder2 + "/baz", folder2Id);
+    insertDocument(MAR_1970, DOCUMENT.pad("ccc"), folder2 + "/ccc", folder2Id);
 
     checkModifiedDocIdsPushed(startPaths(folder1, folder2),
         new Checkpoint(FEB_1970, folder1Id),
         new ImmutableList.Builder<Record>()
-           .addAll(makeExpectedDocIds(folder1, "foo", "bar"))
-           .addAll(makeExpectedDocIds(folder2, "baz"))
+           .addAll(makeExpectedDocIds(folder1, "aaa", "bbb"))
+           .addAll(makeExpectedDocIds(folder2, "ccc"))
            .build(),
-        new Checkpoint(MAR_1970, "0b01081f80002001"));
+        new Checkpoint(MAR_1970, DOCUMENT.pad("ccc")));
   }
 
   @Test
   public void testModifiedDocumentsInSubfolder() throws Exception {
-    String folder1Id = "0b01081f80001000";
-    String folder1 = "/Folder1";
+    String folder1Id = FOLDER.pad("FFF1");
+    String folder1 = "/FFF1";
     insertFolder(JAN_1970, folder1Id, folder1);
-    insertDocument(MAR_1970, "0b01081f80001001", folder1 + "/foo", folder1Id);
-    insertDocument(MAR_1970, "0b01081f80001002", folder1 + "/bar", folder1Id);
-    String folder2Id = "0b01081f80002000";
-    String folder2 = "/Folder1/Folder2";
+    insertDocument(MAR_1970, DOCUMENT.pad("aaa"), folder1 + "/aaa", folder1Id);
+    insertDocument(MAR_1970, DOCUMENT.pad("bbb"), folder1 + "/bbb", folder1Id);
+    String folder2Id = FOLDER.pad("FFF2");
+    String folder2 = "/FFF1/FFF2";
     insertFolder(JAN_1970, folder2Id, folder2);
-    insertDocument(MAR_1970, "0b01081f80002001", folder2 + "/baz", folder2Id);
+    insertDocument(MAR_1970, DOCUMENT.pad("ccc"), folder2 + "/ccc", folder2Id);
 
     checkModifiedDocIdsPushed(startPaths(folder1),
         new Checkpoint(FEB_1970, folder1Id),
         new ImmutableList.Builder<Record>()
-           .addAll(makeExpectedDocIds(folder1, "foo", "bar"))
-           .addAll(makeExpectedDocIds(folder2, "baz"))
+           .addAll(makeExpectedDocIds(folder1, "aaa", "bbb"))
+           .addAll(makeExpectedDocIds(folder2, "ccc"))
            .build(),
-        new Checkpoint(MAR_1970, "0b01081f80002001"));
+        new Checkpoint(MAR_1970, DOCUMENT.pad("ccc")));
   }
 
   @Test
   public void testModifiedDocumentsNotDocumentOrFolder() throws Exception {
-    String folderId = "0b01081f80001000";
-    String folder = "/Folder1";
+    String folderId = FOLDER.pad("FFF1");
+    String folder = "/FFF1";
     insertFolder(JAN_1970, folderId, folder);
-    insertDocument(FEB_1970, "0b01081f80001001", folder + "/foo", folderId);
-    insertDocument(MAR_1970, "0b01081f80001002", folder + "/bar", folderId);
-    insertSysObject(MAR_1970, "0b01081f80001003", "baz", folder + "/baz",
+    insertDocument(FEB_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
+    insertDocument(MAR_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
+    insertSysObject(MAR_1970, DOCUMENT.pad("ccc"), "ccc", folder + "/ccc",
         "dm_other", folderId);
 
     checkModifiedDocIdsPushed(startPaths(folder),
         new Checkpoint(FEB_1970, folder),
-        makeExpectedDocIds(folder, "foo", "bar"),
-        new Checkpoint(MAR_1970, "0b01081f80001002"));
+        makeExpectedDocIds(folder, "aaa", "bbb"),
+        new Checkpoint(MAR_1970, DOCUMENT.pad("bbb")));
   }
 
   @Test
   public void testModifiedDocumentsWithFolderSubtype() throws Exception {
-    String parentId = "0b001";
-    String parentFolder = "/Folder1";
+    String parentId = FOLDER.pad("FFF1");
+    String parentFolder = "/FFF1";
     insertFolder(EPOCH_1970, parentId, parentFolder);
-    String folderId = "0b002";
-    String folder = "/Folder1/Folder2";
+    String folderId = FOLDER.pad("FFF2");
+    String folder = "/FFF1/FFF2";
     executeUpdate(String.format(
         "insert into dm_folder(r_object_id, r_folder_path) values('%s', '%s')",
         folderId, folder));
-    insertSysObject(FEB_1970, folderId, "Folder2", folder, "dm_folder_subtype",
+    insertSysObject(FEB_1970, folderId, "FFF2", folder, "dm_folder_subtype",
         parentId);
-    insertDocument(FEB_1970, "09001", folder + "/foo", folderId);
-    insertDocument(MAR_1970, "09002", folder + "/bar", folderId);
+    insertDocument(FEB_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
+    insertDocument(MAR_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
 
     checkModifiedDocIdsPushed(startPaths(folder),
         new Checkpoint(JAN_1970, folderId),
-        makeExpectedDocIds(folder, "foo", folder, "bar"),
-        new Checkpoint(MAR_1970, "09002"));
+        makeExpectedDocIds(folder, "aaa", folder, "bbb"),
+        new Checkpoint(MAR_1970, DOCUMENT.pad("bbb")));
   }
 
   @Test
   public void testModifiedDocumentsWithDocumentSubtype() throws Exception {
-    String folderId = "0b01081f80001000";
-    String folder = "/Folder1";
+    String folderId = FOLDER.pad("FFF1");
+    String folder = "/FFF1";
     insertFolder(JAN_1970, folderId, folder);
-    insertDocument(FEB_1970, "0b01081f80001001", folder + "/foo", folderId);
-    insertDocument(MAR_1970, "0b01081f80001002", folder + "/bar", folderId);
-    insertSysObject(MAR_1970, "0b01081f80001003", "baz", folder + "/baz",
+    insertDocument(FEB_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
+    insertDocument(MAR_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
+    insertSysObject(MAR_1970, DOCUMENT.pad("ccc"), "ccc", folder + "/ccc",
         "dm_document_subtype", folderId);
 
     checkModifiedDocIdsPushed(startPaths(folder),
         new Checkpoint(FEB_1970, folder),
-        makeExpectedDocIds(folder, "foo", "bar", "baz"),
-        new Checkpoint(MAR_1970, "0b01081f80001003"));
+        makeExpectedDocIds(folder, "aaa", "bbb", "ccc"),
+        new Checkpoint(MAR_1970, DOCUMENT.pad("ccc")));
   }
 
   private void testUpdateDocsExceptions(Iterator<Integer> failIterations,
@@ -5074,35 +5118,35 @@ public class DocumentumAdaptorTest {
   @Test
   public void testUpdateDocsOtherRowsException()
       throws Exception {
-    String folderId = "0b01081f80001000";
-    String folder = "/Folder1";
+    String folderId = FOLDER.pad("FFF1");
+    String folder = "/FFF1";
     insertFolder(EPOCH_1970, folderId, folder);
-    insertDocument(JAN_1970, "0901081f80001001", folder + "/foo", folderId);
-    insertDocument(FEB_1970, "0901081f80001002", folder + "/bar", folderId);
-    insertDocument(MAR_1970, "0901081f80001003", folder + "/baz", folderId);
+    insertDocument(JAN_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
+    insertDocument(FEB_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
+    insertDocument(MAR_1970, DOCUMENT.pad("ccc"), folder + "/ccc", folderId);
 
     testUpdateDocsExceptions(Iterators.cycle(1), folder,
-        new Checkpoint(JAN_1970, "0901081f80001001"),
+        new Checkpoint(JAN_1970, DOCUMENT.pad("aaa")),
         NO_EXCEPTION,
-        makeExpectedDocIds(folder, "bar", "baz"),
-        new Checkpoint(MAR_1970, "0901081f80001003"));
+        makeExpectedDocIds(folder, "bbb", "ccc"),
+        new Checkpoint(MAR_1970, DOCUMENT.pad("ccc")));
   }
 
   @Test
   public void testUpdateDocsPartialRowsException()
       throws Exception {
-    String folderId = "0b01081f80001000";
-    String folder = "/Folder1";
+    String folderId = FOLDER.pad("FFF1");
+    String folder = "/FFF1";
     insertFolder(EPOCH_1970, folderId, folder);
-    insertDocument(JAN_1970, "0901081f80001001", folder + "/foo", folderId);
-    insertDocument(FEB_1970, "0901081f80001002", folder + "/bar", folderId);
-    insertDocument(MAR_1970, "0901081f80001003", folder + "/baz", folderId);
+    insertDocument(JAN_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
+    insertDocument(FEB_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
+    insertDocument(MAR_1970, DOCUMENT.pad("ccc"), folder + "/ccc", folderId);
 
     testUpdateDocsExceptions(Iterators.forArray(1, 0), folder,
-        new Checkpoint(JAN_1970, "0901081f80001001"),
+        new Checkpoint(JAN_1970, DOCUMENT.pad("aaa")),
         new DfException("Expected Partial Rows Exception"),
-        makeExpectedDocIds(folder, "bar"),
-        new Checkpoint(FEB_1970, "0901081f80001002"));
+        makeExpectedDocIds(folder, "bbb"),
+        new Checkpoint(FEB_1970, DOCUMENT.pad("bbb")));
   }
 
   private DocumentumAdaptor getObjectUnderTestDocumentTypes(String... types)
@@ -5173,14 +5217,14 @@ public class DocumentumAdaptorTest {
 
   private void testCustomType(String docTypes, String... expect)
       throws Exception {
-    String folderId = "0b001";
-    String folder = "/Folder1";
+    String folderId = FOLDER.pad("FFF1");
+    String folder = "/FFF1";
     insertFolder(JAN_1970, folderId, folder);
-    insertSysObject(MAR_1970, "09001", "foo", folder + "/foo",
+    insertSysObject(MAR_1970, DOCUMENT.pad("aaa"), "aaa", folder + "/aaa",
         "dm_document", folderId);
-    insertSysObject(MAR_1970, "09002", "bar", folder + "/bar",
+    insertSysObject(MAR_1970, DOCUMENT.pad("bbb"), "bbb", folder + "/bbb",
         "dm_document_subtype", folderId);
-    insertSysObject(MAR_1970, "09003", "baz", folder + "/baz",
+    insertSysObject(MAR_1970, DOCUMENT.pad("ccc"), "ccc", folder + "/ccc",
         "dm_sysobject_subtype", folderId);
 
     checkTypedDocIdsPushed(startPaths(folder),
@@ -5192,27 +5236,27 @@ public class DocumentumAdaptorTest {
   @Test
   public void testCustomType_all() throws Exception {
     testCustomType("dm_document, dm_document_subtype, dm_sysobject_subtype",
-        "foo", "bar", "baz");
+        "aaa", "bbb", "ccc");
   }
 
   @Test
   public void testCustomType_skip() throws Exception {
-    testCustomType("dm_document, dm_document_subtype", "foo", "bar");
+    testCustomType("dm_document, dm_document_subtype", "aaa", "bbb");
   }
 
   @Test
   public void testCustomType_NonSysobject() throws Exception {
-    String folderId = "0b001";
-    String folder = "/Folder1";
+    String folderId = FOLDER.pad("FFF1");
+    String folder = "/FFF1";
     insertFolder(JAN_1970, folderId, folder);
-    insertSysObject(MAR_1970, "09001", "foo", folder + "/foo",
+    insertSysObject(MAR_1970, DOCUMENT.pad("aaa"), "aaa", folder + "/aaa",
         "dm_document", folderId);
-    insertSysObject(MAR_1970, "09002", "bar", folder + "/bar",
+    insertSysObject(MAR_1970, DOCUMENT.pad("bbb"), "bbb", folder + "/bbb",
         "dm_store", folderId);
 
     checkTypedDocIdsPushed(startPaths(folder),
         "dm_document, dm_store",
         new Checkpoint(FEB_1970, folder),
-        makeExpectedDocIds(folder, "foo"));
+        makeExpectedDocIds(folder, "aaa"));
   }
 }
