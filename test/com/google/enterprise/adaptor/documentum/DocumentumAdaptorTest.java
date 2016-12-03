@@ -2369,6 +2369,28 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
+  public void testFolderDocContent_CustomType() throws Exception {
+    String folderId = "0b001";
+    String folder = "/Folder1/path1/path";
+    insertFolder(JAN_1970, folderId, folder);
+    insertDocument(JAN_1970, "09001", folder + "/file1", folderId);
+    StringBuilder expected =
+        new StringBuilder()
+            .append("<!DOCTYPE html>\n")
+            .append("<html><head><title>Folder path</title></head><body>")
+            .append("<h1>Folder path</h1>")
+            .append("<li><a href=\"path/file1\">file1</a></li>")
+            .append("</body></html>");
+
+    MockResponse response =
+        getDocContent(ImmutableMap.<String, String>of(
+            "documentum.documentTypes", "dm_sysobject"),
+            new MockRequest(DocumentumAdaptor.docIdFromPath(folder)));
+
+    assertEquals(expected.toString(), response.content.toString(UTF_8.name()));
+  }
+
+  @Test
   public void testFolderLastModified() throws Exception {
     String now = getNowPlusMinutes(0);
     String folderId = "0b01081f80078d29";

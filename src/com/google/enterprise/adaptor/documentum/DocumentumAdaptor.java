@@ -1387,7 +1387,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         Date lastModified = dmPersObj.getTime("r_modify_date").getDate();
         resp.setLastModified(lastModified);
 
-        if (isValidatedDocumentType(type)) {
+        if (type.isTypeOf("dm_folder")) {
+          getFolderContent(resp, (IDfFolder) dmPersObj, id);
+        } else if (isValidatedDocumentType(type)) {
           // To avoid issues with time zones, we only count an object as
           // unmodified if its last modified time is more than a day before
           // the last crawl time.
@@ -1402,8 +1404,6 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
                 "Content not modified since last crawl: {0}", dmObjId);
             resp.respondNoContent();
           }
-        } else if (type.isTypeOf("dm_folder")) {
-          getFolderContent(resp, (IDfFolder) dmPersObj, id);
         } else {
           logger.log(Level.WARNING, "Excluded type: {0}", type);
           resp.respondNotFound();
