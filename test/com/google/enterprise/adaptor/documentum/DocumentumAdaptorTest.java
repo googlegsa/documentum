@@ -148,7 +148,8 @@ public class DocumentumAdaptorTest {
       + "event_name varchar, time_stamp_utc timestamp)";
 
   private static final String CREATE_TABLE_CABINET = "create table dm_cabinet "
-      + "(r_object_id varchar, r_folder_path varchar, object_name varchar)";
+      + "(r_object_id varchar, r_folder_path varchar, object_name varchar, "
+      + "owner_name varchar)";
 
   private static final String CREATE_TABLE_FOLDER = "create table dm_folder "
       // Note: mock_acl_id is ACL id for the folder, and is used to
@@ -1585,9 +1586,9 @@ public class DocumentumAdaptorTest {
       // The extra row with a null r_folder_path simulates a row-based query
       // result. Our fake getValueCount correctly returns 0 for that row.
       executeUpdate(String.format("INSERT INTO dm_cabinet "
-          + "(r_object_id, r_folder_path, object_name) "
-          + "VALUES('%1$s',null,'%3$s'),('%1$s','%2$s','%3$s')",
-          "0c" + cabinet, "/" + cabinet, cabinet));
+          + "(r_object_id, r_folder_path, object_name, owner_name) "
+          + "VALUES('%1$s',null,'%3$s','%4$s'),('%1$s','%2$s','%3$s','%4$s')",
+          "0c" + cabinet, "/" + cabinet, cabinet, cabinet));
     }
   }
 
@@ -1686,8 +1687,8 @@ public class DocumentumAdaptorTest {
         "INSERT INTO dm_docbase_config (owner_name) VALUES('Owner')",
         "CREATE TABLE dm_server_config (r_install_owner varchar)",
         "INSERT INTO dm_server_config (r_install_owner) VALUES('Installer')");
-    insertCabinets("Integration", "Resources", "System");
-    insertCabinets("Temp", "Templates", "Owner", "Installer");
+    insertCabinets("Integration", "Resources", "System", "Temp");
+    insertCabinets("Templates", "Owner", "Installer", "dm_bof_registry");
     insertCabinets("Cabinet1", "Cabinet2");
 
     Config config = ProxyAdaptorContext.getInstance().getConfig();
@@ -2509,8 +2510,8 @@ public class DocumentumAdaptorTest {
         "INSERT INTO dm_docbase_config (owner_name) VALUES('Owner')",
         "CREATE TABLE dm_server_config (r_install_owner varchar)",
         "INSERT INTO dm_server_config (r_install_owner) VALUES('Installer')");
-    insertCabinets("Integration", "Resources", "System");
-    insertCabinets("Temp", "Templates", "Owner", "Installer");
+    insertCabinets("Integration", "Resources", "System", "Temp");
+    insertCabinets("Templates", "Owner", "Installer", "dm_bof_registry");
     insertCabinets("Cabinet1", "Cabinet2", "Cabinet3");
 
     Config config = ProxyAdaptorContext.getInstance().getConfig();

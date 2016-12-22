@@ -59,7 +59,8 @@ documentum.src =
 # documentum.cabinetWhereCondition = object_name NOT IN ('Integration', \
 #     ’Resources', 'System', 'Temp', 'Templates') AND object_name \
 #     NOT IN (SELECT r_install_owner FROM dm_server_config) AND \
-#     object_name NOT IN (SELECT owner_name FROM dm_docbase_config)
+#     object_name NOT IN (SELECT owner_name FROM dm_docbase_config) \
+#     AND owner_name <> 'dm_bof_registry'
 
 # Attributes whose metadata is not sent to GSA.
 # documentum.excludedAttributes = a_application_type, a_archive, a_category, \

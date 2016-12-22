@@ -335,7 +335,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     config.addKey("documentum.cabinetWhereCondition", "object_name NOT IN "
         + "('Integration', 'Resources', 'System', 'Temp', 'Templates') AND "
         + "object_name NOT IN (SELECT r_install_owner FROM dm_server_config) "
-        + "AND object_name NOT IN (SELECT owner_name FROM dm_docbase_config)");
+        + "AND object_name NOT IN (SELECT owner_name FROM dm_docbase_config) "
+        + "AND owner_name <> 'dm_bof_registry'");
     config.addKey("documentum.excludedAttributes", "a_application_type, "
         + "a_archive, a_category, a_compound_architecture, a_controlling_app, "
         + "a_effective_date, a_effective_flag, a_effective_label, "
