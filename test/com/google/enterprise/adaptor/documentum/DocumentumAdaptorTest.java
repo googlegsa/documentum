@@ -15,6 +15,7 @@
 package com.google.enterprise.adaptor.documentum;
 
 import static com.google.common.base.Strings.padStart;
+import static com.google.enterprise.adaptor.documentum.DocumentumAdaptor.docIdFromPath;
 import static com.google.enterprise.adaptor.documentum.JdbcFixture.dropAllObjects;
 import static com.google.enterprise.adaptor.documentum.JdbcFixture.executeUpdate;
 import static com.google.enterprise.adaptor.documentum.JdbcFixture.getConnection;
@@ -67,6 +68,7 @@ import com.documentum.fc.client.IDfGroup;
 import com.documentum.fc.client.IDfObjectPath;
 import com.documentum.fc.client.IDfPermit;
 import com.documentum.fc.client.IDfPermitType;
+import com.documentum.fc.client.IDfPersistentObject;
 import com.documentum.fc.client.IDfQuery;
 import com.documentum.fc.client.IDfSession;
 import com.documentum.fc.client.IDfSessionManager;
@@ -117,6 +119,14 @@ import java.util.Vector;
 // TODO(bmj): Add tests that call getDocIds and getModifiedDocIds with 
 // expected returns for all three items: documents, groups, and ACLs.
 
+/*
+ * Naming convention used:
+ * All names are valid hexadecimal strings.
+ * Document names: aaa, bbb, ccc, ddd
+ * Folder names: FFF0, FFF1 ... FFFn
+ * Cabinet names: Cab1, Cab2, Cab3 ... Cabn
+ */
+
 /** Unit tests for DocumentAdaptor class. */
 public class DocumentumAdaptorTest {
 
@@ -131,7 +141,7 @@ public class DocumentumAdaptorTest {
   private static final String FEB_1970 = "1970-02-01 02:03:04";
   private static final String MAR_1970 = "1970-03-01 02:03:04";
 
-  private static final String START_PATH = "/Folder1/path1";
+  private static final String START_PATH = "/Folder1/FFF0";
 
   private static final String DEFAULT_ACL = "45DefaultACL";
 
@@ -194,8 +204,8 @@ public class DocumentumAdaptorTest {
 
   private static final DfException NO_EXCEPTION = null;
 
-  private class ObjectIdFactory {
-    private final String tag;
+  private static class ObjectIdFactory {
+    protected final String tag;
 
     ObjectIdFactory(String tag) {
       this.tag = tag;
@@ -208,8 +218,30 @@ public class DocumentumAdaptorTest {
     }
   }
 
-  private final ObjectIdFactory DOCUMENT = new ObjectIdFactory("09");
-  private final ObjectIdFactory FOLDER = new ObjectIdFactory("0b");
+  private static final ObjectIdFactory DOCUMENT = new ObjectIdFactory("09");
+  private static final ObjectIdFactory FOLDER = new ObjectIdFactory("0b");
+  private static final ObjectIdFactory CABINET = new ObjectIdFactory("0c") {
+    private final ImmutableMap<String, String> reservedCabinets =
+        new ImmutableMap.Builder<String, String>()
+            .put("dm_bof_registry", super.pad("1"))
+            .put("Installer", super.pad("2"))
+            .put("Integration", super.pad("3"))
+            .put("Owner", super.pad("4"))
+            .put("Resources", super.pad("5"))
+            .put("System", super.pad("6"))
+            .put("Temp", super.pad("7"))
+            .put("Templates", super.pad("8"))
+            .build();
+
+    @Override
+    public String pad(String name) {
+      if (reservedCabinets.containsKey(name)) {
+        return reservedCabinets.get(name);
+      } else {
+        return super.pad(name);
+      }
+    }
+  };
 
   @Before
   public void setUp() throws Exception {
@@ -219,7 +251,7 @@ public class DocumentumAdaptorTest {
         CREATE_TABLE_GROUP, CREATE_TABLE_SYSOBJECT, CREATE_TABLE_USER);
 
     // Force the default test start path to exist, so we pass init().
-    insertFolder(EPOCH_1970, "0bStartPath", START_PATH);
+    insertFolder(EPOCH_1970, FOLDER.pad("FFF0"), START_PATH);
   }
 
   @After
@@ -321,6 +353,7 @@ public class DocumentumAdaptorTest {
 
     Map<String, String> folderPathIdsMap = new HashMap<String, String>() {
       {
+        put("/Folder1/FFF0", FOLDER.pad("FFF0"));
         put("/Folder1/path1", "0b01081f80078d2a");
         put("/Folder2/path2", "0b01081f80078d29");
         put("/Folder3/path3", "0b01081f80078d28");
@@ -574,10 +607,9 @@ public class DocumentumAdaptorTest {
     String root = "/";
     String name = "aaa";
     String id = DOCUMENT.pad(name);
-    assertEquals(root, DocumentumAdaptor.docIdToRawPath(
-        DocumentumAdaptor.docIdFromPath(root)));
+    assertEquals(root, DocumentumAdaptor.docIdToRawPath(docIdFromPath(root)));
     assertEquals("/" + name + ":" + id, DocumentumAdaptor.docIdToRawPath(
-        DocumentumAdaptor.docIdFromPath(root, name, id)));
+        docIdFromPath(root, name, id)));
   }
 
   private void initializeAdaptor(DocumentumAdaptor adaptor, String src,
@@ -961,7 +993,37 @@ public class DocumentumAdaptorTest {
         return "1.0.0.000 (Mock CS)";
       }
 
-      public IDfACL getObject(IDfId id) throws DfException {
+      public IDfPersistentObject getObject(IDfId id) throws DfException {
+        if (id.toString().startsWith("09") || id.toString().startsWith("0b")) {
+          return getObjectById(id);
+        } else {
+          return getAclObject(id);
+        }
+      }
+
+      private IDfPersistentObject getObjectById(IDfId id) throws DfException {
+        String query = String.format(
+            "SELECT *, mock_object_path AS r_folder_path "
+            + "FROM dm_sysobject WHERE r_object_id = '%s'", id.toString());
+        try (Connection connection = getConnection();
+             Statement stmt = connection.createStatement();
+             ResultSet rs = stmt.executeQuery(query)) {
+          if (rs.first()) {
+            if (rs.getString("r_object_type").startsWith("dm_folder")) {
+              return Proxies.newProxyInstance(IDfFolder.class,
+                  new FolderMock(rs));
+            } else {
+              return Proxies.newProxyInstance(IDfSysObject.class,
+                  new SysObjectMock(rs));
+            }
+          }
+          return null;
+        } catch (SQLException e) {
+          throw new DfException(e);
+        }
+      }
+
+      private IDfACL getAclObject(IDfId id) throws DfException {
         String query = String.format(
             "SELECT r_object_id FROM dm_acl WHERE r_object_id = '%s'",
             id.toString());
@@ -1609,7 +1671,7 @@ public class DocumentumAdaptorTest {
       executeUpdate(String.format("INSERT INTO dm_cabinet "
           + "(r_object_id, r_folder_path, object_name, owner_name) "
           + "VALUES('%1$s',null,'%3$s','%4$s'),('%1$s','%2$s','%3$s','%4$s')",
-          "0c" + cabinet, "/" + cabinet, cabinet, cabinet));
+          CABINET.pad(cabinet), "/" + cabinet, cabinet, cabinet));
     }
   }
 
@@ -1625,7 +1687,7 @@ public class DocumentumAdaptorTest {
             "documentum.src", startPath,
             "documentum.maxHtmlSize", maxHtmlLinks,
             "documentum.cabinetWhereCondition", whereClause),
-        new MockRequest(DocumentumAdaptor.docIdFromPath(startPath)));
+        new MockRequest(docIdFromPath(startPath)));
 
     assertEquals(queries.toString(), 1, queries.size());
     String query = queries.get(0); 
@@ -1649,10 +1711,12 @@ public class DocumentumAdaptorTest {
     for (String cabinet : expectedCabinets) {
       // First look in the HTML links for the cabinet. If not there,
       // look in the external anchors.
-      String link = "<a href=\"" + cabinet + "\">" + cabinet + "</a>";
+      String cabinetWithId = cabinet + ":" + CABINET.pad(cabinet);
+      String link =
+          "<a href=\"" + "./" + cabinetWithId + "\">/" + cabinet + "</a>";
       if (content.indexOf(link) < 0) {
-        URI uri = docidEncoder.encodeDocId(new DocId(cabinet));
-        URI anchor = response.anchors.get(cabinet);
+        URI uri = docidEncoder.encodeDocId(new DocId(cabinetWithId));
+        URI anchor = response.anchors.get("/" + cabinet);
         assertNotNull("Cabinet " + cabinet + " with URI " + uri + " is missing"
             + " from response:/n" + content + "/n" + response.anchors, anchor);
         assertEquals(uri, anchor);
@@ -1669,35 +1733,34 @@ public class DocumentumAdaptorTest {
   /** @see #testGetDocIdsRootStartPathEmptyWhereClause()  */
   @Test
   public void testGetRootContentEmptyWhereClause() throws Exception {
-    insertCabinets("System", "Cabinet1", "Cabinet2");
-    checkGetRootContent("", 100, "System", "Cabinet1", "Cabinet2");
+    insertCabinets("System", "Cab1", "Cab2");
+    checkGetRootContent("", 100, "System", "Cab1", "Cab2");
   }
 
   @Test
   public void testGetRootContentHtmlResponseOnly() throws Exception {
-    insertCabinets("Cabinet1", "Cabinet2", "Cabinet3");
-    checkGetRootContent("", 100, "Cabinet1", "Cabinet2", "Cabinet3");
+    insertCabinets("Cab1", "Cab2", "Cab3");
+    checkGetRootContent("", 100, "Cab1", "Cab2", "Cab3");
   }
 
   @Test
   public void testGetRootContentAnchorResponseOnly() throws Exception {
-    insertCabinets("Cabinet1", "Cabinet2", "Cabinet3");
-    checkGetRootContent("", 0, "Cabinet1", "Cabinet2", "Cabinet3");
+    insertCabinets("Cab1", "Cab2", "Cab3");
+    checkGetRootContent("", 0, "Cab1", "Cab2", "Cab3");
   }
 
   @Test
   public void testGetRootContentHtmlAndAnchorResponse() throws Exception {
-    insertCabinets("Cabinet1", "Cabinet2", "Cabinet3", "Cabinet4");
-    checkGetRootContent("", 2, "Cabinet1", "Cabinet2", "Cabinet3",
-       "Cabinet4");
+    insertCabinets("Cab1", "Cab2", "Cab3", "Cab4");
+    checkGetRootContent("", 2, "Cab1", "Cab2", "Cab3", "Cab4");
   }
 
   /** @see #testGetDocIdsRootStartPathAddedWhereClause()  */
   @Test
   public void testGetRootContentAddedWhereClause() throws Exception {
-    insertCabinets("System", "Temp", "Cabinet1", "Cabinet2");
+    insertCabinets("System", "Temp", "Cab1", "Cab2");
     checkGetRootContent("object_name NOT IN ('System', 'Temp')",
-        100, "Cabinet1", "Cabinet2");
+        100, "Cab1", "Cab2");
   }
 
   /** @see #testGetDocIdsRootStartPathDefaultWhereClause() */
@@ -1710,19 +1773,19 @@ public class DocumentumAdaptorTest {
         "INSERT INTO dm_server_config (r_install_owner) VALUES('Installer')");
     insertCabinets("Integration", "Resources", "System", "Temp");
     insertCabinets("Templates", "Owner", "Installer", "dm_bof_registry");
-    insertCabinets("Cabinet1", "Cabinet2");
+    insertCabinets("Cab1", "Cab2");
 
     Config config = ProxyAdaptorContext.getInstance().getConfig();
     new DocumentumAdaptor(null).initConfig(config);
 
     checkGetRootContent(config.getValue("documentum.cabinetWhereCondition"),
-        100, "Cabinet1", "Cabinet2");
+        100, "Cab1", "Cab2");
   }
 
   /** @see #testGetDocIdsRootStartPathInvalidWhereClause() */
   @Test
   public void testGetRootContentInvalidWhereClause() throws Exception {
-    insertCabinets("Cabinet1", "Cabinet2");
+    insertCabinets("Cab1", "Cab2");
     try {
       checkGetRootContent("( xyzzy", 100);
       fail("Expected exception not thrown.");
@@ -1797,13 +1860,14 @@ public class DocumentumAdaptorTest {
 
   private void testDocContent(Date lastCrawled, Date lastModified,
       boolean expectNoContent) throws DfException, IOException, SQLException {
-    String path = START_PATH + "/object1";
+    String path = START_PATH + "/aaa";
     String mimeType = "text/html";
     String content = "<html><body>Hello</body></html>";
     insertDocument(lastModified, path, mimeType, content);
 
     MockResponse response = getDocContent(ImmutableMap.<String, String>of(),
-        new MockRequest(DocumentumAdaptor.docIdFromPath(path), lastCrawled));
+        new MockRequest(docIdFromPath(path, DOCUMENT.pad("aaa")),
+            lastCrawled));
 
     // Our mocks, like Documentum, only store seconds, not milliseconds.
     assertEquals(new Date((lastModified.getTime() / 1000) * 1000),
@@ -1822,10 +1886,18 @@ public class DocumentumAdaptorTest {
     }
   }
 
-  private MockResponse getDocContent(String path)
+  private MockResponse getDocContent(ObjectIdFactory type, String path)
       throws DfException, IOException {
-    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
+    String name = path.substring(path.lastIndexOf("/") + 1);
+    Request request = new MockRequest(docIdFromPath(path, type.pad(name)));
     return getDocContent(ImmutableMap.<String, String>of(), request);
+  }
+
+  private MockResponse getDocContent(Map<String, ?> configOverrides,
+      String path) throws DfException, IOException {
+    String name = path.substring(path.lastIndexOf("/") + 1);
+    Request request = new MockRequest(docIdFromPath(path, DOCUMENT.pad(name)));
+    return getDocContent(configOverrides, request);
   }
 
   private MockResponse getDocContent(Map<String, ?> configOverrides,
@@ -1895,7 +1967,7 @@ public class DocumentumAdaptorTest {
       setDocumentSize(DOCUMENT.pad("aaa"), size[0]);
     }
 
-    return getDocContent(path);
+    return getDocContent(DOCUMENT, path);
   }
 
   @Test
@@ -1935,7 +2007,7 @@ public class DocumentumAdaptorTest {
 
     MockResponse response = getDocContent(
         ImmutableMap.of("documentum.displayUrlPattern", displayUrlPattern),
-        new MockRequest(DocumentumAdaptor.docIdFromPath(path)));
+        path);
 
     assertNotNull(response.toString(), response.displayUrl);
     return response.displayUrl.toString();
@@ -1943,45 +2015,46 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testDisplayUrlWithId() throws Exception {
-    String path = "/Folder1/path1/aaa";
+    String path = START_PATH + "/aaa";
     assertEquals("http://webtopurl/drl/" + DOCUMENT.pad("aaa"),
         getDisplayUrl("http://webtopurl/drl/{0}", path));
   }
 
   @Test
   public void testDisplayUrlWithPath() throws Exception {
-    String path = "/Folder1/path1/aaa";
-    assertEquals("http://webtopurl/drl//Folder1/path1/aaa",
+    String path = START_PATH + "/aaa";
+    assertEquals("http://webtopurl/drl//Folder1/FFF0/aaa",
         getDisplayUrl("http://webtopurl/drl/{1}", path));
   }
 
   @Test
   public void testDisplayUrlWithIdAndPath() throws Exception {
-    String path = "/Folder1/path1/aaa";
-    assertEquals("/Folder1/path1/aaa"
-        + "-http://webtopurl/0900000000000aaa/drl/",
+    String path = START_PATH + "/aaa";
+    assertEquals("/Folder1/FFF0/aaa-http://webtopurl/0900000000000aaa/drl/",
         getDisplayUrl("{1}-http://webtopurl/{0}/drl/", path));
   }
 
-  private Acl getACL(String path, MarkAllDocsPublic markAllDocsPublic)
+  private Acl getACL(ObjectIdFactory type, String path,
+      MarkAllDocsPublic markAllDocsPublic)
       throws Exception {
     assertTrue(path, path.startsWith(START_PATH));
 
+    String name = path.substring(path.lastIndexOf("/") + 1);
     MockResponse response = getDocContent(
         ImmutableMap.of("adaptor.markAllDocsAsPublic", markAllDocsPublic),
-        new MockRequest(DocumentumAdaptor.docIdFromPath(path)));
+        new MockRequest(docIdFromPath(path, type.pad(name))));
 
     return response.acl;
   }
 
   @Test
   public void testDocumentACL() throws Exception {
-    String path = "/Folder1/path1/object1";
+    String path = START_PATH + "/aaa";
     String documentACL = "45DocumentACL";
     insertDocument(path);
     setSysObjectACL(path, documentACL);
 
-    Acl acl = getACL(path, MarkAllDocsPublic.FALSE);
+    Acl acl = getACL(DOCUMENT, path, MarkAllDocsPublic.FALSE);
     assertNotNull(acl);
     assertEquals(new DocId(documentACL), acl.getInheritFrom());
   }
@@ -1989,46 +2062,47 @@ public class DocumentumAdaptorTest {
   @Test
   public void testFolderACL() throws Exception {
     String now = getNowPlusMinutes(0);
-    String folderId = "0b01081f80078d29";
-    String folder = START_PATH + "/path2";
+    String folderId = FOLDER.pad("FFF1");
+    String folder = START_PATH + "/FFF1";
     String folderACL = "45FolderAcl";
     insertFolder(now, folderId, folder);
     setSysObjectACL(folder, folderACL);
 
-    Acl acl = getACL(folder, MarkAllDocsPublic.FALSE);
+    Acl acl = getACL(FOLDER, folder, MarkAllDocsPublic.FALSE);
     assertNotNull(acl);
     assertEquals(new DocId(folderACL), acl.getInheritFrom());
   }
 
   @Test
   public void testDocumentAclMarkAllDocsPublic() throws Exception {
-    String path = "/Folder1/path1/object1";
+    String path = START_PATH + "/aaa";
     String documentACL = "45DocumentACL";
     insertDocument(path);
     setSysObjectACL(path, documentACL);
 
-    Acl acl = getACL(path, MarkAllDocsPublic.TRUE);
+    Acl acl = getACL(DOCUMENT, path, MarkAllDocsPublic.TRUE);
     assertNull(acl);
   }
 
   @Test
   public void testFolderAclMarkAllDocsPublic() throws Exception {
     String now = getNowPlusMinutes(0);
-    String folderId = "0b01081f80078d29";
-    String folder = START_PATH + "/path2";
+    String folderId = FOLDER.pad("FFF1");
+    String folder = START_PATH + "/FFF1";
     String folderACL = "45FolderAcl";
     insertFolder(now, folderId, folder);
     setSysObjectACL(folder, folderACL);
 
-    Acl acl = getACL(folder, MarkAllDocsPublic.TRUE);
+    Acl acl = getACL(FOLDER, folder, MarkAllDocsPublic.TRUE);
     assertNull(acl);
   }
 
   private void testFolderAcl(boolean indexFolder, boolean allDocsPubilc,
       boolean expectAcl) throws Exception {
     String now = getNowPlusMinutes(0);
-    String folderId = "0bfolder1";
-    String folder = START_PATH + "/path2";
+    String name = "FFF1";
+    String folderId = FOLDER.pad(name);
+    String folder = START_PATH + "/" + name;
     String folderACL = "45FolderAcl";
     insertFolder(now, folderId, folder);
     setSysObjectACL(folder, folderACL);
@@ -2036,7 +2110,7 @@ public class DocumentumAdaptorTest {
     MockResponse response = getDocContent(ImmutableMap.of(
             "adaptor.markAllDocsAsPublic", allDocsPubilc,
             "documentum.indexFolders", indexFolder),
-            new MockRequest(DocumentumAdaptor.docIdFromPath(folder)));
+            new MockRequest(docIdFromPath(folder, FOLDER.pad(name))));
 
     if (expectAcl) {
       assertNotNull(response.acl);
@@ -2070,12 +2144,13 @@ public class DocumentumAdaptorTest {
       Map<String, String> configOverrides,
       TreeMultimap<String, String> expected) throws Exception {
     String now = getNowPlusMinutes(0);
-    String folderId = "0bfolder1";
-    String folder = START_PATH + "/path2";
+    String name = "FFF1";
+    String folderId = FOLDER.pad(name);
+    String folder = START_PATH + "/" + name;
     insertFolder(now, folderId, folder);
     writeAttributes(folderId, attrs);
 
-    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(folder));
+    Request request = new MockRequest(docIdFromPath(folder, folderId));
     MockResponse response = getDocContent(configOverrides, request);
 
     assertEquals(expected, response.metadata);
@@ -2088,7 +2163,7 @@ public class DocumentumAdaptorTest {
     attributes.put("attr2", "value2");
     attributes.put("attr3", "value3");
     TreeMultimap<String, String> expected = TreeMultimap.create(attributes);
-    expected.put("r_object_id", "0bfolder1");
+    expected.put("r_object_id", FOLDER.pad("FFF1"));
 
     // documentum.indexFolders is set to true by default.
     testFolderMetadata(attributes, ImmutableMap.<String, String>of(), expected);
@@ -2101,7 +2176,7 @@ public class DocumentumAdaptorTest {
     attributes.put("attr2", "value2");
     attributes.put("attr3", "value3");
     TreeMultimap<String, String> expected = TreeMultimap.create(attributes);
-    expected.put("r_object_id", "0bfolder1");
+    expected.put("r_object_id", FOLDER.pad("FFF1"));
 
     testFolderMetadata(attributes,
         ImmutableMap.of("documentum.indexFolders", "false"), expected);
@@ -2112,7 +2187,7 @@ public class DocumentumAdaptorTest {
     insertCabinets("System", "Cabinet1", "Cabinet2");
     MockResponse response =
         getDocContent(ImmutableMap.of("documentum.src", "/"),
-            new MockRequest(DocumentumAdaptor.docIdFromPath("/")));
+            new MockRequest(docIdFromPath("/")));
 
     assertTrue(response.noIndex);
   }
@@ -2120,15 +2195,16 @@ public class DocumentumAdaptorTest {
   private void testNoIndex(Map<String, ?> configOverrides, boolean expected)
       throws Exception {
     String now = getNowPlusMinutes(0);
-    String folderId = "0bfolder1";
-    String folder = START_PATH + "/path2";
+    String name = "FFF1";
+    String folderId = FOLDER.pad(name);;
+    String folder = START_PATH + "/" + name;
     String folderACL = "45FolderAcl";
     insertFolder(now, folderId, folder);
     setSysObjectACL(folder, folderACL);
 
     MockResponse response =
         getDocContent(configOverrides,
-            new MockRequest(DocumentumAdaptor.docIdFromPath(folder)));
+            new MockRequest(docIdFromPath(folder, folderId)));
 
     assertEquals(expected, response.noIndex);
   }
@@ -2234,7 +2310,7 @@ public class DocumentumAdaptorTest {
         ? ImmutableMap.<String, String>of()
         : ImmutableMap.of("documentum.excludedAttributes", excludedAttrs);
 
-    Request request = new MockRequest(DocumentumAdaptor.docIdFromPath(path));
+    Request request = new MockRequest(docIdFromPath(path, objectId));
     MockResponse response = getDocContent(configOverrides, request);
 
     assertEquals(expected, response.metadata);
@@ -2328,12 +2404,12 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testVirtualDocContentNoChildren() throws Exception {
-    String path = START_PATH + "/vdoc";
+    String path = START_PATH + "/aaa";
     String objectMimeType = "text/html";
     String objectContent = "<html><body>Hello</body></html>";
     insertVirtualDocument(path, objectMimeType, objectContent);
 
-    MockResponse response = getDocContent(path);
+    MockResponse response = getDocContent(DOCUMENT, path);
 
     assertEquals(objectMimeType, response.contentType);
     assertEquals(objectContent, response.content.toString(UTF_8.name()));
@@ -2348,7 +2424,7 @@ public class DocumentumAdaptorTest {
     insertVirtualDocument(path, objectMimeType, objectContent,
         "aaa", "bbb", "ccc");
 
-    MockResponse response = getDocContent(path);
+    MockResponse response = getDocContent(DOCUMENT, path);
 
     assertEquals(objectMimeType, response.contentType);
     assertEquals(objectContent, response.content.toString(UTF_8.name()));
@@ -2389,7 +2465,7 @@ public class DocumentumAdaptorTest {
     expected.append("\"FFF1/ccc:0900000000000ccc\">ccc</a></li>");
     expected.append("</body></html>");
 
-    MockResponse response = getDocContent(folder);
+    MockResponse response = getDocContent(FOLDER, folder);
 
     assertFalse(response.notFound);
     assertEquals("text/html; charset=UTF-8", response.contentType);
@@ -2398,8 +2474,10 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testFolderDocContent_CustomType() throws Exception {
-    String folderId = FOLDER.pad("FFF1");
-    String folder = "/Folder1/path1/FFF1";
+    String name = "FFF1";
+    String folderId = FOLDER.pad(name);
+    String path = START_PATH + "/path1/";
+    String folder = path + name;
     insertFolder(JAN_1970, folderId, folder);
     insertDocument(JAN_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
     StringBuilder expected =
@@ -2413,7 +2491,7 @@ public class DocumentumAdaptorTest {
     MockResponse response =
         getDocContent(ImmutableMap.<String, String>of(
             "documentum.documentTypes", "dm_sysobject"),
-            new MockRequest(DocumentumAdaptor.docIdFromPath(folder)));
+            new MockRequest(docIdFromPath(folder, folderId)));
 
     assertEquals(expected.toString(), response.content.toString(UTF_8.name()));
   }
@@ -2421,10 +2499,10 @@ public class DocumentumAdaptorTest {
   @Test
   public void testFolderLastModified() throws Exception {
     String now = getNowPlusMinutes(0);
-    String folderId = "0b01081f80078d29";
-    String folder = START_PATH + "/path2";
+    String folderId = FOLDER.pad("FFF1");
+    String folder = START_PATH + "/FFF1";
     insertFolder(now, folderId, folder);
-    MockResponse response = getDocContent(folder);
+    MockResponse response = getDocContent(FOLDER, folder);
 
     assertEquals(dateFormat.parse(now), response.lastModified);
   }
@@ -2432,20 +2510,20 @@ public class DocumentumAdaptorTest {
   @Test
   public void testFolderDisplayUrl() throws Exception {
     String now = getNowPlusMinutes(0);
-    String folderId = "0b01081f80078d29";
-    String folder = START_PATH + "/path2";
+    String folderId = FOLDER.pad("FFF1");
+    String folder = START_PATH + "/FFF1";
     insertFolder(now, folderId, folder);
-    MockResponse response = getDocContent(folder);
+    MockResponse response = getDocContent(FOLDER, folder);
 
     assertNotNull(response.displayUrl);
-    assertEquals("http://webtop/drl/0b01081f80078d29",
+    assertEquals("http://webtop/drl/" + folderId,
         response.displayUrl.toString());
   }
 
   @Test
   public void testGetDocContentNotFound() throws Exception {
     String path = START_PATH + "/doesNotExist";
-    assertTrue(getDocContent(path).notFound);
+    assertTrue(getDocContent(DOCUMENT, path).notFound);
   }
 
   @Test
@@ -2455,16 +2533,18 @@ public class DocumentumAdaptorTest {
     insertFolder(now, "0b01081f80078d30", path);
 
     assertFalse(path.startsWith(START_PATH));
-    assertTrue(getDocContent(path).notFound);
+    assertTrue(getDocContent(FOLDER, path).notFound);
   }
 
   /**
    * Builds a list of expected DocId Records that the Pusher should receive.
    */
-  private List<Record> expectedRecordsFor(String... paths) {
+  private List<Record> expectedRecordsFor(ObjectIdFactory type,
+      String... paths) {
     ImmutableList.Builder<Record> builder = ImmutableList.builder();
     for (String path : paths) {
-      DocId docid = DocumentumAdaptor.docIdFromPath(path);
+      String name = path.substring(path.lastIndexOf("/") + 1);
+      DocId docid = docIdFromPath(path, type.pad(name));
       builder.add(new Record.Builder(docid).build());
     }
     return builder.build();
@@ -2490,9 +2570,9 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testGetDocIdsRootStartPath() throws Exception {
-    insertCabinets("Cabinet1", "Cabinet2", "Cabinet3");
+    insertCabinets("Cab1", "Cab2", "Cab3");
     testGetDocIds(startPaths("/"),
-        expectedRecordsFor("/Cabinet1", "/Cabinet2", "/Cabinet3"));
+        expectedRecordsFor(CABINET, "/Cab1", "/Cab2", "/Cab3"));
   }
 
   /** @see #testGetRootContentNoCabinets() */
@@ -2502,30 +2582,30 @@ public class DocumentumAdaptorTest {
         ImmutableMap.of(
             "documentum.src", "/",
             "documentum.cabinetWhereCondition", "1=1"),
-        expectedRecordsFor());
+        expectedRecordsFor(CABINET));
   }
 
   /** @see #testGetRootContentEmptyWhereClause() */
   @Test
   public void testGetDocIdsRootStartPathEmptyWhereClause() throws Exception {
-    insertCabinets("System", "Temp", "Cabinet1", "Cabinet2");
+    insertCabinets("System", "Temp", "Cab1", "Cab2");
     testGetDocIds(
         ImmutableMap.of(
             "documentum.src", "/",
             "documentum.cabinetWhereCondition", ""),
-        expectedRecordsFor("/System", "/Temp", "/Cabinet1", "/Cabinet2"));
+        expectedRecordsFor(CABINET, "/System", "/Temp", "/Cab1", "/Cab2"));
   }
 
   /** @see #testGetRootContentAddedWhereClause() */
   @Test
   public void testGetDocIdsRootStartPathAddedWhereClause() throws Exception {
-    insertCabinets("System", "Temp", "Cabinet1", "Cabinet2");
+    insertCabinets("System", "Temp", "Cab1", "Cab2");
     testGetDocIds(
         ImmutableMap.of(
             "documentum.src", "/",
             "documentum.cabinetWhereCondition",
                 "object_name NOT IN ('System', 'Temp')"),
-        expectedRecordsFor("/Cabinet1", "/Cabinet2"));
+        expectedRecordsFor(CABINET, "/Cab1", "/Cab2"));
   }
 
   /** @see #testGetRootContentDefaultWhereClause() */
@@ -2548,7 +2628,7 @@ public class DocumentumAdaptorTest {
             "documentum.src", "/",
             "documentum.cabinetWhereCondition",
                 config.getValue("documentum.cabinetWhereCondition")),
-        expectedRecordsFor("/Cabinet1", "/Cabinet2", "/Cabinet3"));
+        expectedRecordsFor(CABINET, "/Cabinet1", "/Cabinet2", "/Cabinet3"));
   }
 
   /** @see #testGetRootContentInvalidWhereClause() */
@@ -2560,7 +2640,7 @@ public class DocumentumAdaptorTest {
           ImmutableMap.of(
               "documentum.src", "/",
               "documentum.cabinetWhereCondition", "( xyzzy"),
-          expectedRecordsFor());
+          expectedRecordsFor(CABINET));
       fail("Expected exception not thrown.");
     } catch (IOException expected) {
       assertTrue(expected.getCause() instanceof DfException);
@@ -2569,30 +2649,31 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testGetDocIdsSingleStartPath() throws Exception {
-    testGetDocIds(startPaths(START_PATH), expectedRecordsFor(START_PATH));
+    testGetDocIds(startPaths(START_PATH),
+        expectedRecordsFor(FOLDER, START_PATH));
   }
 
   @Test
   public void testGetDocIdsMultipleStartPaths() throws Exception {
     String now = getNowPlusMinutes(0);
-    String path2 = "/Folder2";
-    String path3 = "/Folder3";
-    insertFolder(now, "0bFolder2", path2);
-    insertFolder(now, "0bFolder3", path3);
+    String path2 = "/FFF2";
+    String path3 = "/FFF3";
+    insertFolder(now, FOLDER.pad("FFF2"), path2);
+    insertFolder(now, FOLDER.pad("FFF3"), path3);
 
     testGetDocIds(startPaths(START_PATH, path2, path3),
-        expectedRecordsFor(START_PATH, path2, path3));
+        expectedRecordsFor(FOLDER, START_PATH, path2, path3));
   }
 
   @Test
   public void testGetDocIdsMultipleStartPathsSomeOffline() throws Exception {
     String now = getNowPlusMinutes(0);
-    String path2 = "/Folder2";
-    String path3 = "/Folder3";
-    insertFolder(now, "0bFolder3", path3);
+    String path2 = "/FFF2";
+    String path3 = "/FFF3";
+    insertFolder(now, FOLDER.pad("FFF3"), path3);
 
     testGetDocIds(startPaths(START_PATH, path2, path3),
-        expectedRecordsFor(START_PATH, path3));
+        expectedRecordsFor(FOLDER, START_PATH, path3));
   }
 
   /**
@@ -4770,8 +4851,8 @@ public class DocumentumAdaptorTest {
       DocId docid;
       if (name.equals(folderPath)) {
         name = folderPath.substring(folderPath.lastIndexOf("/") + 1);
-        docid =
-            DocumentumAdaptor.docIdFromPath(folderPath, null, FOLDER.pad(name));
+        String path = folderPath.substring(0, folderPath.lastIndexOf("/"));
+        docid = docIdFromPath(path, name, FOLDER.pad(name));
       } else {
         String path;
         if (name.lastIndexOf("/") != -1) {
@@ -4780,7 +4861,7 @@ public class DocumentumAdaptorTest {
         } else {
           path = folderPath;
         }
-        docid = DocumentumAdaptor.docIdFromPath(path, name, DOCUMENT.pad(name));
+        docid = docIdFromPath(path, name, DOCUMENT.pad(name));
       }
       builder.add(new Record.Builder(docid).setCrawlImmediately(true).build());
     }

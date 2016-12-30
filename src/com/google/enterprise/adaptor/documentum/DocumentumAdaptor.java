@@ -269,20 +269,22 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     }
   }
 
-  // Returns a DocId of a path with optional name to append.
+  // Returns a DocId of a path with name and id to append.
   @VisibleForTesting
   static DocId docIdFromPath(String path, String name, String id) {
-    //TODO (Srinivas): Clean up empty and null names.
-    if (Strings.isNullOrEmpty(name)) {
-      if (path.endsWith("/")) {
-        path = path.substring(0, path.length() - 1);
-      }
-      return docIdFromPath(path + ":" + id);
-    } else if (path.endsWith("/")) {
+    if (path.endsWith("/")) {
       return docIdFromPath(path + name + ":" + id);
     } else {
       return docIdFromPath(path + "/" + name + ":" + id);
     }
+  }
+
+  // Returns a DocId of a path with id to append.
+  @VisibleForTesting
+  static DocId docIdFromPath(String path, String id) {
+    String name = path.substring(path.lastIndexOf("/") + 1);
+    String docPath = path.substring(0, path.lastIndexOf("/"));
+    return docIdFromPath(docPath, name, id);
   }
 
   // Strip leading and trailing slashes so our DocIds show up
@@ -616,11 +618,14 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       ArrayList<DocId> docIds = new ArrayList<DocId>();
       for (String startPath : validatedStartPaths) {
         if (startPath.equals("/")) {
-          for (String cabinet : listRootCabinets(dmSession)) {
-            docIds.add(docIdFromPath(cabinet));
-          }
+          docIds.addAll(listRootCabinets(dmSession));
         } else {
-          docIds.add(docIdFromPath(startPath));
+          IDfSysObject obj =
+              (IDfSysObject) dmSession.getObjectByPath(startPath);
+          docIds.add(docIdFromPath(
+              startPath.substring(0, startPath.lastIndexOf("/")),
+              obj.getObjectName(),
+              obj.getObjectId().toString()));
         }
       }
       logger.log(Level.FINER, "DocumentumAdaptor DocIds: {0}", docIds);
@@ -651,8 +656,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   }
 
   /** Returns a list of paths for all the docbase's cabinets. */
-  private List<String>listRootCabinets(IDfSession session) throws DfException {
-    ImmutableList.Builder<String> cabinets = ImmutableList.builder();
+  private List<DocId> listRootCabinets(IDfSession session) throws DfException {
+    ImmutableList.Builder<DocId> cabinets = ImmutableList.builder();
 
     // Select r_object_id to allow an object- or row-based query. See
     // "To return results by object ID" in the DQL Reference Manual.
@@ -667,10 +672,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
     try {
       while (result.next()) {
+        String objectId = result.getString("r_object_id");
         for (int j = 0; j < result.getValueCount("r_folder_path"); j++) {
           String cabinet = result.getRepeatingString("r_folder_path", j);
           logger.log(Level.FINER, "Cabinet: {0}", cabinet);
-          cabinets.add(cabinet);
+          cabinets.add(docIdFromPath(cabinet, objectId));
         }
       }
     } finally {
@@ -1427,6 +1433,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
           dmPersObj = dmSession.getObjectByPath(path);
         }
       } else {
+        logger.log(Level.FINE, "Path doesn't contain objectid: {0}", path);
         dmPersObj = dmSession.getObjectByPath(path);
       }
 
@@ -1439,7 +1446,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       IDfId dmObjId = dmPersObj.getObjectId();
       IDfType type = dmPersObj.getType();
       //TODO (Srinivas): remove this code
-      id = docIdFromPath(path, null, dmPersObj.getObjectId().toString());
+      if (!path.matches(".*:\\p{XDigit}{16}")) {
+        id = docIdFromPath(path, dmPersObj.getObjectId().toString());
+      }
       logger.log(Level.FINER, "Object Id: {0}; Type: {1}",
           new Object[] {dmObjId, type.getName()});
 
@@ -1514,9 +1523,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    * Returns all the docbase's cabinets as links in a generated HTML document
    * and as external links.
    */
-  private void getRootContent(Response resp, DocId id, List<String> cabinets)
+  private void getRootContent(Response resp, DocId id, List<DocId> cabinets)
       throws IOException {
-    Iterator<String> iterator = cabinets.iterator();
+    Iterator<DocId> iterator = cabinets.iterator();
     resp.setNoIndex(true);
     // Large Documentum deployments can have tens or hundreds of thousands
     // of cabinets. The GSA truncates large HTML documents at 2.5MB, so return
@@ -1530,16 +1539,16 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
          new HtmlResponseWriter(writer, docIdEncoder, Locale.ENGLISH)) {
       htmlWriter.start(id, "/");
       for (int i = 0; i < maxHtmlSize && iterator.hasNext(); i++) {
-        DocId docid = docIdFromPath(iterator.next());
-        htmlWriter.addLink(docid, docid.getUniqueId());
+        DocId docid = iterator.next();
+        htmlWriter.addLink(docid, docIdToPath(docid));
       }
       htmlWriter.finish();
     }
 
     // Add the remaining cabinets as external anchors.
     while (iterator.hasNext()) {
-      DocId docid = docIdFromPath(iterator.next());
-      resp.addAnchor(docIdEncoder.encodeDocId(docid), docid.getUniqueId());
+      DocId docid = iterator.next();
+      resp.addAnchor(docIdEncoder.encodeDocId(docid), docIdToPath(docid));
     }
 
     // Finally, write out the generated HTML links as content.
