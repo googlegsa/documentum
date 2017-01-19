@@ -1277,7 +1277,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       IDfObjectPath objPath = (IDfObjectPath) enumPaths.nextElement();
       String path = objPath.getFullPath();
       DocId docId = docIdFromPath(path, name, objectId);
-      if (isUnderStartPath(docIdToPath(docId), validatedStartPaths)) {
+      if (isUnderStartPath(docId, validatedStartPaths)) {
         builder.add(new Record.Builder(docId)
             .setCrawlImmediately(true).build());
       }
@@ -1406,8 +1406,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     DocId id = req.getDocId();
     logger.log(Level.FINER, "Get content for id: {0}", id);
 
-    String path = docIdToRawPath(id);
-    if (!isUnderStartPath(path, validatedStartPaths)) {
+    if (!isUnderStartPath(id, validatedStartPaths)) {
+      logger.log(Level.FINER, "Not under a start path: {0}", id);
       resp.respondNotFound();
       return;
     }
@@ -1416,6 +1416,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     try {
       dmSession = dmSessionManager.getSession(docbase);
 
+      String path = docIdToRawPath(id);
       // Special root path "/" means return all cabinets.
       if (path.equals("/")) {
         getRootContent(resp, id, listRootCabinets(dmSession));
@@ -1493,12 +1494,14 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   }
 
   /**
-   * Returns {@code true} if the supplied {@code path} is under one of the
+   * Returns {@code true} if the supplied {@code DocId} is under one of the
    * validated {@code startPaths}, {@code false} otherwise.
    *
-   * @param path a String representing a possible path to a document
+   * @param docId a DocId representing a document
+   * @param startPaths a List of normalized start paths
    */
-  private boolean isUnderStartPath(String path, List<String> startPaths) {
+  private boolean isUnderStartPath(DocId docId, List<String> startPaths) {
+    String path = docIdToPath(docId);
     for (String startPath : startPaths) {
       if (startPath.equals("/")) {
         return true;

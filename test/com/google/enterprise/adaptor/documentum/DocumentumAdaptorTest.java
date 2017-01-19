@@ -2440,6 +2440,25 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
+  public void testStartPathDocContent() throws Exception {
+    String startFolder = START_PATH.substring(START_PATH.lastIndexOf("/") + 1);
+    StringBuilder expected = new StringBuilder();
+    expected.append("<!DOCTYPE html>\n<html><head><title>");
+    expected.append("Folder ").append(startFolder);
+    expected.append("</title></head><body><h1>");
+    expected.append("Folder ").append(startFolder);
+    expected.append("</h1></body></html>");
+
+    MockResponse response = getDocContent(
+        ImmutableMap.of("documentum.src", START_PATH),
+        new MockRequest(docIdFromPath(START_PATH, FOLDER.pad(startFolder))));
+
+    assertFalse(response.notFound);
+    assertEquals("text/html; charset=UTF-8", response.contentType);
+    assertEquals(expected.toString(), response.content.toString(UTF_8.name()));
+  }
+
+  @Test
   public void testFolderDocContent() throws Exception {
     String now = getNowPlusMinutes(0);
     String folderId = FOLDER.pad("FFF1");
