@@ -1801,16 +1801,28 @@ public class DocumentumAdaptorTest {
   private void insertDocument(Date lastModified, String path,
       String mimeType, String content) throws SQLException {
     String name = path.substring(path.lastIndexOf("/") + 1);
+    String id = DOCUMENT.pad(name);
+    insertDocument(lastModified, id, path, name, mimeType, content);
+  }
+
+  // Note that insertDocument with content takes lastModified as a Date, whereas
+  // insertDocument with vararg folderIds takes lastModified as a String. You
+  // must choose, but choose wisely, as some before you have chosen ... poorly.
+  private void insertDocument(Date lastModified, String id, String path,
+      String name, String mimeType, String content) throws SQLException {
     executeUpdate(String.format(
        "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
        + "r_object_type, mock_mime_type, mock_content, r_modify_date, "
        + "mock_acl_id, r_content_size) "
        + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'}, '%s', %d)",
-       DOCUMENT.pad(name), name, path, "dm_document", mimeType,
+       id, name, path, "dm_document", mimeType,
        content, dateFormat.format(lastModified), DEFAULT_ACL,
        (content == null) ? null : content.length()));
   }
 
+  // Note that insertDocument with content takes lastModified as a Date, whereas
+  // insertDocument with vararg folderIds takes lastModified as a String. You
+  // must choose, but choose wisely, as some before you have chosen ... poorly.
   private void insertDocument(String lastModified, String id, String path,
       String... folderIds) throws SQLException {
     String name = path.substring(path.lastIndexOf("/") + 1);
@@ -2459,6 +2471,39 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
+  public void testSlashInNameDocContent() throws Exception {
+    // If the slash in the name is interpreted as a path separator,
+    // we will try to crawl this document.
+    String folder = START_PATH + "/Slash";
+    insertFolder(getNowPlusMinutes(0), FOLDER.pad("FFF1"), folder);
+    String mimeType = "text/plain";
+    String wrongName = "InName";
+    insertDocument(new Date(), DOCUMENT.pad("DDD0"), folder + "/" + wrongName,
+        wrongName, mimeType, "Wrong Document");
+
+    // The correct document, with an embedded slash in the file name.
+    String name = "Slash/InName";
+    String path = START_PATH + "/" + name;
+    String content = "Right Document";
+    String id = DOCUMENT.pad("DDD1");
+    insertDocument(new Date(), id, path, name, mimeType, content);
+
+    // First try a DocId with an unencoded slash in the path.
+    MockResponse response = getDocContent(ImmutableMap.<String, String>of(),
+        new MockRequest(docIdFromPath(path, id)));
+    assertFalse(response.notFound);
+    assertEquals(response.toString(), mimeType, response.contentType);
+    assertEquals(content, response.content.toString(UTF_8.name()));
+
+    // Now try a DocId with encoded slash in the name.
+    response = getDocContent(ImmutableMap.<String, String>of(),
+        new MockRequest(docIdFromPath(START_PATH, name, id)));
+    assertFalse(response.notFound);
+    assertEquals(mimeType, response.contentType);
+    assertEquals(content, response.content.toString(UTF_8.name()));
+  }
+
+  @Test
   public void testFolderDocContent() throws Exception {
     String now = getNowPlusMinutes(0);
     String folderId = FOLDER.pad("FFF1");
@@ -2468,21 +2513,29 @@ public class DocumentumAdaptorTest {
     insertDocument(now, DOCUMENT.pad("bbb"), folder + "/bbb evil<chars?",
         folderId);
     insertDocument(now, DOCUMENT.pad("ccc"), folder + "/ccc", folderId);
+    // insertDocument (with folderId varargs) pulls the name off the path using
+    // the last instance of '/', so I call insertSysObject directly here.
+    String slashesInName = "TPS Report 1/23/2017";
+    insertSysObject(now, DOCUMENT.pad("ddd"),
+        slashesInName, folder + "/" + slashesInName, "dm_document", folderId);
 
-    StringBuilder expected = new StringBuilder();
-    expected.append("<!DOCTYPE html>\n<html><head><title>");
-    expected.append("Folder FFF1");
-    expected.append("</title></head><body><h1>");
-    expected.append("Folder FFF1");
-    expected.append("</h1>");
-    expected.append("<li><a href=");
-    expected.append("\"FFF1/aaa:0900000000000aaa\">aaa</a></li>");
-    expected.append("<li><a href=");
-    expected.append("\"FFF1/bbb%20evil%3Cchars%3F:0900000000000bbb\"");
-    expected.append(">bbb evil&lt;chars?</a></li>");
-    expected.append("<li><a href=");
-    expected.append("\"FFF1/ccc:0900000000000ccc\">ccc</a></li>");
-    expected.append("</body></html>");
+    StringBuilder expected = new StringBuilder()
+        .append("<!DOCTYPE html>\n<html><head><title>")
+        .append("Folder FFF1")
+        .append("</title></head><body><h1>")
+        .append("Folder FFF1")
+        .append("</h1>")
+        .append("<li><a href=")
+        .append("\"FFF1/aaa:0900000000000aaa\">aaa</a></li>")
+        .append("<li><a href=")
+        .append("\"FFF1/bbb%20evil%3Cchars%3F:0900000000000bbb\"")
+        .append(">bbb evil&lt;chars?</a></li>")
+        .append("<li><a href=")
+        .append("\"FFF1/ccc:0900000000000ccc\">ccc</a></li>")
+        .append("<li><a href=")
+        .append("\"FFF1/TPS%20Report%201%252F23%252F2017:0900000000000ddd\">")
+        .append("TPS Report 1/23/2017</a></li>")
+        .append("</body></html>");
 
     MockResponse response = getDocContent(FOLDER, folder);
 

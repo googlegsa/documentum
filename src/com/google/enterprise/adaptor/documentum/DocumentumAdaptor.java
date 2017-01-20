@@ -272,6 +272,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   // Returns a DocId of a path with name and id to append.
   @VisibleForTesting
   static DocId docIdFromPath(String path, String name, String id) {
+    // Documentum allows '/' in object names (but not folder names).
+    // Escape any slashes so the GSA does not interpret them as path separators.
+    // Note that the '%' in the replacement will get escaped to %25 in the URL,
+    // so this will look like a doubly-escaped '/' character on the GSA.
+    name = name.replace("/", "%2F");
     if (path.endsWith("/")) {
       return docIdFromPath(path + name + ":" + id);
     } else {
