@@ -1480,11 +1480,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
             resp.respondNoContent();
           }
         } else {
-          logger.log(Level.WARNING, "Excluded type: {0}", type);
+          logger.log(Level.INFO, "Excluded type: {0}", type.getName());
           resp.respondNotFound();
         }
       } else {
-        logger.log(Level.WARNING, "Unsupported type: {0}", type);
+        logger.log(Level.INFO, "Unsupported type: {0}", type.getName());
         resp.respondNotFound();
       }
     } catch (DfException e) {
