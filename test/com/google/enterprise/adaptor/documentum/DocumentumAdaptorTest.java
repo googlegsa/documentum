@@ -99,6 +99,7 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -1020,7 +1021,7 @@ public class DocumentumAdaptorTest {
                   new SysObjectMock(rs));
             }
           }
-          return null;
+          throw new DfIdNotFoundException(id);
         } catch (SQLException e) {
           throw new DfException(e);
         }
@@ -1672,6 +1673,12 @@ public class DocumentumAdaptorTest {
     return getObjectUnderTest(ImmutableMap.<String, String>of());
   }
 
+  private DocumentumAdaptor getObjectUnderTest(AdaptorContext context)
+      throws DfException {
+    return getObjectUnderTest(context, new H2BackedTestProxies(),
+        ImmutableMap.<String, String>of());
+  }
+
   private DocumentumAdaptor getObjectUnderTest(Map<String, ?> configMap)
       throws DfException {
     return getObjectUnderTest(new H2BackedTestProxies(), configMap);
@@ -1679,10 +1686,16 @@ public class DocumentumAdaptorTest {
 
   private DocumentumAdaptor getObjectUnderTest(H2BackedTestProxies proxyCls,
       Map<String, ?> configMap) throws DfException {
+    return getObjectUnderTest(ProxyAdaptorContext.getInstance(), proxyCls,
+        configMap);
+  }
+
+  private DocumentumAdaptor getObjectUnderTest(AdaptorContext context,
+      H2BackedTestProxies proxyCls, Map<String, ?> configMap)
+      throws DfException {
     IDfClientX dmClientX = proxyCls.getProxyClientX();
     DocumentumAdaptor adaptor = new DocumentumAdaptor(dmClientX);
 
-    AdaptorContext context = ProxyAdaptorContext.getInstance();
     Config config = initTestAdaptorConfig(context);
     for (Map.Entry<String, ?> entry : configMap.entrySet()) {
       config.overrideKey(entry.getKey(), entry.getValue().toString());
@@ -1849,6 +1862,7 @@ public class DocumentumAdaptorTest {
        id, chronicleId, name, path, "dm_document", mimeType,
        content, dateFormat.format(lastModified), DEFAULT_ACL,
        (content == null) ? null : content.length()));
+    setParentFolderIdFromPaths(dateFormat.format(lastModified), id, name, path);
   }
 
   // Note that insertDocument with content takes lastModified as a Date, whereas
@@ -1875,6 +1889,7 @@ public class DocumentumAdaptorTest {
     for (String path : paths) {
       String name = path.substring(path.lastIndexOf("/") + 1);
       insertSysObject(lastModified, id, name, path, "dm_folder");
+      setParentFolderIdFromPaths(lastModified, id, name, paths);
     }
   }
 
@@ -1883,6 +1898,35 @@ public class DocumentumAdaptorTest {
     executeUpdate(String.format(
         "UPDATE dm_sysobject SET i_folder_id = '%s' WHERE r_object_id = "
             + "'%s'", parentId, id));
+  }
+
+  /**
+   * Sets the i_folder_id to the parent folder IDs and inserts the parent
+   * folders. Both inserFolder and setParentFolderIdFromPaths together
+   * recursively inserts and sets i_folder_id all the way to root cabinet.
+   */
+  private void setParentFolderIdFromPaths(String lastModified, String objectId,
+      String objectName, String... objectPaths)
+      throws SQLException {
+    List<String> folderIds = new ArrayList<>();
+    for (String path : objectPaths) {
+      String folderPath = path.substring(0, path.lastIndexOf("/" + objectName));
+      if (!folderPath.isEmpty()) {
+        // Insert parent folder 5 min before lastModified so that it won't
+        // show up in expected results.
+        String folderName =
+            folderPath.substring(folderPath.lastIndexOf("/") + 1);
+        insertFolder(getTimePlusMinutes(lastModified, -5),
+            FOLDER.pad(folderName), folderPath);
+        folderIds.add(FOLDER.pad(folderName));
+      }
+    }
+
+    if (!folderIds.isEmpty()) {
+      executeUpdate(String.format(
+          "UPDATE dm_sysobject SET i_folder_id = '%s' WHERE r_object_id = '%s'",
+          Joiner.on(",").join(folderIds), objectId));
+    }
   }
 
   private void insertSysObject(String lastModified, String id, String name,
@@ -2077,6 +2121,64 @@ public class DocumentumAdaptorTest {
         new MockRequest(docIdFromPath(path, DOCUMENT.pad("aaa")),
             lastCrawled));
     assertDocContent(response, lastModified, mimeType, content, false);
+  }
+
+  @Test
+  public void testGetDocContent_invalidChronicleId() throws Exception {
+    String name = "aaa";
+    String path = START_PATH + "/" + name + ":" + DOCUMENT.pad("ccc");
+
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    DocumentumAdaptor adaptor = getObjectUnderTest(context);
+    MockResponse response = new MockResponse();
+    adaptor.getDocContent(new MockRequest(docIdFromPath(path)), response);
+
+    assertTrue(response.notFound);
+
+    ProxyAdaptorContext.MockAsyncDocIdPusher asyncPusher =
+        (ProxyAdaptorContext.MockAsyncDocIdPusher) context
+            .getAsyncDocIdPusher();
+    assertNull(asyncPusher.getDocId());
+  }
+
+  @Test
+  public void testGetDocContent_missingChronicleId() throws Exception {
+    String name = "aaa";
+    String path = START_PATH + "/" + name;
+    insertDocument(path);
+
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    DocumentumAdaptor adaptor = getObjectUnderTest(context);
+    MockResponse response = new MockResponse();
+    adaptor.getDocContent(new MockRequest(docIdFromPath(path), new Date()),
+        response);
+
+    assertTrue(response.notFound);
+    ProxyAdaptorContext.MockAsyncDocIdPusher asyncPusher =
+        (ProxyAdaptorContext.MockAsyncDocIdPusher) context
+            .getAsyncDocIdPusher();
+    assertEquals(docIdFromPath(path, DOCUMENT.pad(name)),
+        asyncPusher.getDocId());
+  }
+
+  @Test
+  public void testGetDocContent_pathMismatch() throws Exception {
+    String name = "aaa";
+    String path = START_PATH + "/" + name;
+    insertDocument(path);
+
+    AdaptorContext context = ProxyAdaptorContext.getInstance();
+    DocumentumAdaptor adaptor = getObjectUnderTest(context);
+    MockResponse response = new MockResponse();
+    adaptor.getDocContent(new MockRequest(docIdFromPath("/Folder1/FFF1", name,
+        DOCUMENT.pad(name))), response);
+
+    assertTrue(response.notFound);
+
+    ProxyAdaptorContext.MockAsyncDocIdPusher asyncPusher =
+        (ProxyAdaptorContext.MockAsyncDocIdPusher) context
+            .getAsyncDocIdPusher();
+    assertNull(asyncPusher.getDocId());
   }
 
   private String getDisplayUrl(String displayUrlPattern, String path)
@@ -2480,6 +2582,7 @@ public class DocumentumAdaptorTest {
     for (String child : children) {
       insertDocument(now, DOCUMENT.pad(child), vdocPath + "/" + child, vdocId);
     }
+    setParentFolderIdFromPaths(now, vdocId, name, vdocPath);
   }
 
   @Test
@@ -2559,9 +2662,7 @@ public class DocumentumAdaptorTest {
     // First try a DocId with an unencoded slash in the path.
     MockResponse response = getDocContent(ImmutableMap.<String, String>of(),
         new MockRequest(docIdFromPath(path, id)));
-    assertFalse(response.notFound);
-    assertEquals(response.toString(), mimeType, response.contentType);
-    assertEquals(content, response.content.toString(UTF_8.name()));
+    assertTrue(response.notFound);
 
     // Now try a DocId with encoded slash in the name.
     response = getDocContent(ImmutableMap.<String, String>of(),
@@ -3659,6 +3760,17 @@ public class DocumentumAdaptorTest {
     Calendar calendar = Calendar.getInstance();
     calendar.add(Calendar.MINUTE, minutes);
     return dateFormat.format(calendar.getTime());
+  }
+
+  private String getTimePlusMinutes(String timestamp, int minutes) {
+    try {
+      Calendar calendar = Calendar.getInstance();
+      calendar.setTime(dateFormat.parse(timestamp));
+      calendar.add(Calendar.MINUTE, minutes);
+      return dateFormat.format(calendar.getTime());
+    } catch (ParseException e) {
+      throw new RuntimeException(e);
+    }
   }
 
   private Map<DocId, Acl> testUpdateAcls(Checkpoint checkpoint,
@@ -5048,8 +5160,8 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testNoDocuments() throws Exception {
-    String folderId = "0b01081f80001000";
-    String folder = "/Folder1";
+    String folder = START_PATH + "/FFF1";
+    String folderId = FOLDER.pad("FFF1");
     insertFolder(JAN_1970, folderId, folder);
     Checkpoint startCheckpoint = Checkpoint.incremental();
     checkModifiedDocIdsPushed(startPaths(folder), startCheckpoint,
@@ -5058,8 +5170,8 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testNoModifiedDocuments() throws Exception {
-    String folderId = "0b01081f80001000";
-    String folder = "/Folder1";
+    String folder = START_PATH + "/FFF1";
+    String folderId = FOLDER.pad("FFF1");
     insertFolder(JAN_1970, folderId, folder);
     insertDocument(JAN_1970, "0b01081f80001001", folder + "/foo", folderId);
     insertDocument(JAN_1970, "0b01081f80001002", folder + "/bar", folderId);
@@ -5235,12 +5347,12 @@ public class DocumentumAdaptorTest {
   @Test
   public void testModifiedDocumentsInSubfolder() throws Exception {
     String folder1Id = FOLDER.pad("FFF1");
-    String folder1 = "/FFF1";
+    String folder1 = START_PATH + "/FFF1";
     insertFolder(JAN_1970, folder1Id, folder1);
     insertDocument(MAR_1970, DOCUMENT.pad("aaa"), folder1 + "/aaa", folder1Id);
     insertDocument(MAR_1970, DOCUMENT.pad("bbb"), folder1 + "/bbb", folder1Id);
     String folder2Id = FOLDER.pad("FFF2");
-    String folder2 = "/FFF1/FFF2";
+    String folder2 = START_PATH + "/FFF1/FFF2";
     insertFolder(JAN_1970, folder2Id, folder2);
     insertDocument(MAR_1970, DOCUMENT.pad("ccc"), folder2 + "/ccc", folder2Id);
 

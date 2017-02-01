@@ -39,7 +39,6 @@ import com.google.enterprise.adaptor.Response;
 
 import com.documentum.com.DfClientX;
 import com.documentum.com.IDfClientX;
-import com.documentum.fc.client.DfIdNotFoundException;
 import com.documentum.fc.client.IDfCollection;
 import com.documentum.fc.client.IDfEnumeration;
 import com.documentum.fc.client.IDfFolder;
@@ -109,6 +108,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private static final String YESTERDAY = dateFormat.format(
       new Date(System.currentTimeMillis() - ONE_DAY_MILLIS));
 
+  private AdaptorContext context;
   private final IDfClientX dmClientX;
   private List<String> startPaths;
   private List<String> documentTypes;
@@ -324,6 +324,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     return path;
   }
 
+  private static DocId docIdWithObjectId(DocId docId, IDfId objectId) {
+    String id = docId.getUniqueId();
+    return new DocId(id + ":" + objectId);
+  }
+
   public DocumentumAdaptor() {
     this(new DfClientX());
   }
@@ -380,6 +385,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
   @Override
   public void init(AdaptorContext context) throws DfException {
+    this.context = context;
     docIdEncoder = context.getDocIdEncoder();
     config = context.getConfig();
     validateConfig(config);
@@ -1435,9 +1441,28 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         logger.log(Level.FINER, "Chronicle ID: {0}", chronicleId);
         dmPersObj = dmSession.getObjectByQualification(
             "dm_sysobject where i_chronicle_id = '" + chronicleId + "'");
+        if (dmPersObj != null) {
+          boolean pathMatches =
+              matchObjectPathsToDocId(id, dmSession, (IDfSysObject) dmPersObj);
+          if (!pathMatches) {
+            logger.log(Level.FINER, "Object paths do not match DocId: {0}", id);
+            resp.respondNotFound();
+            return;
+          }
+        }
       } else {
         logger.log(Level.FINE, "Path does not contain chronicle ID: {0}", path);
         dmPersObj = dmSession.getObjectByPath(path);
+        if (dmPersObj != null) {
+          DocId newId = docIdWithObjectId(id, dmPersObj.getObjectId());
+          logger.log(Level.FINE, "New location: {0}", newId);
+          if (!context.getAsyncDocIdPusher().pushDocId(newId)) {
+            throw new IllegalStateException(MessageFormat.format(
+                "Failed to feed new DocId: {0}", newId));
+          }
+          resp.respondNotFound();
+          return;
+        }
       }
 
       if (dmPersObj == null) {
@@ -1448,11 +1473,6 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
       IDfId dmObjId = dmPersObj.getObjectId();
       IDfType type = dmPersObj.getType();
-      //TODO (Srinivas): remove this code
-      if (!path.matches(".*:\\p{XDigit}{16}")) {
-        id = docIdFromPath(path,
-            ((IDfSysObject)dmPersObj).getChronicleId().toString());
-      }
       logger.log(Level.FINER, "Object Id: {0}; Type: {1}",
           new Object[] {dmObjId, type.getName()});
 
@@ -1494,6 +1514,31 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         dmSessionManager.release(dmSession);
       }
     }
+  }
+
+  /**
+   * Returns true if one of the object paths matches to DocId path.
+   *
+   * @throws DfException
+   */
+  private boolean matchObjectPathsToDocId(DocId id, IDfSession dmSession,
+      IDfSysObject dmPersObj) throws DfException {
+    String docIdPath = docIdToPath(id);
+    String name = dmPersObj.getObjectName();
+    int index = docIdPath.lastIndexOf("/" + name.replace("/", "%2F"));
+    if (index == -1) {
+      return false;
+    }
+    IDfEnumeration enumPaths =
+        dmSession.getObjectPaths(dmPersObj.getObjectId());
+    String path = docIdPath.substring(0, index);
+    while (enumPaths.hasMoreElements()) {
+      IDfObjectPath objectPath = (IDfObjectPath) enumPaths.nextElement();
+      if (path.equals(objectPath.getFullPath())) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

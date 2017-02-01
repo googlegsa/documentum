@@ -14,12 +14,15 @@
 
 package com.google.enterprise.adaptor.documentum;
 
+import com.google.enterprise.adaptor.Acl;
 import com.google.enterprise.adaptor.AdaptorContext;
+import com.google.enterprise.adaptor.AsyncDocIdPusher;
 import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
 import com.google.enterprise.adaptor.DocIdEncoder;
 import com.google.enterprise.adaptor.PollingIncrementalLister;
 import com.google.enterprise.adaptor.SensitiveValueDecoder;
+import com.google.enterprise.adaptor.DocIdPusher.Record;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -35,6 +38,7 @@ class ProxyAdaptorContext {
     private final DocIdEncoder docIdEncoder = new MockDocIdCodec();
     private final SensitiveValueDecoder sensitiveValueDecoder = 
         new MockSensitiveValueDecoder();
+    private final AsyncDocIdPusher asyncPusher = new MockAsyncDocIdPusher();
 
     public Config getConfig() {
       return config;
@@ -51,6 +55,10 @@ class ProxyAdaptorContext {
     public void setPollingIncrementalLister(
         PollingIncrementalLister pollingIncrementalLister) {
       // do nothing
+    }
+
+    public AsyncDocIdPusher getAsyncDocIdPusher() {
+      return asyncPusher;
     }
   }
 
@@ -94,6 +102,33 @@ class ProxyAdaptorContext {
     @Override
     public String decodeValue(String value) {
       return value.toUpperCase();
+    }
+  }
+
+  /**
+   * Mock of {@link AsyncDocIdPusher} for tests to push a DocId asynchronously.
+   */
+  static class MockAsyncDocIdPusher implements AsyncDocIdPusher {
+    private DocId docId;
+
+    @Override
+    public boolean pushDocId(DocId docId) {
+      this.docId = docId;
+      return true;
+    }
+
+    @Override
+    public boolean pushRecord(Record record) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean pushNamedResource(DocId docId, Acl acl) {
+      throw new UnsupportedOperationException();
+    }
+
+    public DocId getDocId() {
+      return docId;
     }
   }
 }
