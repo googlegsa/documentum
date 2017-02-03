@@ -630,7 +630,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
           docIds.add(docIdFromPath(
               startPath.substring(0, startPath.lastIndexOf("/")),
               obj.getObjectName(),
-              obj.getObjectId().toString()));
+              obj.getChronicleId().toString()));
         }
       }
       logger.log(Level.FINER, "DocumentumAdaptor DocIds: {0}", docIds);
@@ -667,7 +667,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     // Select r_object_id to allow an object- or row-based query. See
     // "To return results by object ID" in the DQL Reference Manual.
     String queryStr = MessageFormat.format(
-       "SELECT r_object_id, r_folder_path FROM dm_cabinet"
+       "SELECT i_chronicle_id, r_folder_path FROM dm_cabinet"
        + "{0,choice,0#|0< WHERE {1}}",
         cabinetWhereCondition.length(), cabinetWhereCondition);
     // Don't use MessageFormat syntax for this log message for testing purposes.
@@ -677,11 +677,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     IDfCollection result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
     try {
       while (result.next()) {
-        String objectId = result.getString("r_object_id");
+        String chronicleId = result.getString("i_chronicle_id");
         for (int j = 0; j < result.getValueCount("r_folder_path"); j++) {
           String cabinet = result.getRepeatingString("r_folder_path", j);
           logger.log(Level.FINER, "Cabinet: {0}", cabinet);
-          cabinets.add(docIdFromPath(cabinet, objectId));
+          cabinets.add(docIdFromPath(cabinet, chronicleId));
         }
       }
     } finally {
@@ -1180,8 +1180,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         while (result.next()) {
           lastModified = result.getString("r_modify_date_str");
           objectId = result.getString("r_object_id");
+          String chronicleId = result.getString("i_chronicle_id");
           String name = result.getString("object_name");
-          addUpdatedDocIds(builder, session, objectId, name);
+          addUpdatedDocIds(builder, session, chronicleId, name);
           docsCheckpoint = new Checkpoint(lastModified, objectId);
         }
       } finally {
@@ -1254,7 +1255,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
                 + "audited_obj_id: {2}, "
                 + "chronicle_id: {3}",
                 new String[] {eventDate, eventId, objectId, chronicleId});
-            addUpdatedDocIds(builder, session, objectId, objectName);
+            addUpdatedDocIds(builder, session, chronicleId, objectName);
             chronicleIds.add(chronicleId);
           }
           permissionsCheckpoint = new Checkpoint(eventDate, eventId);
@@ -1271,17 +1272,17 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    * Only push those paths that are under our start paths.
    *
    * @param builder builder for list of DocIds
-   * @param objectId the ID of a Documentum object
+   * @param chronicleId the chronicle ID of a Documentum object
    * @param name the document name to append to the folder
    *    paths for a document, or null for a folder
    */
   private void addUpdatedDocIds(ImmutableList.Builder<Record> builder,
-      IDfSession session, String objectId, String name) throws DfException {
-    IDfEnumeration enumPaths = session.getObjectPaths(new DfId(objectId));
+      IDfSession session, String chronicleId, String name) throws DfException {
+    IDfEnumeration enumPaths = session.getObjectPaths(new DfId(chronicleId));
     while (enumPaths.hasMoreElements()) {
       IDfObjectPath objPath = (IDfObjectPath) enumPaths.nextElement();
       String path = objPath.getFullPath();
-      DocId docId = docIdFromPath(path, name, objectId);
+      DocId docId = docIdFromPath(path, name, chronicleId);
       if (isUnderStartPath(docId, validatedStartPaths)) {
         builder.add(new Record.Builder(docId)
             .setCrawlImmediately(true).build());
@@ -1291,8 +1292,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
   private String makeUpdatedDocsQuery(Checkpoint checkpoint) {
     StringBuilder query = new StringBuilder();
-    query.append("SELECT object_name, r_object_id, r_object_type, ")
-        .append("i_folder_id, r_modify_date, ")
+    query.append("SELECT object_name, r_object_id, i_chronicle_id, ")
+        .append("r_object_type, i_folder_id, r_modify_date, ")
         .append(dateToStringFunction)
         .append("(r_modify_date, 'yyyy-mm-dd hh:mi:ss') ")
         .append("AS r_modify_date_str FROM dm_sysobject ")
@@ -1430,16 +1431,12 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
       IDfPersistentObject dmPersObj;
       if (path.matches(".*:\\p{XDigit}{16}")) {
-        String objId = path.substring(path.length() - 16);
-        logger.log(Level.FINER, "Object Id: {0}", objId);
-        try {
-          dmPersObj = dmSession.getObject(new DfId(objId));
-        } catch (DfIdNotFoundException e) {
-          // Check for a false positive regex match.
-          dmPersObj = dmSession.getObjectByPath(path);
-        }
+        String chronicleId = path.substring(path.length() - 16);
+        logger.log(Level.FINER, "Chronicle ID: {0}", chronicleId);
+        dmPersObj = dmSession.getObjectByQualification(
+            "dm_sysobject where i_chronicle_id = '" + chronicleId + "'");
       } else {
-        logger.log(Level.FINE, "Path doesn't contain objectid: {0}", path);
+        logger.log(Level.FINE, "Path does not contain chronicle ID: {0}", path);
         dmPersObj = dmSession.getObjectByPath(path);
       }
 
@@ -1453,7 +1450,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       IDfType type = dmPersObj.getType();
       //TODO (Srinivas): remove this code
       if (!path.matches(".*:\\p{XDigit}{16}")) {
-        id = docIdFromPath(path, dmPersObj.getObjectId().toString());
+        id = docIdFromPath(path,
+            ((IDfSysObject)dmPersObj).getChronicleId().toString());
       }
       logger.log(Level.FINER, "Object Id: {0}; Type: {1}",
           new Object[] {dmObjId, type.getName()});
@@ -1692,11 +1690,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     int count = root.getChildCount();
     for (int i = 0; i < count; i++) {
       IDfSysObject child = root.getChild(i).getSelectedObject();
-      String objId = child.getString("r_object_id");
+      String chronicleId = child.getString("i_chronicle_id");
       String objName = child.getString("object_name");
-      logger.log(Level.FINER, "VDoc Child Object Id: {0}; Name: {1}",
-          new Object[] {objId, objName});
-      DocId childDocId = docIdFromPath(docIdToPath(id), objName, objId);
+      logger.log(Level.FINER, "VDoc Child chronicle ID: {0}; Name: {1}",
+          new Object[] {chronicleId, objName});
+      DocId childDocId = docIdFromPath(docIdToPath(id), objName, chronicleId);
       logger.log(Level.FINER, "VDoc Child Object DocId: {0}",
           childDocId.toString());
       resp.addAnchor(docIdEncoder.encodeDocId(childDocId), objName);
@@ -1720,17 +1718,17 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     logger.log(Level.FINER, "Listing contents of folder: {0} ",
         dmFolder.getObjectName());
     IDfCollection dmCollection =
-        dmFolder.getContents("r_object_id, object_name");
+        dmFolder.getContents("i_chronicle_id, object_name");
 
     // TODO(bmj): Use maxHtmlSize in getFolderContent.
     try (HtmlResponseWriter htmlWriter = createHtmlResponseWriter(resp)) {
       htmlWriter.start(id, dmFolder.getObjectName());
       while (dmCollection.next()) {
-        String objId = dmCollection.getString("r_object_id");
+        String chronicleId = dmCollection.getString("i_chronicle_id");
         String objName = dmCollection.getString("object_name");
-        logger.log(Level.FINER, "Object Id: {0}; Name: {1}",
-            new Object[] {objId, objName});
-        DocId childDocId = docIdFromPath(docIdToPath(id), objName, objId);
+        logger.log(Level.FINER, "Chronicle ID: {0}; Name: {1}",
+            new Object[] {chronicleId, objName});
+        DocId childDocId = docIdFromPath(docIdToPath(id), objName, chronicleId);
         htmlWriter.addLink(childDocId, objName);
       }
       htmlWriter.finish();

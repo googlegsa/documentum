@@ -20,6 +20,7 @@ import static com.google.enterprise.adaptor.documentum.JdbcFixture.dropAllObject
 import static com.google.enterprise.adaptor.documentum.JdbcFixture.executeUpdate;
 import static com.google.enterprise.adaptor.documentum.JdbcFixture.getConnection;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Locale.ENGLISH;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -160,13 +161,14 @@ public class DocumentumAdaptorTest {
       + "event_name varchar, time_stamp_utc timestamp)";
 
   private static final String CREATE_TABLE_CABINET = "create table dm_cabinet "
-      + "(r_object_id varchar, r_folder_path varchar, object_name varchar, "
-      + "owner_name varchar)";
+      + "(r_object_id varchar, i_chronicle_id varchar, r_folder_path varchar, "
+      + "object_name varchar, owner_name varchar)";
 
   private static final String CREATE_TABLE_FOLDER = "create table dm_folder "
       // Note: mock_acl_id is ACL id for the folder, and is used to
       // create AclMock.
-      + "(r_object_id varchar, r_folder_path varchar, mock_acl_id varchar)";
+      + "(r_object_id varchar, i_chronicle_id varchar, r_folder_path varchar, "
+      + "mock_acl_id varchar)";
 
   private static final String CREATE_TABLE_GROUP = "create table dm_group "
       + "(r_object_id varchar, group_name varchar, group_source varchar, "
@@ -179,7 +181,8 @@ public class DocumentumAdaptorTest {
 
   private static final String CREATE_TABLE_SYSOBJECT =
       "create table dm_sysobject "
-      + "(r_object_id varchar, r_modify_date timestamp, r_object_type varchar, "
+      + "(r_object_id varchar, i_chronicle_id varchar, "
+      + "r_modify_date timestamp, r_object_type varchar, "
       + "object_name varchar, i_folder_id varchar, "
       + "r_is_virtual_doc boolean, r_content_size bigint, "
       // Note: mock_content ia an artifact that stores the content as a string,
@@ -1070,12 +1073,29 @@ public class DocumentumAdaptorTest {
         try (Connection connection = getConnection();
              Statement stmt = connection.createStatement();
              ResultSet rs = stmt.executeQuery("SELECT * FROM " + query)) {
-          if (rs.first()) {
+          // Documentum returns the CURRENT version. To emulate the
+          // behavior, rs.last() is used in mocks.
+          if (rs.last()) {
             if (query.toLowerCase().startsWith("dm_user ")) {
               return Proxies.newProxyInstance(IDfUser.class, new UserMock(rs));
             } else if (query.toLowerCase().startsWith("dm_group ")) {
               return
                   Proxies.newProxyInstance(IDfGroup.class, new GroupMock(rs));
+            } else if (query.toLowerCase().startsWith("dm_sysobject ")) {
+              String idPrefix = "i_chronicle_id = '";
+              int index = query.toLowerCase(ENGLISH).indexOf(idPrefix);
+              if (index == -1) {
+                return null;
+              } else {
+                String id = query.substring(index + idPrefix.length(),
+                    query.length() - 1);
+                if (id.startsWith("09")) {
+                  return Proxies.newProxyInstance(IDfSysObject.class,
+                      new SysObjectMock(rs));
+                } else if (id.startsWith("0b")) {
+                  return getFolderBySpecification(id);
+                }
+              }
             }
           }
           return null;
@@ -1130,6 +1150,7 @@ public class DocumentumAdaptorTest {
 
     private class SysObjectMock {
       private final String id;
+      private final String chronicleId;
       private final String name;
       private final String type;
       private final long contentSize;
@@ -1143,6 +1164,7 @@ public class DocumentumAdaptorTest {
 
       public SysObjectMock(ResultSet rs) throws SQLException {
         id = rs.getString("r_object_id");
+        chronicleId = rs.getString("i_chronicle_id");
         name = rs.getString("object_name");
         type = rs.getString("r_object_type");
         contentSize = rs.getLong("r_content_size");
@@ -1159,6 +1181,10 @@ public class DocumentumAdaptorTest {
         return Proxies.newProxyInstance(IDfId.class, new IdMock(id));
       }
 
+      public IDfId getChronicleId() {
+        return Proxies.newProxyInstance(IDfId.class, new IdMock(chronicleId));
+      }
+
       public String getObjectName() {
         return name;
       }
@@ -1167,6 +1193,7 @@ public class DocumentumAdaptorTest {
         switch (attrName) {
           case "object_name": return name;
           case "r_object_id": return id;
+          case "i_chronicle_id": return chronicleId;
           default: return null;
         }
       }
@@ -1669,8 +1696,10 @@ public class DocumentumAdaptorTest {
       // The extra row with a null r_folder_path simulates a row-based query
       // result. Our fake getValueCount correctly returns 0 for that row.
       executeUpdate(String.format("INSERT INTO dm_cabinet "
-          + "(r_object_id, r_folder_path, object_name, owner_name) "
-          + "VALUES('%1$s',null,'%3$s','%4$s'),('%1$s','%2$s','%3$s','%4$s')",
+          + "(r_object_id, i_chronicle_id, r_folder_path, object_name, "
+          + "owner_name) "
+          + "VALUES('%1$s','%1$s',null,'%3$s','%4$s'),"
+          + "('%1$s','%1$s','%2$s','%3$s','%4$s')",
           CABINET.pad(cabinet), "/" + cabinet, cabinet, cabinet));
     }
   }
@@ -1802,20 +1831,22 @@ public class DocumentumAdaptorTest {
       String mimeType, String content) throws SQLException {
     String name = path.substring(path.lastIndexOf("/") + 1);
     String id = DOCUMENT.pad(name);
-    insertDocument(lastModified, id, path, name, mimeType, content);
+    insertDocument(lastModified, id, id, path, name, mimeType, content);
   }
 
   // Note that insertDocument with content takes lastModified as a Date, whereas
   // insertDocument with vararg folderIds takes lastModified as a String. You
   // must choose, but choose wisely, as some before you have chosen ... poorly.
-  private void insertDocument(Date lastModified, String id, String path,
-      String name, String mimeType, String content) throws SQLException {
+  private void insertDocument(Date lastModified, String id, String chronicleId,
+      String path, String name, String mimeType, String content)
+      throws SQLException {
     executeUpdate(String.format(
-       "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
-       + "r_object_type, mock_mime_type, mock_content, r_modify_date, "
-       + "mock_acl_id, r_content_size) "
-       + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'}, '%s', %d)",
-       id, name, path, "dm_document", mimeType,
+       "insert into dm_sysobject(r_object_id, i_chronicle_id, object_name, "
+       + "mock_object_path, r_object_type, mock_mime_type, mock_content, "
+       + "r_modify_date, mock_acl_id, r_content_size) "
+       + "values('%s', '%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'}, "
+       + "'%s', %d)",
+       id, chronicleId, name, path, "dm_document", mimeType,
        content, dateFormat.format(lastModified), DEFAULT_ACL,
        (content == null) ? null : content.length()));
   }
@@ -1838,8 +1869,9 @@ public class DocumentumAdaptorTest {
   private void insertFolder(String lastModified, String id, String... paths)
        throws SQLException {
     executeUpdate(String.format(
-        "insert into dm_folder(r_object_id, r_folder_path) values('%s', '%s')",
-        id, Joiner.on(",").join(paths)));
+        "insert into dm_folder(r_object_id, i_chronicle_id, r_folder_path) "
+        + "values('%s', '%s','%s')",
+        id, id, Joiner.on(",").join(paths)));
     for (String path : paths) {
       String name = path.substring(path.lastIndexOf("/") + 1);
       insertSysObject(lastModified, id, name, path, "dm_folder");
@@ -1856,10 +1888,11 @@ public class DocumentumAdaptorTest {
   private void insertSysObject(String lastModified, String id, String name,
       String path, String type, String... folderIds) throws SQLException {
     executeUpdate(String.format(
-        "insert into dm_sysobject(r_object_id, object_name, mock_object_path, "
-        + "r_object_type, i_folder_id, r_modify_date, mock_acl_id) "
-        + "values('%s', '%s', '%s', '%s', '%s', {ts '%s'}, '%s')",
-        id, name, path, type, Joiner.on(",").join(folderIds), lastModified,
+        "insert into dm_sysobject(r_object_id, i_chronicle_id, object_name, "
+        + "mock_object_path, r_object_type, i_folder_id, r_modify_date, "
+        + "mock_acl_id) "
+        + "values('%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'}, '%s')",
+        id, id, name, path, type, Joiner.on(",").join(folderIds), lastModified,
         DEFAULT_ACL));
   }
 
@@ -1881,6 +1914,13 @@ public class DocumentumAdaptorTest {
         new MockRequest(docIdFromPath(path, DOCUMENT.pad("aaa")),
             lastCrawled));
 
+    assertDocContent(response, lastModified, mimeType, content,
+        expectNoContent);
+  }
+
+  private void assertDocContent(MockResponse response, Date lastModified,
+      String mimeType, String content, boolean expectNoContent)
+      throws IOException {
     // Our mocks, like Documentum, only store seconds, not milliseconds.
     assertEquals(new Date((lastModified.getTime() / 1000) * 1000),
         response.lastModified);
@@ -2010,6 +2050,33 @@ public class DocumentumAdaptorTest {
         getNoContent("Call me Ishmael....", Integer.MAX_VALUE + 2L);
     assertEquals(null, response.contentType);
     assertEquals("", response.content.toString(UTF_8.name()));
+  }
+
+  @Test
+  public void testGetDocContent_chronicleId() throws Exception {
+    Date lastCrawled = new Date();
+    Date lastModified = new Date(lastCrawled.getTime() + (120 * 1000L));
+    String path = START_PATH + "/aaa";
+    String id = DOCUMENT.pad("aaa");
+    String chronicleId = DOCUMENT.pad("aaa");
+    String mimeType = "text/html";
+    String content = "<html><body>Hello</body></html>";
+    insertDocument(lastModified, id, id, path, "aaa", mimeType, content);
+    MockResponse response = getDocContent(ImmutableMap.<String, String>of(),
+        new MockRequest(docIdFromPath(path, DOCUMENT.pad("aaa")),
+            lastCrawled));
+    assertDocContent(response, lastModified, mimeType, content, false);
+
+    // insert next version of modified document, with same chronicle ID.
+    id = DOCUMENT.pad("aa1");
+    content = "<html><body>Hello Google</body></html>";
+    lastModified = new Date(lastCrawled.getTime() + (125 * 1000L));
+    insertDocument(lastModified, id, chronicleId, path, "aaa", mimeType,
+        content);
+    response = getDocContent(ImmutableMap.<String, String>of(),
+        new MockRequest(docIdFromPath(path, DOCUMENT.pad("aaa")),
+            lastCrawled));
+    assertDocContent(response, lastModified, mimeType, content, false);
   }
 
   private String getDisplayUrl(String displayUrlPattern, String path)
@@ -2403,12 +2470,13 @@ public class DocumentumAdaptorTest {
     String vdocId = DOCUMENT.pad(name);
     String now = getNowPlusMinutes(0);
     executeUpdate(String.format(
-        "INSERT INTO dm_sysobject(r_object_id, object_name, mock_object_path, "
-        + "r_object_type, r_is_virtual_doc, mock_mime_type, mock_content, "
-        + "r_modify_date, mock_acl_id, r_content_size) VALUES("
-        + "'%s', '%s', '%s', '%s', TRUE, '%s', '%s', {ts '%s'}, '%s', %d)",
-        vdocId, name, vdocPath, "dm_document_virtual", mimeType, content,
-        now, DEFAULT_ACL, (content == null) ? null : content.length()));
+        "INSERT INTO dm_sysobject(r_object_id, i_chronicle_id, object_name, "
+        + "mock_object_path, r_object_type, r_is_virtual_doc, mock_mime_type, "
+        + "mock_content, r_modify_date, mock_acl_id, r_content_size) VALUES("
+        + "'%s', '%s', '%s', '%s', '%s', TRUE, '%s', '%s', {ts '%s'}, "
+        + "'%s', %d)",
+        vdocId, vdocId, name, vdocPath, "dm_document_virtual", mimeType,
+        content, now, DEFAULT_ACL, (content == null) ? null : content.length()));
     for (String child : children) {
       insertDocument(now, DOCUMENT.pad(child), vdocPath + "/" + child, vdocId);
     }
@@ -2478,15 +2546,15 @@ public class DocumentumAdaptorTest {
     insertFolder(getNowPlusMinutes(0), FOLDER.pad("FFF1"), folder);
     String mimeType = "text/plain";
     String wrongName = "InName";
-    insertDocument(new Date(), DOCUMENT.pad("DDD0"), folder + "/" + wrongName,
-        wrongName, mimeType, "Wrong Document");
+    insertDocument(new Date(), DOCUMENT.pad("DDD0"), DOCUMENT.pad("DDD0"),
+        folder + "/" + wrongName, wrongName, mimeType, "Wrong Document");
 
     // The correct document, with an embedded slash in the file name.
     String name = "Slash/InName";
     String path = START_PATH + "/" + name;
     String content = "Right Document";
     String id = DOCUMENT.pad("DDD1");
-    insertDocument(new Date(), id, path, name, mimeType, content);
+    insertDocument(new Date(), id, id, path, name, mimeType, content);
 
     // First try a DocId with an unencoded slash in the path.
     MockResponse response = getDocContent(ImmutableMap.<String, String>of(),
@@ -3962,11 +4030,15 @@ public class DocumentumAdaptorTest {
   @Test
   public void testUpdatedPermissions_SameChronicleId() throws Exception {
     Checkpoint docCheckpoint = insertTestDocuments();
+    String chronicleId = DOCUMENT.pad("aaa");
 
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"), "09234");
-    insertAuditTrailAclEvent(dateStr, "5f124", DOCUMENT.pad("bbb"), "09234");
-    insertAuditTrailAclEvent(dateStr, "5f125", DOCUMENT.pad("ccc"), "09234");
+    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"),
+        chronicleId);
+    insertAuditTrailAclEvent(dateStr, "5f124", DOCUMENT.pad("bbb"),
+        chronicleId);
+    insertAuditTrailAclEvent(dateStr, "5f125", DOCUMENT.pad("ccc"),
+        chronicleId);
 
     testUpdatedPermissions(docCheckpoint, Checkpoint.incremental(),
         makeExpectedDocIds(START_PATH, "aaa"),
@@ -5205,8 +5277,9 @@ public class DocumentumAdaptorTest {
     String folderId = FOLDER.pad("FFF2");
     String folder = "/FFF1/FFF2";
     executeUpdate(String.format(
-        "insert into dm_folder(r_object_id, r_folder_path) values('%s', '%s')",
-        folderId, folder));
+        "insert into dm_folder(r_object_id, i_chronicle_id, r_folder_path) "
+        + "values('%s', '%s','%s')",
+        folderId, folderId, folder));
     insertSysObject(FEB_1970, folderId, "FFF2", folder, "dm_folder_subtype",
         parentId);
     insertDocument(FEB_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
