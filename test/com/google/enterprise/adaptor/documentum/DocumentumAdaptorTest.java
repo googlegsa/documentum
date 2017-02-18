@@ -99,7 +99,6 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -1862,7 +1861,7 @@ public class DocumentumAdaptorTest {
        id, chronicleId, name, path, "dm_document", mimeType,
        content, dateFormat.format(lastModified), DEFAULT_ACL,
        (content == null) ? null : content.length()));
-    setParentFolderIdFromPaths(dateFormat.format(lastModified), id, name, path);
+    setParentFolderIdFromPaths(id, name, path);
   }
 
   // Note that insertDocument with content takes lastModified as a Date, whereas
@@ -1889,7 +1888,7 @@ public class DocumentumAdaptorTest {
     for (String path : paths) {
       String name = path.substring(path.lastIndexOf("/") + 1);
       insertSysObject(lastModified, id, name, path, "dm_folder");
-      setParentFolderIdFromPaths(lastModified, id, name, paths);
+      setParentFolderIdFromPaths(id, name, paths);
     }
   }
 
@@ -1905,19 +1904,15 @@ public class DocumentumAdaptorTest {
    * folders. Both inserFolder and setParentFolderIdFromPaths together
    * recursively inserts and sets i_folder_id all the way to root cabinet.
    */
-  private void setParentFolderIdFromPaths(String lastModified, String objectId,
+  private void setParentFolderIdFromPaths(String objectId,
       String objectName, String... objectPaths)
       throws SQLException {
     List<String> folderIds = new ArrayList<>();
     for (String path : objectPaths) {
       String folderPath = path.substring(0, path.lastIndexOf("/" + objectName));
       if (!folderPath.isEmpty()) {
-        // Insert parent folder 5 min before lastModified so that it won't
-        // show up in expected results.
         String folderName =
             folderPath.substring(folderPath.lastIndexOf("/") + 1);
-        insertFolder(getTimePlusMinutes(lastModified, -5),
-            FOLDER.pad(folderName), folderPath);
         folderIds.add(FOLDER.pad(folderName));
       }
     }
@@ -2582,7 +2577,7 @@ public class DocumentumAdaptorTest {
     for (String child : children) {
       insertDocument(now, DOCUMENT.pad(child), vdocPath + "/" + child, vdocId);
     }
-    setParentFolderIdFromPaths(now, vdocId, name, vdocPath);
+    setParentFolderIdFromPaths(vdocId, name, vdocPath);
   }
 
   @Test
@@ -2624,6 +2619,9 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testStartPathDocContent() throws Exception {
+    // Insert a "folder" for the root cabinet in the start path. Bit of a hack.
+    insertFolder(EPOCH_1970, FOLDER.pad("Folder1"), "/Folder1");
+
     String startFolder = START_PATH.substring(START_PATH.lastIndexOf("/") + 1);
     StringBuilder expected = new StringBuilder();
     expected.append("<!DOCTYPE html>\n<html><head><title>");
@@ -2717,8 +2715,9 @@ public class DocumentumAdaptorTest {
   public void testFolderDocContent_CustomType() throws Exception {
     String name = "FFF1";
     String folderId = FOLDER.pad(name);
-    String path = START_PATH + "/path1/";
-    String folder = path + name;
+    String path = START_PATH + "/path1";
+    String folder = path + "/" + name;
+    insertFolder(EPOCH_1970, FOLDER.pad("path1"), path);
     insertFolder(JAN_1970, folderId, folder);
     insertDocument(JAN_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
     StringBuilder expected =
@@ -3760,17 +3759,6 @@ public class DocumentumAdaptorTest {
     Calendar calendar = Calendar.getInstance();
     calendar.add(Calendar.MINUTE, minutes);
     return dateFormat.format(calendar.getTime());
-  }
-
-  private String getTimePlusMinutes(String timestamp, int minutes) {
-    try {
-      Calendar calendar = Calendar.getInstance();
-      calendar.setTime(dateFormat.parse(timestamp));
-      calendar.add(Calendar.MINUTE, minutes);
-      return dateFormat.format(calendar.getTime());
-    } catch (ParseException e) {
-      throw new RuntimeException(e);
-    }
   }
 
   private Map<DocId, Acl> testUpdateAcls(Checkpoint checkpoint,
