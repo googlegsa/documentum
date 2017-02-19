@@ -1856,13 +1856,12 @@ public class DocumentumAdaptorTest {
     executeUpdate(String.format(
        "insert into dm_sysobject(r_object_id, i_chronicle_id, object_name, "
        + "mock_object_path, r_object_type, mock_mime_type, mock_content, "
-       + "r_modify_date, mock_acl_id, r_content_size) "
-       + "values('%s', '%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'}, "
-       + "'%s', %d)",
+       + "r_modify_date, mock_acl_id, r_content_size, i_folder_id) values("
+       + "'%s', '%s', '%s', '%s', '%s', '%s', '%s', {ts '%s'}, '%s', %d, '%s')",
        id, chronicleId, name, path, "dm_document", mimeType,
        content, dateFormat.format(lastModified), DEFAULT_ACL,
-       (content == null) ? null : content.length()));
-    setParentFolderIdFromPaths(id, name, path);
+       (content == null) ? null : content.length(),
+       getParentFolderIdFromPaths(name, path)));
   }
 
   // Note that insertDocument with content takes lastModified as a Date, whereas
@@ -1888,15 +1887,14 @@ public class DocumentumAdaptorTest {
         id, id, Joiner.on(",").join(paths)));
     for (String path : paths) {
       String name = path.substring(path.lastIndexOf("/") + 1);
-      insertSysObject(lastModified, id, name, path, "dm_folder");
-      setParentFolderIdFromPaths(id, name, paths);
+      insertSysObject(lastModified, id, name, path, "dm_folder",
+          getParentFolderIdFromPaths(name, paths));
     }
   }
 
-  /** Sets the i_folder_id to the parent folder IDs. */
-  private void setParentFolderIdFromPaths(String objectId,
-      String objectName, String... objectPaths)
-      throws SQLException {
+  /** Gets the parent folder IDs for i_folder_id. */
+  private String getParentFolderIdFromPaths(String objectName,
+      String... objectPaths) throws SQLException {
     List<String> folderIds = new ArrayList<>();
     for (String path : objectPaths) {
       String folderPath = path.substring(0, path.lastIndexOf("/" + objectName));
@@ -1906,12 +1904,7 @@ public class DocumentumAdaptorTest {
         folderIds.add(FOLDER.pad(folderName));
       }
     }
-
-    if (!folderIds.isEmpty()) {
-      executeUpdate(String.format(
-          "UPDATE dm_sysobject SET i_folder_id = '%s' WHERE r_object_id = '%s'",
-          Joiner.on(",").join(folderIds), objectId));
-    }
+    return Joiner.on(",").join(folderIds);
   }
 
   private void insertSysObject(String lastModified, String id, String name,
@@ -2559,15 +2552,16 @@ public class DocumentumAdaptorTest {
     executeUpdate(String.format(
         "INSERT INTO dm_sysobject(r_object_id, i_chronicle_id, object_name, "
         + "mock_object_path, r_object_type, r_is_virtual_doc, mock_mime_type, "
-        + "mock_content, r_modify_date, mock_acl_id, r_content_size) VALUES("
-        + "'%s', '%s', '%s', '%s', '%s', TRUE, '%s', '%s', {ts '%s'}, "
-        + "'%s', %d)",
+        + "mock_content, r_modify_date, mock_acl_id, r_content_size, "
+        + "i_folder_id) VALUES("
+        + "'%s', '%s', '%s', '%s', '%s', TRUE, '%s', '%s', "
+        + "{ts '%s'}, '%s', %d, '%s')",
         vdocId, vdocId, name, vdocPath, "dm_document_virtual", mimeType,
-        content, now, DEFAULT_ACL, (content == null) ? null : content.length()));
+        content, now, DEFAULT_ACL, (content == null) ? null : content.length(),
+        getParentFolderIdFromPaths(name, vdocPath)));
     for (String child : children) {
       insertDocument(now, DOCUMENT.pad(child), vdocPath + "/" + child, vdocId);
     }
-    setParentFolderIdFromPaths(vdocId, name, vdocPath);
   }
 
   @Test
