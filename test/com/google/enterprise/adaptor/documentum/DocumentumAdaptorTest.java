@@ -1899,11 +1899,7 @@ public class DocumentumAdaptorTest {
             + "'%s'", parentId, id));
   }
 
-  /**
-   * Sets the i_folder_id to the parent folder IDs and inserts the parent
-   * folders. Both inserFolder and setParentFolderIdFromPaths together
-   * recursively inserts and sets i_folder_id all the way to root cabinet.
-   */
+  /** Sets the i_folder_id to the parent folder IDs. */
   private void setParentFolderIdFromPaths(String objectId,
       String objectName, String... objectPaths)
       throws SQLException {
