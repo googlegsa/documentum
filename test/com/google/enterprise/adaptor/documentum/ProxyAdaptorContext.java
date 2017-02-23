@@ -20,9 +20,9 @@ import com.google.enterprise.adaptor.AsyncDocIdPusher;
 import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
 import com.google.enterprise.adaptor.DocIdEncoder;
+import com.google.enterprise.adaptor.DocIdPusher.Record;
 import com.google.enterprise.adaptor.PollingIncrementalLister;
 import com.google.enterprise.adaptor.SensitiveValueDecoder;
-import com.google.enterprise.adaptor.DocIdPusher.Record;
 
 import java.net.URI;
 import java.net.URISyntaxException;
