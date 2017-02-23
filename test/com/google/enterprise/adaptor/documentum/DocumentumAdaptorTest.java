@@ -152,13 +152,14 @@ public class DocumentumAdaptorTest {
 
   private static final String CREATE_TABLE_AUDITTRAIL =
       "create table dm_audittrail "
-      + "(r_object_id varchar, audited_obj_id varchar, chronicle_id varchar, "
-      + "event_name varchar, time_stamp_utc timestamp, attribute_list varchar)";
+      + "(r_object_id varchar unique, audited_obj_id varchar, "
+      + "chronicle_id varchar, event_name varchar, time_stamp_utc timestamp, "
+      + "attribute_list varchar)";
 
   private static final String CREATE_TABLE_AUDITTRAIL_ACL =
       "create table dm_audittrail_acl "
-      + "(r_object_id varchar, chronicle_id varchar, audited_obj_id varchar, "
-      + "event_name varchar, time_stamp_utc timestamp)";
+      + "(r_object_id varchar unique, audited_obj_id varchar, "
+      + "chronicle_id varchar, event_name varchar, time_stamp_utc timestamp)";
 
   private static final String CREATE_TABLE_CABINET = "create table dm_cabinet "
       + "(r_object_id varchar, i_chronicle_id varchar, r_folder_path varchar, "
@@ -167,21 +168,21 @@ public class DocumentumAdaptorTest {
   private static final String CREATE_TABLE_FOLDER = "create table dm_folder "
       // Note: mock_acl_id is ACL id for the folder, and is used to
       // create AclMock.
-      + "(r_object_id varchar, i_chronicle_id varchar, r_folder_path varchar, "
-      + "mock_acl_id varchar)";
+      + "(r_object_id varchar unique, i_chronicle_id varchar, "
+      + "r_folder_path varchar, mock_acl_id varchar)";
 
   private static final String CREATE_TABLE_GROUP = "create table dm_group "
       + "(r_object_id varchar, group_name varchar, group_source varchar, "
       + "groups_names varchar, users_names varchar, r_modify_date timestamp)";
 
   private static final String CREATE_TABLE_USER = "create table dm_user "
-      + "(r_object_id varchar, user_name varchar primary key, "
+      + "(r_object_id varchar unique, user_name varchar primary key, "
       + "user_login_name varchar, user_source varchar, user_ldap_dn varchar, "
       + "r_is_group boolean, user_state int DEFAULT 0)";
 
   private static final String CREATE_TABLE_SYSOBJECT =
       "create table dm_sysobject "
-      + "(r_object_id varchar, i_chronicle_id varchar, "
+      + "(r_object_id varchar unique, i_chronicle_id varchar, "
       + "r_modify_date timestamp, r_object_type varchar, "
       + "object_name varchar, i_folder_id varchar, "
       + "r_is_virtual_doc boolean, r_content_size bigint, "
@@ -5272,7 +5273,7 @@ public class DocumentumAdaptorTest {
     String folder1Id = FOLDER.pad("FFF1");
     String folder1 = "/FFF1";
     insertFolder(JAN_1970, folder1Id, folder1);
-    String folder2Id = DOCUMENT.pad("FFF2");
+    String folder2Id = FOLDER.pad("FFF2");
     String folder2 = "/FFF2";
     insertFolder(JAN_1970, folder2Id, folder2);
     insertDocument(FEB_1970, DOCUMENT.pad("aaa"), folder1 + "/aaa", folder1Id);
@@ -5314,7 +5315,7 @@ public class DocumentumAdaptorTest {
     insertFolder(JAN_1970, folder1Id, folder1);
     insertDocument(MAR_1970, DOCUMENT.pad("aaa"), folder1 + "/aaa", folder1Id);
     insertDocument(MAR_1970, DOCUMENT.pad("bbb"), folder1 + "/bbb", folder1Id);
-    String folder2Id = DOCUMENT.pad("aaa");
+    String folder2Id = FOLDER.pad("FFF2");
     String folder2 = "/FFF2";
     insertFolder(JAN_1970, folder2Id, folder2);
     insertDocument(MAR_1970, DOCUMENT.pad("ccc"), folder2 + "/ccc", folder2Id);
