@@ -1893,13 +1893,6 @@ public class DocumentumAdaptorTest {
     }
   }
 
-  private void setParentFolderId(String id, String parentId)
-      throws SQLException {
-    executeUpdate(String.format(
-        "UPDATE dm_sysobject SET i_folder_id = '%s' WHERE r_object_id = "
-            + "'%s'", parentId, id));
-  }
-
   /** Sets the i_folder_id to the parent folder IDs. */
   private void setParentFolderIdFromPaths(String objectId,
       String objectName, String... objectPaths)
@@ -5168,19 +5161,18 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testModifiedDocumentsNoCheckpointObjId() throws Exception {
-    String parentId = "0b001";
-    String parentFolder = "/Folder1";
+    String parentId = FOLDER.pad("FFF1");
+    String parentFolder = "/FFF1";
     insertFolder(EPOCH_1970, parentId, parentFolder);
-    String folderId = "0b002";
-    String folder = "/Folder1/Folder2";
+    String folderId = FOLDER.pad("FFF2");
+    String folder = "/FFF1/FFF2";
     insertFolder(JAN_1970, folderId, folder);
-    setParentFolderId(folderId, parentId);
     insertDocument(FEB_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
     insertDocument(FEB_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
 
     checkModifiedDocIdsPushed(startPaths(folder),
         new Checkpoint(JAN_1970, "0"),
-        makeExpectedDocIds(folder, "aaa", "bbb"),
+        makeExpectedDocIds(folder, folder, "aaa", "bbb"),
         new Checkpoint(FEB_1970, DOCUMENT.pad("bbb")));
   }
 
@@ -5222,7 +5214,6 @@ public class DocumentumAdaptorTest {
     String folderId = FOLDER.pad("FFF2");
     String folder = "/FFF1/FFF2";
     insertFolder(FEB_1970, folderId, folder);
-    setParentFolderId(folderId, parentId);
 
     checkModifiedDocIdsPushed(startPaths(folder),
         new Checkpoint(JAN_1970, "0b003"),
@@ -5238,7 +5229,6 @@ public class DocumentumAdaptorTest {
     String folderId = FOLDER.pad("FFF2");
     String folder = "/FFF1/FFF2";
     insertFolder(MAR_1970, folderId, folder);
-    setParentFolderId(folderId, parentId);
     insertDocument(JAN_1970, DOCUMENT.pad("aaa"), folder + "/foo", folderId);
     insertDocument(FEB_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
     insertDocument(MAR_1970, DOCUMENT.pad("ccc"), folder + "/ccc", folderId);
