@@ -1434,15 +1434,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         return;
       }
 
-      IDfSysObject dmPersObj;
+      IDfSysObject sysObject;
       if (path.matches(".*:\\p{XDigit}{16}")) {
         String chronicleId = path.substring(path.length() - 16);
         logger.log(Level.FINER, "Chronicle ID: {0}", chronicleId);
-        dmPersObj = (IDfSysObject) dmSession.getObjectByQualification(
+        sysObject = (IDfSysObject) dmSession.getObjectByQualification(
             "dm_sysobject where i_chronicle_id = '" + chronicleId + "'");
-        if (dmPersObj != null) {
+        if (sysObject != null) {
           boolean pathMatches =
-              matchObjectPathsToDocId(id, dmSession, dmPersObj);
+              matchObjectPathsToDocId(id, dmSession, sysObject);
           if (!pathMatches) {
             logger.log(Level.FINER, "Object paths do not match DocId: {0}", id);
             resp.respondNotFound();
@@ -1451,9 +1451,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         }
       } else {
         logger.log(Level.FINE, "Path does not contain chronicle ID: {0}", path);
-        dmPersObj = (IDfSysObject) dmSession.getObjectByPath(path);
-        if (dmPersObj != null) {
-          DocId newId = docIdWithObjectId(id, dmPersObj.getObjectId());
+        sysObject = (IDfSysObject) dmSession.getObjectByPath(path);
+        if (sysObject != null) {
+          DocId newId = docIdWithObjectId(id, sysObject.getObjectId());
           logger.log(Level.FINE, "New location: {0}", newId);
           if (!context.getAsyncDocIdPusher().pushDocId(newId)) {
             throw new IllegalStateException(MessageFormat.format(
@@ -1464,22 +1464,22 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         }
       }
 
-      if (dmPersObj == null) {
+      if (sysObject == null) {
         logger.log(Level.FINER, "Not found: {0}", id);
         resp.respondNotFound();
         return;
       }
 
-      IDfId dmObjId = dmPersObj.getObjectId();
-      IDfType type = dmPersObj.getType();
+      IDfId dmObjId = sysObject.getObjectId();
+      IDfType type = sysObject.getType();
       logger.log(Level.FINER, "Object Id: {0}; Type: {1}",
           new Object[] {dmObjId, type.getName()});
 
-      Date lastModified = dmPersObj.getTime("r_modify_date").getDate();
+      Date lastModified = sysObject.getTime("r_modify_date").getDate();
       resp.setLastModified(lastModified);
 
       if (type.isTypeOf("dm_folder")) {
-        getFolderContent(resp, (IDfFolder) dmPersObj, id);
+        getFolderContent(resp, (IDfFolder) sysObject, id);
       } else if (isValidatedDocumentType(type)) {
         // To avoid issues with time zones, we only count an object as
         // unmodified if its last modified time is more than a day before
@@ -1488,7 +1488,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
             && req.canRespondWithNoContent(
                 new Date(lastModified.getTime() + ONE_DAY_MILLIS));
 
-        getDocumentContent(resp, dmPersObj, id, !respondNoContent);
+        getDocumentContent(resp, sysObject, id, !respondNoContent);
         if (respondNoContent) {
           logger.log(Level.FINER,
               "Content not modified since last crawl: {0}", dmObjId);
@@ -1515,15 +1515,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    * @throws DfException
    */
   private boolean matchObjectPathsToDocId(DocId id, IDfSession dmSession,
-      IDfSysObject dmPersObj) throws DfException {
+      IDfSysObject sysObject) throws DfException {
     String docIdPath = docIdToPath(id);
-    String name = dmPersObj.getObjectName();
+    String name = sysObject.getObjectName();
     int index = docIdPath.lastIndexOf("/" + name.replace("/", "%2F"));
     if (index == -1) {
       return false;
     }
     IDfEnumeration enumPaths =
-        dmSession.getObjectPaths(dmPersObj.getObjectId());
+        dmSession.getObjectPaths(sysObject.getObjectId());
     String path = docIdPath.substring(0, index);
     while (enumPaths.hasMoreElements()) {
       IDfObjectPath objectPath = (IDfObjectPath) enumPaths.nextElement();
