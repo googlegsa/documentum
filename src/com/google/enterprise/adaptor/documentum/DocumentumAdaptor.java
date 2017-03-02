@@ -1602,36 +1602,36 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
   /** Copies the Documentum document content into the response.
    * @throws URISyntaxException */
-  private void getDocumentContent(Response resp, IDfSysObject dmSysbObj,
+  private void getDocumentContent(Response resp, IDfSysObject sysObject,
       DocId id, boolean returnContent)
       throws DfException, IOException, URISyntaxException {
     if (!markAllDocsAsPublic) {
-      getACL(resp, dmSysbObj, id);
+      getACL(resp, sysObject, id);
     }
     // Include document attributes as metadata.
-    getMetadata(resp, dmSysbObj, id);
+    getMetadata(resp, sysObject, id);
 
     // If it is a virtual document, include links to the child documents.
-    if (dmSysbObj.isVirtualDocument()) {
-      getVdocChildLinks(resp, dmSysbObj, id);
+    if (sysObject.isVirtualDocument()) {
+      getVdocChildLinks(resp, sysObject, id);
     }
 
     // Return the content.
     resp.setDisplayUrl(new URI(MessageFormat.format(displayUrl,
-        dmSysbObj.getObjectId(), docIdToPath(id))));
+        sysObject.getObjectId(), docIdToPath(id))));
 
     if (returnContent) {
       // getContent throws an exception when r_page_cnt is zero.
       // The GSA does not support files larger than 2 GB.
       // The GSA will not index empty documents with binary content types,
       // so include the content type only when supplying content.
-      if (dmSysbObj.getPageCount() > 0 && dmSysbObj.getContentSize() > 0
-          && dmSysbObj.getContentSize() <= (2L << 30)) {
-        String contentType = dmSysbObj.getFormat().getMIMEType();
+      if (sysObject.getPageCount() > 0 && sysObject.getContentSize() > 0
+          && sysObject.getContentSize() <= (2L << 30)) {
+        String contentType = sysObject.getFormat().getMIMEType();
         logger.log(Level.FINER, "Content Type: {0}", contentType);
         resp.setContentType(contentType);
 
-        try (InputStream inStream = dmSysbObj.getContent()) {
+        try (InputStream inStream = sysObject.getContent()) {
           IOHelper.copyStream(inStream, resp.getOutputStream());
         }
       } else {
@@ -1644,26 +1644,26 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
   /** Supplies the document ACL in the response.
    * @throws DfException */
-  private void getACL(Response resp, IDfSysObject dmSysbObj, DocId id)
+  private void getACL(Response resp, IDfSysObject sysObject, DocId id)
       throws DfException {
-    String aclId = dmSysbObj.getACL().getObjectId().toString();
+    String aclId = sysObject.getACL().getObjectId().toString();
     logger.log(Level.FINER, "ACL for id {0} is {1}", new Object[] {id, aclId});
     resp.setAcl(new Acl.Builder().setInheritFrom(new DocId(aclId)).build());
   }
 
   /** Supplies the document attributes as metadata in the response. */
-  private void getMetadata(Response resp, IDfSysObject dmSysbObj, DocId id)
+  private void getMetadata(Response resp, IDfSysObject sysObject, DocId id)
       throws DfException, IOException {
-    Set<String> attributeNames = getAttributeNames(dmSysbObj);
+    Set<String> attributeNames = getAttributeNames(sysObject);
     for (String name : attributeNames) {
       if (!excludedAttributes.contains(name)) {
         if ("r_object_id".equals(name)) {
-          String value = dmSysbObj.getObjectId().toString();
+          String value = sysObject.getObjectId().toString();
           resp.addMetadata(name, value);
           continue;
         } else if ("r_object_type".equals(name)) {
           // Retrieves object type and its super type(s).
-          for (IDfType type = dmSysbObj.getType();
+          for (IDfType type = sysObject.getType();
                type != null;
                type = getSuperType(type)) {
             resp.addMetadata(name, type.getName());
@@ -1671,9 +1671,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
           continue;
         }
 
-        int count = dmSysbObj.getValueCount(name);
+        int count = sysObject.getValueCount(name);
         for (int i = 0; i < count; i++) {
-          String value = dmSysbObj.getRepeatingString(name, i);
+          String value = sysObject.getRepeatingString(name, i);
           if (value != null) {
             logger.log(Level.FINEST, "Attribute: {0} = {1}",
                 new Object[] { name, value });
@@ -1721,9 +1721,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   }
 
   /** Supplies VDoc children as external link metadata in the response. */
-  private void getVdocChildLinks(Response resp, IDfSysObject dmSysbObj,
+  private void getVdocChildLinks(Response resp, IDfSysObject sysObject,
       DocId id) throws DfException, IOException {
-    IDfVirtualDocument vDoc = dmSysbObj.asVirtualDocument("CURRENT", false);
+    IDfVirtualDocument vDoc = sysObject.asVirtualDocument("CURRENT", false);
     IDfVirtualDocumentNode root = vDoc.getRootNode();
     int count = root.getChildCount();
     for (int i = 0; i < count; i++) {
