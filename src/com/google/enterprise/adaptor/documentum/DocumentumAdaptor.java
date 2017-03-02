@@ -43,7 +43,6 @@ import com.documentum.fc.client.IDfCollection;
 import com.documentum.fc.client.IDfEnumeration;
 import com.documentum.fc.client.IDfFolder;
 import com.documentum.fc.client.IDfObjectPath;
-import com.documentum.fc.client.IDfPersistentObject;
 import com.documentum.fc.client.IDfQuery;
 import com.documentum.fc.client.IDfSession;
 import com.documentum.fc.client.IDfSessionManager;
@@ -1435,15 +1434,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         return;
       }
 
-      IDfPersistentObject dmPersObj;
+      IDfSysObject dmPersObj;
       if (path.matches(".*:\\p{XDigit}{16}")) {
         String chronicleId = path.substring(path.length() - 16);
         logger.log(Level.FINER, "Chronicle ID: {0}", chronicleId);
-        dmPersObj = dmSession.getObjectByQualification(
+        dmPersObj = (IDfSysObject) dmSession.getObjectByQualification(
             "dm_sysobject where i_chronicle_id = '" + chronicleId + "'");
         if (dmPersObj != null) {
           boolean pathMatches =
-              matchObjectPathsToDocId(id, dmSession, (IDfSysObject) dmPersObj);
+              matchObjectPathsToDocId(id, dmSession, dmPersObj);
           if (!pathMatches) {
             logger.log(Level.FINER, "Object paths do not match DocId: {0}", id);
             resp.respondNotFound();
@@ -1452,7 +1451,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         }
       } else {
         logger.log(Level.FINE, "Path does not contain chronicle ID: {0}", path);
-        dmPersObj = dmSession.getObjectByPath(path);
+        dmPersObj = (IDfSysObject) dmSession.getObjectByPath(path);
         if (dmPersObj != null) {
           DocId newId = docIdWithObjectId(id, dmPersObj.getObjectId());
           logger.log(Level.FINE, "New location: {0}", newId);
@@ -1476,33 +1475,27 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       logger.log(Level.FINER, "Object Id: {0}; Type: {1}",
           new Object[] {dmObjId, type.getName()});
 
-      if (type.isTypeOf("dm_sysobject")) {
-        Date lastModified = dmPersObj.getTime("r_modify_date").getDate();
-        resp.setLastModified(lastModified);
+      Date lastModified = dmPersObj.getTime("r_modify_date").getDate();
+      resp.setLastModified(lastModified);
 
-        if (type.isTypeOf("dm_folder")) {
-          getFolderContent(resp, (IDfFolder) dmPersObj, id);
-        } else if (isValidatedDocumentType(type)) {
-          // To avoid issues with time zones, we only count an object as
-          // unmodified if its last modified time is more than a day before
-          // the last crawl time.
-          boolean respondNoContent = (lastModified != null)
-              && req.canRespondWithNoContent(
-                  new Date(lastModified.getTime() + ONE_DAY_MILLIS));
+      if (type.isTypeOf("dm_folder")) {
+        getFolderContent(resp, (IDfFolder) dmPersObj, id);
+      } else if (isValidatedDocumentType(type)) {
+        // To avoid issues with time zones, we only count an object as
+        // unmodified if its last modified time is more than a day before
+        // the last crawl time.
+        boolean respondNoContent = (lastModified != null)
+            && req.canRespondWithNoContent(
+                new Date(lastModified.getTime() + ONE_DAY_MILLIS));
 
-          getDocumentContent(resp, (IDfSysObject) dmPersObj, id,
-              !respondNoContent);
-          if (respondNoContent) {
-            logger.log(Level.FINER,
-                "Content not modified since last crawl: {0}", dmObjId);
-            resp.respondNoContent();
-          }
-        } else {
-          logger.log(Level.INFO, "Excluded type: {0}", type.getName());
-          resp.respondNotFound();
+        getDocumentContent(resp, dmPersObj, id, !respondNoContent);
+        if (respondNoContent) {
+          logger.log(Level.FINER,
+              "Content not modified since last crawl: {0}", dmObjId);
+          resp.respondNoContent();
         }
       } else {
-        logger.log(Level.INFO, "Unsupported type: {0}", type.getName());
+        logger.log(Level.INFO, "Excluded type: {0}", type.getName());
         resp.respondNotFound();
       }
     } catch (DfException e) {
