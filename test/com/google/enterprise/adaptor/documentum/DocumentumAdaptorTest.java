@@ -282,6 +282,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.pushLocalGroupsOnly", "false");
     config.addKey("documentum.queryBatchSize", "0");
     config.addKey("documentum.maxHtmlSize", "1000");
+    config.addKey("documentum.updatedDocumentsQuery", "");
     config.addKey("documentum.cabinetWhereCondition", "");
     config.addKey("adaptor.caseSensitivityType", "");
     return config;
@@ -5121,8 +5122,19 @@ public class DocumentumAdaptorTest {
       Checkpoint checkpoint, List<Record> expectedRecords,
       Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
+    checkModifiedDocIdsPushed(ImmutableMap.of(), startPaths, checkpoint,
+        expectedRecords, expectedCheckpoint);
+  }
+
+  private void checkModifiedDocIdsPushed(Map<String, ?> configMap,
+      List<String> startPaths, Checkpoint checkpoint,
+      List<Record> expectedRecords, Checkpoint expectedCheckpoint)
+      throws DfException, IOException, InterruptedException {
     DocumentumAdaptor adaptor = getObjectUnderTest(
-        ImmutableMap.of("documentum.src", Joiner.on(",").join(startPaths)));
+        ImmutableMap.<String, Object>builder()
+        .put("documentum.src", Joiner.on(",").join(startPaths))
+        .putAll(configMap)
+        .build());
 
     assertEquals(expectedRecords,
         getModifiedDocIdsPushed(adaptor, checkpoint, NO_EXCEPTION));
@@ -5213,6 +5225,51 @@ public class DocumentumAdaptorTest {
         new Checkpoint(JAN_1970, "0b003"),
         makeExpectedDocIds(folder, folder),
         new Checkpoint(FEB_1970, folderId));
+  }
+
+  @Test
+  public void testModifiedFolderUpdatedDocumentsQuery() throws Exception {
+    String parentId = FOLDER.pad("FFF1");
+    String parentFolder = "/FFF1";
+    insertFolder(EPOCH_1970, parentId, parentFolder);
+    String folderId = FOLDER.pad("FFF2");
+    String folder = "/FFF1/FFF2";
+    insertFolder(FEB_1970, folderId, folder);
+    insertDocument(FEB_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
+    insertDocument(MAR_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
+
+    checkModifiedDocIdsPushed(
+        ImmutableMap.of(),
+        startPaths(folder),
+        new Checkpoint(FEB_1970, DOCUMENT.pad("aaa")),
+        makeExpectedDocIds(folder, folder, "bbb"),
+        new Checkpoint(MAR_1970, DOCUMENT.pad("bbb")));
+
+    StringBuilder query = new StringBuilder();
+    query.append("SELECT i_chronicle_id, r_object_id, object_name, ")
+    .append("DATETOSTRING_LOCAL(r_modify_date, ''yyyy-mm-dd hh:mi:ss'') ")
+    .append("AS r_modify_date_str ")
+    .append("FROM dm_sysobject ")
+    .append("WHERE FOLDER(''/FFF1'',descend) ")
+    .append("AND ((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') ")
+    .append("AND r_object_id > ''{1}'') ")
+    .append("OR (r_modify_date > DATE(''{0}'',''yyyy-mm-dd hh:mi:ss''))) ")
+    .append("UNION ")
+    .append("SELECT i_chronicle_id, r_object_id, object_name, ")
+    .append("DATETOSTRING_LOCAL(r_modify_date, ''yyyy-mm-dd hh:mi:ss'') ")
+    .append("AS r_modify_date_str ")
+    .append("FROM dm_sysobject ")
+    .append("WHERE r_object_id = ''")
+    .append(DOCUMENT.pad("aaa"))
+    .append("'' ")
+    .append("ORDER BY 3 ASC,2 ASC ENABLE(RETURN_TOP 500)");
+
+    checkModifiedDocIdsPushed(
+        ImmutableMap.of("documentum.updatedDocumentsQuery", query),
+        startPaths(folder),
+        new Checkpoint(FEB_1970, DOCUMENT.pad("aaa")),
+        makeExpectedDocIds(folder, folder, "aaa", "bbb"),
+        new Checkpoint(MAR_1970, DOCUMENT.pad("bbb")));
   }
 
   @Test

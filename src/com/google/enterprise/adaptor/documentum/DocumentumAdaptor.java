@@ -134,6 +134,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private CaseSensitivityType caseSensitivityType;
   private int queryBatchSize;
   private int maxHtmlSize;
+  private String updatedDocumentsQuery;
   private String cabinetWhereCondition;
 
   /* Cache to store all types */
@@ -355,6 +356,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     config.addKey("documentum.maxHtmlSize", "1000");
     config.addKey("adaptor.caseSensitivityType",
         "everything-case-sensitive");
+    config.addKey("documentum.updatedDocumentsQuery", "");
     // TODO(bmj): Do the system cabinet names need to be localizable?
     config.addKey("documentum.cabinetWhereCondition", "object_name NOT IN "
         + "('Integration', 'Resources', 'System', 'Temp', 'Templates') AND "
@@ -436,6 +438,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     logger.log(Level.CONFIG, "documentum.queryBatchSize: {0}", queryBatchSize);
     maxHtmlSize = getPositiveInt(config, "documentum.maxHtmlSize");
     logger.log(Level.CONFIG, "documentum.maxHtmlSize: {0}", maxHtmlSize);
+    updatedDocumentsQuery = config.getValue("documentum.updatedDocumentsQuery");
+    logger.log(Level.CONFIG, "documentum.updatedDocumentsQuery: {0}",
+        updatedDocumentsQuery);
     cabinetWhereCondition =
         config.getValue("documentum.cabinetWhereCondition");
     logger.log(Level.CONFIG, "documentum.cabinetWhereCondition: {0}", 
@@ -453,6 +458,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     try {
       validateStartPaths(dmSession);
       validateDocumentTypes(dmSession);
+      if (!Strings.isNullOrEmpty(updatedDocumentsQuery)) {
+        validateUpdatedDocumentsQuery(dmSession);
+      }
     } finally {
       dmSessionManager.release(dmSession);
     }
@@ -586,6 +594,29 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
           "No valid document types, at least one is required.");
     }
     validatedDocumentTypes.addAllAbsent(validTypes);
+  }
+
+  private void validateUpdatedDocumentsQuery(IDfSession session)
+      throws DfException {
+    Checkpoint checkpoint = Checkpoint.incremental();
+    String queryStr =
+        MessageFormat.format(updatedDocumentsQuery,
+            checkpoint.getLastModified(), checkpoint.getObjectId());
+    IDfQuery query = dmClientX.getQuery();
+    query.setDQL(queryStr);
+    IDfCollection result = null;
+    try {
+      result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
+      result.next();
+    } catch (DfException e) {
+      logger.log(Level.WARNING,
+          "Error validating updatedDocumentsQuery {0}: {1}", new Object[] {
+              updatedDocumentsQuery, e});
+    } finally {
+      if (result != null) {
+        result.close();
+      }
+    }
   }
 
   @VisibleForTesting
@@ -1297,9 +1328,18 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   }
 
   private String makeUpdatedDocsQuery(Checkpoint checkpoint) {
+    if (updatedDocumentsQuery.isEmpty()) {
+      return makeUpdatedDocsDefaultQuery(checkpoint);
+    } else {
+      return MessageFormat.format(updatedDocumentsQuery,
+          checkpoint.getLastModified(), checkpoint.getObjectId());
+    }
+  }
+
+  private String makeUpdatedDocsDefaultQuery(Checkpoint checkpoint) {
     StringBuilder query = new StringBuilder();
-    query.append("SELECT object_name, r_object_id, i_chronicle_id, ")
-        .append("r_object_type, i_folder_id, r_modify_date, ")
+    query.append("SELECT r_modify_date, r_object_id, i_chronicle_id, ")
+        .append("object_name, ")
         .append(dateToStringFunction)
         .append("(r_modify_date, 'yyyy-mm-dd hh:mi:ss') ")
         .append("AS r_modify_date_str FROM dm_sysobject ")
