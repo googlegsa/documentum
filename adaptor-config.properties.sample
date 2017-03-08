@@ -54,21 +54,6 @@ documentum.src =
 # are pushed to GSA.
 # documentum.pushLocalGroupsOnly = false
 
-# Custom query to send modified documents. Incremental updates uses this query
-# to find the modified documents and send to GSA. {0} will be replaced by the
-# modified date and {1} will be replaced by the object ID. The select list
-# needs to include r_modify_date_str, r_object_id, i_chronicle_id
-# and object_name.
-# documentum.updatedDocumentsQuery = SELECT r_modify_date, r_object_id, \
-#     i_chronicle_id, object_name, DATETOSTRING_LOCAL(r_modify_date, \
-#     ‘yyyy-mm-dd hh:mi:ss') AS r_modify_date_str \
-#     FROM dm_sysobject WHERE (TYPE(dm_document) OR TYPE(dm_folder)) \
-#     AND ((r_modify_date = DATE(‘’{0}’’,''yyyy-mm-dd hh:mi:ss'') \
-#     AND r_object_id > ‘’{1}’’) OR (r_modify_date > DATE(''{0}'', \
-#     ‘’yyyy-mm-dd hh:mi:ss''))) AND (FOLDER(‘/Repository’,descend)) \
-#     ORDER BY r_modify_date, r_object_id
-
-
 # The where clause matching all the cabinets to be indexed when the
 # documentum.src value contains the start path "/".
 # documentum.cabinetWhereCondition = object_name NOT IN ('Integration', \
@@ -97,3 +82,19 @@ documentum.src =
 #     r_link_cnt, r_link_high_cnt, r_lock_date, r_lock_machine, r_lock_owner, \
 #     r_modifier, r_order_no, r_page_cnt, r_policy_id, r_resume_state, \
 #     r_version_label, resolution_label, world_permit
+
+# Custom query to send modified documents. Incremental updates uses this query
+# to find the modified documents and send to GSA. {0} will be replaced by the
+# modified date and {1} will be replaced by the object ID. The select list
+# needs to include r_modify_date_str, r_object_id, i_chronicle_id
+# and object_name. It also need to order by modify time and object ID.
+# “dm_document” in this example is documentum.documentTypes property value
+# and “/Repository” is documentum.src property value.
+# documentum.modifiedDocumentsQuery = SELECT r_modify_date, r_object_id, \
+#     i_chronicle_id, object_name, DATETOSTRING_LOCAL(r_modify_date, \
+#     ''yyyy-mm-dd hh:mi:ss'') AS r_modify_date_str \
+#     FROM dm_sysobject WHERE (TYPE(dm_document) OR TYPE(dm_folder)) \
+#     AND ((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') \
+#     AND r_object_id > ''{1}'') OR (r_modify_date > DATE(''{0}'', \
+#     ''yyyy-mm-dd hh:mi:ss''))) AND (FOLDER(''/Repository'',descend)) \
+#     ORDER BY r_modify_date, r_object_id
