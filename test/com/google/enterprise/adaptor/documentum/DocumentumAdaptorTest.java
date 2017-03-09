@@ -5227,8 +5227,8 @@ public class DocumentumAdaptorTest {
         new Checkpoint(FEB_1970, folderId));
   }
 
-  private void testModifiedFolderModifiedDocumentsQuery(String query,
-      String... expected) throws Exception {
+  private void testModifiedDocumentsQuery(String query, List<Record> expected)
+      throws Exception {
     String parentId = FOLDER.pad("FFF1");
     String parentFolder = "/FFF1";
     insertFolder(EPOCH_1970, parentId, parentFolder);
@@ -5249,7 +5249,7 @@ public class DocumentumAdaptorTest {
         ImmutableMap.of("documentum.modifiedDocumentsQuery", query),
         startPaths(folder),
         new Checkpoint(FEB_1970, DOCUMENT.pad("aaa")),
-        makeExpectedDocIds(folder, expected),
+        expected,
         new Checkpoint(MAR_1970, DOCUMENT.pad("bbb")));
   }
 
@@ -5257,84 +5257,110 @@ public class DocumentumAdaptorTest {
   public void testModifiedDocumentsQuery() throws Exception {
     String folder = "/FFF1/FFF2";
     String query = "SELECT i_chronicle_id, r_object_id, object_name, "
-        +"r_modify_date, "
+        + "r_modify_date, "
         + "DATETOSTRING_LOCAL(r_modify_date, ''yyyy-mm-dd hh:mi:ss'') "
-        +"AS r_modify_date_str "+"FROM dm_sysobject "
-        +"WHERE FOLDER(''/FFF1'',descend) "
-        +"AND ((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') "
-        +"AND r_object_id > ''{1}'') "
-        +"OR (r_modify_date > DATE(''{0}'',''yyyy-mm-dd hh:mi:ss''))) "
-        +"UNION "
-        +"SELECT i_chronicle_id, r_object_id, object_name, r_modify_date, "
-        +"DATETOSTRING_LOCAL(r_modify_date, ''yyyy-mm-dd hh:mi:ss'') "
-        +"AS r_modify_date_str "
-        +"FROM dm_sysobject "
-        +"WHERE r_object_id = ''" + DOCUMENT.pad("aaa") + "'' "
-        +"ORDER BY 4 ASC,2 ASC ENABLE(RETURN_TOP 500)";
+        + "AS r_modify_date_str FROM dm_sysobject "
+        + "WHERE FOLDER(''/FFF1'',descend) "
+        + "AND ((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') "
+        + "AND r_object_id > ''{1}'') "
+        + "OR (r_modify_date > DATE(''{0}'',''yyyy-mm-dd hh:mi:ss''))) "
+        + "UNION "
+        + "SELECT i_chronicle_id, r_object_id, object_name, r_modify_date, "
+        + "DATETOSTRING_LOCAL(r_modify_date, ''yyyy-mm-dd hh:mi:ss'') "
+        + "AS r_modify_date_str "
+        + "FROM dm_sysobject "
+        + "WHERE r_object_id = ''"
+        + DOCUMENT.pad("aaa")
+        + "'' "
+        + "ORDER BY 4 ASC,2 ASC ENABLE(RETURN_TOP 500)";
 
-    testModifiedFolderModifiedDocumentsQuery(query, "aaa", folder, "bbb");
+    testModifiedDocumentsQuery(query,
+        makeExpectedDocIds(folder, "aaa", folder, "bbb"));
   }
 
   @Test
   public void testModifiedDocumentsQuery_DQLError()
       throws Exception {
     String folder = "/FFF1/FFF2";
+    // select lists do not match and results in dql error. As a result
+    // default query will be used.
     String query = "SELECT i_chronicle_id, r_object_id, object_name, "
-        +"r_modify_date, "
+        + "r_modify_date, "
         + "DATETOSTRING_LOCAL(r_modify_date, ''yyyy-mm-dd hh:mi:ss'') "
-        +"AS r_modify_date_str "+"FROM dm_sysobject "
-        +"WHERE FOLDER(''/FFF1'',descend) "
-        +"AND ((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') "
-        +"AND r_object_id > ''{1}'') "
-        +"OR (r_modify_date > DATE(''{0}'',''yyyy-mm-dd hh:mi:ss''))) "
-        +"UNION "
-        +"SELECT i_chronicle_id, r_object_id, r_modify_date, "
-        +"DATETOSTRING_LOCAL(r_modify_date, ''yyyy-mm-dd hh:mi:ss'') "
-        +"AS r_modify_date_str "
-        +"FROM dm_sysobject "
-        +"WHERE r_object_id = ''" + DOCUMENT.pad("aaa") + "'' "
-        +"ORDER BY 4 ASC,2 ASC ENABLE(RETURN_TOP 500)";
+        + "AS r_modify_date_str "+"FROM dm_sysobject "
+        + "WHERE FOLDER(''/FFF1'',descend) "
+        + "AND ((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') "
+        + "AND r_object_id > ''{1}'') "
+        + "OR (r_modify_date > DATE(''{0}'',''yyyy-mm-dd hh:mi:ss''))) "
+        + "UNION "
+        + "SELECT i_chronicle_id, r_object_id, r_modify_date, "
+        + "DATETOSTRING_LOCAL(r_modify_date, ''yyyy-mm-dd hh:mi:ss'') "
+        + "AS r_modify_date_str "
+        + "FROM dm_sysobject "
+        + "WHERE r_object_id = ''"
+        + DOCUMENT.pad("aaa")
+        + "'' "
+        + "ORDER BY 4 ASC,2 ASC ENABLE(RETURN_TOP 500)";
 
-    testModifiedFolderModifiedDocumentsQuery(query, folder, "bbb");
+    testModifiedDocumentsQuery(query,
+        makeExpectedDocIds(folder, folder, "bbb"));
   }
 
   @Test(expected = IOException.class)
   public void testModifiedDocumentsQuery_SelectListMissingAttribute()
       throws Exception {
     String folder = "/FFF1/FFF2";
+    insertFolder(FEB_1970, FOLDER.pad("FFF2"), folder);
+    insertDocument(FEB_1970, DOCUMENT.pad("aaa"), folder + "/aaa",
+        FOLDER.pad("FFF2"));
+    // select is missing required object_name attribute resulting in exception.
     String query = "SELECT i_chronicle_id, r_object_id, r_modify_date, "
         + "DATETOSTRING_LOCAL(r_modify_date, ''yyyy-mm-dd hh:mi:ss'') "
-        +"AS r_modify_date_str "+"FROM dm_sysobject "
-        +"WHERE FOLDER(''/FFF1'',descend) "
-        +"AND ((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') "
-        +"AND r_object_id > ''{1}'') "
-        +"OR (r_modify_date > DATE(''{0}'',''yyyy-mm-dd hh:mi:ss''))) "
-        +"UNION "
-        +"SELECT i_chronicle_id, r_object_id, r_modify_date, "
-        +"DATETOSTRING_LOCAL(r_modify_date, ''yyyy-mm-dd hh:mi:ss'') "
-        +"AS r_modify_date_str "
-        +"FROM dm_sysobject "
-        +"WHERE r_object_id = ''" + DOCUMENT.pad("aaa") + "'' "
-        +"ORDER BY 4 ASC,2 ASC ENABLE(RETURN_TOP 500)";
+        + "AS r_modify_date_str "+"FROM dm_sysobject "
+        + "WHERE FOLDER(''/FFF1'',descend) "
+        + "AND ((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') "
+        + "AND r_object_id > ''{1}'') "
+        + "OR (r_modify_date > DATE(''{0}'',''yyyy-mm-dd hh:mi:ss''))) "
+        + "UNION "
+        + "SELECT i_chronicle_id, r_object_id, r_modify_date, "
+        + "DATETOSTRING_LOCAL(r_modify_date, ''yyyy-mm-dd hh:mi:ss'') "
+        + "AS r_modify_date_str "
+        + "FROM dm_sysobject "
+        + "WHERE r_object_id = ''"
+        + DOCUMENT.pad("aaa")
+        + "'' "
+        + "ORDER BY 4 ASC,2 ASC ENABLE(RETURN_TOP 500)";
 
-    testModifiedFolderModifiedDocumentsQuery(query, folder, "bbb");
+    DocumentumAdaptor adaptor = getObjectUnderTest(
+        ImmutableMap.<String, Object>builder()
+        .put("documentum.src", folder)
+        .put("documentum.modifiedDocumentsQuery", query)
+        .build());
+    getModifiedDocIdsPushed(adaptor,
+        new Checkpoint(FEB_1970, DOCUMENT.pad("aaa")), NO_EXCEPTION);
   }
 
   @Test(expected = IllegalArgumentException.class)
   public void testModifiedDocumentsQuery_IllegalArgumentException()
       throws Exception {
     String folder = "/FFF1/FFF2";
+    // query fails with IllegalArgumentException on message formatting
+    // at {0, time}.
     String query = "SELECT i_chronicle_id, r_object_id, object_name"
-        +"r_modify_date, "
+        + "r_modify_date, "
         + "DATETOSTRING_LOCAL(r_modify_date, ''yyyy-mm-dd hh:mi:ss'') "
-        +"AS r_modify_date_str "+"FROM dm_sysobject "
-        +"WHERE FOLDER(''/FFF1'',descend) "
-        +"AND ((r_modify_date = DATE(''{0, time}'',''yyyy-mm-dd hh:mi:ss'') "
-        +"AND r_object_id > ''{1}'') "
-        +"OR (r_modify_date > DATE(''{0}'',''yyyy-mm-dd hh:mi:ss''))) "
-        +"ORDER BY 4 ASC,2 ASC ENABLE(RETURN_TOP 500)";
+        + "AS r_modify_date_str "+"FROM dm_sysobject "
+        + "WHERE FOLDER(''/FFF1'',descend) "
+        + "AND ((r_modify_date = DATE(''{0, time}'',''yyyy-mm-dd hh:mi:ss'') "
+        + "AND r_object_id > ''{1}'') "
+        + "OR (r_modify_date > DATE(''{0}'',''yyyy-mm-dd hh:mi:ss''))) "
+        + "ORDER BY 4 ASC,2 ASC ENABLE(RETURN_TOP 500)";
 
-    testModifiedFolderModifiedDocumentsQuery(query, folder, "bbb");
+    getObjectUnderTest(
+        ImmutableMap.<String, Object>builder()
+        .put("documentum.src", folder)
+        .put("documentum.modifiedDocumentsQuery", query)
+        .build());
   }
 
   @Test

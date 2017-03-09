@@ -70,7 +70,6 @@ import java.text.MessageFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
@@ -609,11 +608,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     try {
       result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
       result.next();
-    } catch (DfException e) {
+    } catch (DfException | IllegalArgumentException e) {
       logger.log(Level.WARNING,
           "Error validating modified documents query {0}: {1}",
           new Object[] {modifiedDocumentsQuery, e});
-      // set to empty so that default query would be used.
+      // set to empty so that default query will be used.
       modifiedDocumentsQuery = "";
     } finally {
       if (result != null) {
