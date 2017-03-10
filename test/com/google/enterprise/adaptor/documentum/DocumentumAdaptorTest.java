@@ -5122,8 +5122,8 @@ public class DocumentumAdaptorTest {
       Checkpoint checkpoint, List<Record> expectedRecords,
       Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
-    checkModifiedDocIdsPushed(ImmutableMap.of(), startPaths, checkpoint,
-        expectedRecords, expectedCheckpoint);
+    checkModifiedDocIdsPushed(ImmutableMap.<String, String>of(), startPaths,
+        checkpoint, expectedRecords, expectedCheckpoint);
   }
 
   private void checkModifiedDocIdsPushed(Map<String, ?> configMap,
