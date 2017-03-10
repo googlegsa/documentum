@@ -282,6 +282,7 @@ public class DocumentumAdaptorTest {
     config.addKey("documentum.pushLocalGroupsOnly", "false");
     config.addKey("documentum.queryBatchSize", "0");
     config.addKey("documentum.maxHtmlSize", "1000");
+    config.addKey("documentum.modifiedDocumentsQuery", "");
     config.addKey("documentum.cabinetWhereCondition", "");
     config.addKey("adaptor.caseSensitivityType", "");
     return config;
@@ -5121,8 +5122,19 @@ public class DocumentumAdaptorTest {
       Checkpoint checkpoint, List<Record> expectedRecords,
       Checkpoint expectedCheckpoint)
       throws DfException, IOException, InterruptedException {
+    checkModifiedDocIdsPushed(ImmutableMap.<String, String>of(), startPaths,
+        checkpoint, expectedRecords, expectedCheckpoint);
+  }
+
+  private void checkModifiedDocIdsPushed(Map<String, ?> configMap,
+      List<String> startPaths, Checkpoint checkpoint,
+      List<Record> expectedRecords, Checkpoint expectedCheckpoint)
+      throws DfException, IOException, InterruptedException {
     DocumentumAdaptor adaptor = getObjectUnderTest(
-        ImmutableMap.of("documentum.src", Joiner.on(",").join(startPaths)));
+        ImmutableMap.<String, Object>builder()
+        .put("documentum.src", Joiner.on(",").join(startPaths))
+        .putAll(configMap)
+        .build());
 
     assertEquals(expectedRecords,
         getModifiedDocIdsPushed(adaptor, checkpoint, NO_EXCEPTION));
@@ -5213,6 +5225,91 @@ public class DocumentumAdaptorTest {
         new Checkpoint(JAN_1970, "0b003"),
         makeExpectedDocIds(folder, folder),
         new Checkpoint(FEB_1970, folderId));
+  }
+
+  private void testModifiedDocumentsQuery(String query, List<Record> expected)
+      throws Exception {
+    String parentId = FOLDER.pad("FFF1");
+    String parentFolder = "/FFF1";
+    insertFolder(EPOCH_1970, parentId, parentFolder);
+    String folderId = FOLDER.pad("FFF2");
+    String folder = "/FFF1/FFF2";
+    insertFolder(FEB_1970, folderId, folder);
+    insertDocument(FEB_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
+    insertDocument(MAR_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
+
+    checkModifiedDocIdsPushed(
+        ImmutableMap.of("documentum.modifiedDocumentsQuery", query),
+        startPaths(folder),
+        new Checkpoint(FEB_1970, DOCUMENT.pad("aaa")),
+        expected,
+        new Checkpoint(MAR_1970, DOCUMENT.pad("bbb")));
+  }
+
+  @Test
+  public void testModifiedDocumentsQuery() throws Exception {
+    String folder = "/FFF1/FFF2";
+    String query = "SELECT i_chronicle_id, r_object_id, object_name, "
+        + "r_modify_date, "
+        + "DATETOSTRING_LOCAL(r_modify_date, ''yyyy-mm-dd hh:mi:ss'') "
+        + "AS r_modify_date_str "
+        + "FROM dm_sysobject "
+        + "WHERE FOLDER(''/FFF1'',descend) "
+        + "AND ((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') "
+        + "AND r_object_id > ''{1}'') "
+        + "OR (r_modify_date > DATE(''{0}'',''yyyy-mm-dd hh:mi:ss''))) "
+        + "UNION "
+        + "SELECT i_chronicle_id, r_object_id, object_name, r_modify_date, "
+        + "DATETOSTRING_LOCAL(r_modify_date, ''yyyy-mm-dd hh:mi:ss'') "
+        + "AS r_modify_date_str "
+        + "FROM dm_sysobject "
+        + "WHERE r_object_id = ''" + DOCUMENT.pad("aaa") + "'' "
+        + "ORDER BY r_modify_date, r_object_id";
+
+    testModifiedDocumentsQuery(query,
+        makeExpectedDocIds(folder, "aaa", folder, "bbb"));
+  }
+
+  @Test
+  public void testModifiedDocumentsQuery_Default() throws Exception {
+    String folder = "/FFF1/FFF2";
+    testModifiedDocumentsQuery("", makeExpectedDocIds(folder, folder, "bbb"));
+  }
+
+  @Test
+  public void testModifiedDocumentsQuery_DQLError() throws Exception {
+    String folder = "/FFF1/FFF2";
+    // this query results in dql error. As a result default query will be used.
+    String query = "SELECT FROM dm_sysobject WHERE r_object_id > ''0'' ";
+
+    testModifiedDocumentsQuery(query,
+        makeExpectedDocIds(folder, folder, "bbb"));
+  }
+
+  @Test
+  public void testModifiedDocumentsQuery_SelectListMissingAttribute()
+      throws Exception {
+    String folder = "/FFF1/FFF2";
+    // select is missing required object_name attribute resulting in exception.
+    String query = "SELECT i_chronicle_id, r_object_id, r_modify_date, "
+        + "DATETOSTRING_LOCAL(r_modify_date, ''yyyy-mm-dd hh:mi:ss'') "
+        + "AS r_modify_date_str FROM dm_sysobject ";
+
+    testModifiedDocumentsQuery(query,
+        makeExpectedDocIds(folder, folder, "bbb"));
+  }
+
+  @Test
+  public void testModifiedDocumentsQuery_IllegalArgumentException()
+      throws Exception {
+    String folder = "/FFF1/FFF2";
+    // query fails with IllegalArgumentException on message formatting
+    // at {0, time}.
+    String query = "SELECT r_object_id FROM dm_sysobject "
+        + "WHERE (r_modify_date = DATE(''{0, time}'',''yyyy-mm-dd hh:mi:ss'')";
+
+    testModifiedDocumentsQuery(query,
+        makeExpectedDocIds(folder, folder, "bbb"));
   }
 
   @Test
