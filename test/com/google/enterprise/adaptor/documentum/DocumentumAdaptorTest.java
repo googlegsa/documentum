@@ -5239,13 +5239,6 @@ public class DocumentumAdaptorTest {
     insertDocument(MAR_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
 
     checkModifiedDocIdsPushed(
-        ImmutableMap.of(),
-        startPaths(folder),
-        new Checkpoint(FEB_1970, DOCUMENT.pad("aaa")),
-        makeExpectedDocIds(folder, folder, "bbb"),
-        new Checkpoint(MAR_1970, DOCUMENT.pad("bbb")));
-
-    checkModifiedDocIdsPushed(
         ImmutableMap.of("documentum.modifiedDocumentsQuery", query),
         startPaths(folder),
         new Checkpoint(FEB_1970, DOCUMENT.pad("aaa")),
@@ -5275,6 +5268,12 @@ public class DocumentumAdaptorTest {
 
     testModifiedDocumentsQuery(query,
         makeExpectedDocIds(folder, "aaa", folder, "bbb"));
+  }
+
+  @Test
+  public void testModifiedDocumentsQuery_Default() throws Exception {
+    String folder = "/FFF1/FFF2";
+    testModifiedDocumentsQuery("", makeExpectedDocIds(folder, folder, "bbb"));
   }
 
   @Test

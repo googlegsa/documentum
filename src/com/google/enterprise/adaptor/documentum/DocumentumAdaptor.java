@@ -438,7 +438,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     logger.log(Level.CONFIG, "documentum.queryBatchSize: {0}", queryBatchSize);
     maxHtmlSize = getPositiveInt(config, "documentum.maxHtmlSize");
     logger.log(Level.CONFIG, "documentum.maxHtmlSize: {0}", maxHtmlSize);
-    modifiedDocumentsQuery = config.getValue("documentum.modifiedDocumentsQuery");
+    modifiedDocumentsQuery =
+        config.getValue("documentum.modifiedDocumentsQuery");
     logger.log(Level.CONFIG, "documentum.modifiedDocumentsQuery: {0}",
         modifiedDocumentsQuery);
     cabinetWhereCondition =
@@ -598,9 +599,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
   private void validateModifiedDocumentsQuery(IDfSession session)
       throws DfException {
-    Checkpoint checkpoint = Checkpoint.incremental();
     IDfCollection result = null;
     try {
+      Checkpoint checkpoint = Checkpoint.incremental();
       String queryStr = MessageFormat.format(modifiedDocumentsQuery,
           checkpoint.getLastModified(), checkpoint.getObjectId());
       IDfQuery query = dmClientX.getQuery();
