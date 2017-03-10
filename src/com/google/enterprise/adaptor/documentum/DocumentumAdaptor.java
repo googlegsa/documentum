@@ -599,15 +599,19 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private void validateModifiedDocumentsQuery(IDfSession session)
       throws DfException {
     Checkpoint checkpoint = Checkpoint.incremental();
-    String queryStr = MessageFormat.format(modifiedDocumentsQuery,
-        checkpoint.getLastModified(), checkpoint.getObjectId());
-
-    IDfQuery query = dmClientX.getQuery();
-    query.setDQL(queryStr);
     IDfCollection result = null;
     try {
+      String queryStr = MessageFormat.format(modifiedDocumentsQuery,
+          checkpoint.getLastModified(), checkpoint.getObjectId());
+      IDfQuery query = dmClientX.getQuery();
+      query.setDQL(queryStr);
       result = query.execute(session, IDfQuery.DF_EXECREAD_QUERY);
-      result.next();
+      if (result.next()) {
+        result.getString("r_modify_date_str");
+        result.getString("r_object_id");
+        result.getString("i_chronicle_id");
+        result.getString("object_name");
+      }
     } catch (DfException | IllegalArgumentException e) {
       logger.log(Level.WARNING,
           "Error validating modified documents query {0}: {1}",
