@@ -43,7 +43,6 @@ import com.documentum.fc.client.IDfCollection;
 import com.documentum.fc.client.IDfEnumeration;
 import com.documentum.fc.client.IDfFolder;
 import com.documentum.fc.client.IDfObjectPath;
-import com.documentum.fc.client.IDfPersistentObject;
 import com.documentum.fc.client.IDfQuery;
 import com.documentum.fc.client.IDfSession;
 import com.documentum.fc.client.IDfSessionManager;
@@ -1482,15 +1481,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         return;
       }
 
-      IDfPersistentObject dmPersObj;
+      IDfSysObject sysObject;
       if (path.matches(".*:\\p{XDigit}{16}")) {
         String chronicleId = path.substring(path.length() - 16);
         logger.log(Level.FINER, "Chronicle ID: {0}", chronicleId);
-        dmPersObj = dmSession.getObjectByQualification(
+        sysObject = (IDfSysObject) dmSession.getObjectByQualification(
             "dm_sysobject where i_chronicle_id = '" + chronicleId + "'");
-        if (dmPersObj != null) {
+        if (sysObject != null) {
           boolean pathMatches =
-              matchObjectPathsToDocId(id, dmSession, (IDfSysObject) dmPersObj);
+              matchObjectPathsToDocId(id, dmSession, sysObject);
           if (!pathMatches) {
             logger.log(Level.FINER, "Object paths do not match DocId: {0}", id);
             resp.respondNotFound();
@@ -1499,9 +1498,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         }
       } else {
         logger.log(Level.FINE, "Path does not contain chronicle ID: {0}", path);
-        dmPersObj = dmSession.getObjectByPath(path);
-        if (dmPersObj != null) {
-          DocId newId = docIdWithObjectId(id, dmPersObj.getObjectId());
+        sysObject = (IDfSysObject) dmSession.getObjectByPath(path);
+        if (sysObject != null) {
+          DocId newId = docIdWithObjectId(id, sysObject.getObjectId());
           logger.log(Level.FINE, "New location: {0}", newId);
           if (!context.getAsyncDocIdPusher().pushDocId(newId)) {
             throw new IllegalStateException(MessageFormat.format(
@@ -1512,44 +1511,38 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         }
       }
 
-      if (dmPersObj == null) {
+      if (sysObject == null) {
         logger.log(Level.FINER, "Not found: {0}", id);
         resp.respondNotFound();
         return;
       }
 
-      IDfId dmObjId = dmPersObj.getObjectId();
-      IDfType type = dmPersObj.getType();
+      IDfId dmObjId = sysObject.getObjectId();
+      IDfType type = sysObject.getType();
       logger.log(Level.FINER, "Object Id: {0}; Type: {1}",
           new Object[] {dmObjId, type.getName()});
 
-      if (type.isTypeOf("dm_sysobject")) {
-        Date lastModified = dmPersObj.getTime("r_modify_date").getDate();
-        resp.setLastModified(lastModified);
+      Date lastModified = sysObject.getTime("r_modify_date").getDate();
+      resp.setLastModified(lastModified);
 
-        if (type.isTypeOf("dm_folder")) {
-          getFolderContent(resp, (IDfFolder) dmPersObj, id);
-        } else if (isValidatedDocumentType(type)) {
-          // To avoid issues with time zones, we only count an object as
-          // unmodified if its last modified time is more than a day before
-          // the last crawl time.
-          boolean respondNoContent = (lastModified != null)
-              && req.canRespondWithNoContent(
-                  new Date(lastModified.getTime() + ONE_DAY_MILLIS));
+      if (type.isTypeOf("dm_folder")) {
+        getFolderContent(resp, (IDfFolder) sysObject, id);
+      } else if (isValidatedDocumentType(type)) {
+        // To avoid issues with time zones, we only count an object as
+        // unmodified if its last modified time is more than a day before
+        // the last crawl time.
+        boolean respondNoContent = (lastModified != null)
+            && req.canRespondWithNoContent(
+                new Date(lastModified.getTime() + ONE_DAY_MILLIS));
 
-          getDocumentContent(resp, (IDfSysObject) dmPersObj, id,
-              !respondNoContent);
-          if (respondNoContent) {
-            logger.log(Level.FINER,
-                "Content not modified since last crawl: {0}", dmObjId);
-            resp.respondNoContent();
-          }
-        } else {
-          logger.log(Level.INFO, "Excluded type: {0}", type.getName());
-          resp.respondNotFound();
+        getDocumentContent(resp, sysObject, id, !respondNoContent);
+        if (respondNoContent) {
+          logger.log(Level.FINER,
+              "Content not modified since last crawl: {0}", dmObjId);
+          resp.respondNoContent();
         }
       } else {
-        logger.log(Level.INFO, "Unsupported type: {0}", type.getName());
+        logger.log(Level.INFO, "Excluded type: {0}", type.getName());
         resp.respondNotFound();
       }
     } catch (DfException e) {
@@ -1569,15 +1562,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
    * @throws DfException
    */
   private boolean matchObjectPathsToDocId(DocId id, IDfSession dmSession,
-      IDfSysObject dmPersObj) throws DfException {
+      IDfSysObject sysObject) throws DfException {
     String docIdPath = docIdToPath(id);
-    String name = dmPersObj.getObjectName();
+    String name = sysObject.getObjectName();
     int index = docIdPath.lastIndexOf("/" + name.replace("/", "%2F"));
     if (index == -1) {
       return false;
     }
     IDfEnumeration enumPaths =
-        dmSession.getObjectPaths(dmPersObj.getObjectId());
+        dmSession.getObjectPaths(sysObject.getObjectId());
     String path = docIdPath.substring(0, index);
     while (enumPaths.hasMoreElements()) {
       IDfObjectPath objectPath = (IDfObjectPath) enumPaths.nextElement();
@@ -1656,36 +1649,36 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
   /** Copies the Documentum document content into the response.
    * @throws URISyntaxException */
-  private void getDocumentContent(Response resp, IDfSysObject dmSysbObj,
+  private void getDocumentContent(Response resp, IDfSysObject sysObject,
       DocId id, boolean returnContent)
       throws DfException, IOException, URISyntaxException {
     if (!markAllDocsAsPublic) {
-      getACL(resp, dmSysbObj, id);
+      getACL(resp, sysObject, id);
     }
     // Include document attributes as metadata.
-    getMetadata(resp, dmSysbObj, id);
+    getMetadata(resp, sysObject, id);
 
     // If it is a virtual document, include links to the child documents.
-    if (dmSysbObj.isVirtualDocument()) {
-      getVdocChildLinks(resp, dmSysbObj, id);
+    if (sysObject.isVirtualDocument()) {
+      getVdocChildLinks(resp, sysObject, id);
     }
 
     // Return the content.
     resp.setDisplayUrl(new URI(MessageFormat.format(displayUrl,
-        dmSysbObj.getObjectId(), docIdToPath(id))));
+        sysObject.getObjectId(), docIdToPath(id))));
 
     if (returnContent) {
       // getContent throws an exception when r_page_cnt is zero.
       // The GSA does not support files larger than 2 GB.
       // The GSA will not index empty documents with binary content types,
       // so include the content type only when supplying content.
-      if (dmSysbObj.getPageCount() > 0 && dmSysbObj.getContentSize() > 0
-          && dmSysbObj.getContentSize() <= (2L << 30)) {
-        String contentType = dmSysbObj.getFormat().getMIMEType();
+      if (sysObject.getPageCount() > 0 && sysObject.getContentSize() > 0
+          && sysObject.getContentSize() <= (2L << 30)) {
+        String contentType = sysObject.getFormat().getMIMEType();
         logger.log(Level.FINER, "Content Type: {0}", contentType);
         resp.setContentType(contentType);
 
-        try (InputStream inStream = dmSysbObj.getContent()) {
+        try (InputStream inStream = sysObject.getContent()) {
           IOHelper.copyStream(inStream, resp.getOutputStream());
         }
       } else {
@@ -1698,26 +1691,26 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
   /** Supplies the document ACL in the response.
    * @throws DfException */
-  private void getACL(Response resp, IDfSysObject dmSysbObj, DocId id)
+  private void getACL(Response resp, IDfSysObject sysObject, DocId id)
       throws DfException {
-    String aclId = dmSysbObj.getACL().getObjectId().toString();
+    String aclId = sysObject.getACL().getObjectId().toString();
     logger.log(Level.FINER, "ACL for id {0} is {1}", new Object[] {id, aclId});
     resp.setAcl(new Acl.Builder().setInheritFrom(new DocId(aclId)).build());
   }
 
   /** Supplies the document attributes as metadata in the response. */
-  private void getMetadata(Response resp, IDfSysObject dmSysbObj, DocId id)
+  private void getMetadata(Response resp, IDfSysObject sysObject, DocId id)
       throws DfException, IOException {
-    Set<String> attributeNames = getAttributeNames(dmSysbObj);
+    Set<String> attributeNames = getAttributeNames(sysObject);
     for (String name : attributeNames) {
       if (!excludedAttributes.contains(name)) {
         if ("r_object_id".equals(name)) {
-          String value = dmSysbObj.getObjectId().toString();
+          String value = sysObject.getObjectId().toString();
           resp.addMetadata(name, value);
           continue;
         } else if ("r_object_type".equals(name)) {
           // Retrieves object type and its super type(s).
-          for (IDfType type = dmSysbObj.getType();
+          for (IDfType type = sysObject.getType();
                type != null;
                type = getSuperType(type)) {
             resp.addMetadata(name, type.getName());
@@ -1725,9 +1718,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
           continue;
         }
 
-        int count = dmSysbObj.getValueCount(name);
+        int count = sysObject.getValueCount(name);
         for (int i = 0; i < count; i++) {
-          String value = dmSysbObj.getRepeatingString(name, i);
+          String value = sysObject.getRepeatingString(name, i);
           if (value != null) {
             logger.log(Level.FINEST, "Attribute: {0} = {1}",
                 new Object[] { name, value });
@@ -1775,9 +1768,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   }
 
   /** Supplies VDoc children as external link metadata in the response. */
-  private void getVdocChildLinks(Response resp, IDfSysObject dmSysbObj,
+  private void getVdocChildLinks(Response resp, IDfSysObject sysObject,
       DocId id) throws DfException, IOException {
-    IDfVirtualDocument vDoc = dmSysbObj.asVirtualDocument("CURRENT", false);
+    IDfVirtualDocument vDoc = sysObject.asVirtualDocument("CURRENT", false);
     IDfVirtualDocumentNode root = vDoc.getRootNode();
     int count = root.getChildCount();
     for (int i = 0; i < count; i++) {
