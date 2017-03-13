@@ -121,12 +121,18 @@ import java.util.Vector;
 
 /*
  * Naming convention used:
- * All names are valid hexadecimal strings.
+ * All names are valid hexadecimal strings, except users and groups,
+ * which are mapped.
  * Document names: aaa, bbb, ccc, ddd
  * Folder names: FFF0, FFF1 ... FFFn
  * Cabinet names: Cab1, Cab2, Cab3 ... Cabn
  * ACL names: Ac10
  * Audit trail entries: 123, 124, ..., 129
+ * User names: User0, User1 ... Usern
+ * User IDs: eee1, eee2, ..., eeen
+ * Group names: Group0, Group1 ... Groupn
+ * Groupset names, Group51, Group52, ..., Group5n
+ * Group IDs: eff0, eff1, ..., effn, eff51, ..., eff5n
  */
 
 /** Unit tests for DocumentAdaptor class. */
@@ -253,6 +259,18 @@ public class DocumentumAdaptorTest {
       } else {
         return super.pad(name);
       }
+    }
+  };
+  private static final ObjectIdFactory USER = new ObjectIdFactory("11") {
+    @Override public String pad(String name) {
+      assertTrue(name, name.startsWith("User"));
+      return super.pad(name.replace("User", "eee"));
+    }
+  };
+  private static final ObjectIdFactory GROUP = new ObjectIdFactory("12") {
+    @Override public String pad(String name) {
+      assertTrue(name, name.startsWith("Group"));
+      return super.pad(name.replace("Group", "eff"));
     }
   };
   private static final ObjectIdFactory ACL = new ObjectIdFactory("45");
@@ -3036,13 +3054,25 @@ public class DocumentumAdaptorTest {
   }
 
   private void insertUsers(String... names) throws SQLException {
-    // TODO(jlacey): Create an ObjectIdFactory for dm_user.
     for (String name : names) {
-      executeUpdate(String.format("insert into dm_user "
-          + "(r_object_id, user_name, user_login_name) "
-          + "values('%s', '%s', '%s')",
-          "11" + name, name, name));
+      insertUser(name, name);
     }
+  }
+
+  private void insertUser(String name, String loginName)
+      throws SQLException {
+    insertUser(name, loginName, "", false);
+  }
+
+  private void insertUser(String name, String loginName, String ldapDn,
+      boolean isGroup) throws SQLException {
+    ObjectIdFactory pad = isGroup ? GROUP : USER;
+    String source = ldapDn.isEmpty() ? "" : "LDAP";
+    executeUpdate(String.format("INSERT INTO dm_user"
+        + "(r_object_id, user_name, user_login_name, "
+        + "user_source, user_ldap_dn, r_is_group) "
+        + "VALUES('%s', '%s', '%s', '%s', '%s', %B)",
+        pad.pad(name), name, loginName, source, ldapDn, isGroup));
   }
 
   private void disableUsers(String... names) throws SQLException {
@@ -3055,20 +3085,21 @@ public class DocumentumAdaptorTest {
 
   private void insertGroup(String groupName, String... members)
       throws SQLException {
-    insertGroupEx(getNowPlusMinutes(0), "", groupName, members);
+    insertGroupEx(getNowPlusMinutes(0), groupName, groupName, "", members);
   }
 
   private void insertLdapGroup(String groupName, String... members)
       throws SQLException {
-    insertGroupEx(getNowPlusMinutes(0), "LDAP", groupName, members);
+    insertGroupEx(getNowPlusMinutes(0), groupName, groupName,
+        "CN=" + groupName, members);
   }
 
-  private void insertGroupEx(String lastModified, String source,
-      String groupName, String... members) throws SQLException {
-    executeUpdate(String.format("INSERT INTO dm_user"
-        + "(user_name, user_login_name, user_source, user_ldap_dn, r_is_group) "
-        + "VALUES('%s', '%s', '%s', '%s', TRUE)", groupName, groupName,
-        source, "LDAP".equals(source) ? ("CN=" + groupName) : ""));
+  private void insertGroupEx(String lastModified, String groupName,
+      String loginName, String ldapDn, String... members)
+      throws SQLException {
+    String source = ldapDn.isEmpty() ? "" : "LDAP";
+    insertUser(groupName, loginName, ldapDn, true);
+
     List<String> users = new ArrayList<String>(); 
     List<String> groups = new ArrayList<String>(); 
     for (String member : members) {
@@ -3079,14 +3110,13 @@ public class DocumentumAdaptorTest {
       }
     }
     // Emulate ROW_BASED retrieval by storing the values that way.
-    // TODO(jlacey): Create an ObjectIdFactory for dm_group.
     int numRows = Math.max(1, Math.max(users.size(), groups.size()));
     for (int i = 0; i < numRows; i++) {
       executeUpdate(String.format("INSERT INTO dm_group"
           + "(r_object_id, group_name, group_source, r_modify_date, "
           + "users_names, groups_names) VALUES('%s', '%s', '%s', {ts '%s'}, "
           + "%s, %s)",
-          "12" + groupName, groupName, source, lastModified,
+          GROUP.pad(groupName), groupName, source, lastModified,
           (i < users.size()) ? "'" + users.get(i) + "'" : "NULL",
           (i < groups.size()) ? "'" + groups.get(i) + "'" : "NULL"));
     }
@@ -3502,24 +3532,24 @@ public class DocumentumAdaptorTest {
     insertGroup("Group1", "User2", "User3");
     insertGroup("Group2", "User4", "User5");
     insertGroup("Group3", "User6", "User7");
-    insertGroup("GroupSet1", "Group1", "Group2");
-    insertGroup("GroupSet2", "Group2", "Group3");
+    insertGroup("Group51", "Group1", "Group2");
+    insertGroup("Group52", "Group2", "Group3");
 
     String id = ACL.pad("Ac10");
     createAcl(id);
     addAllowPermitToAcl(id, "Group1", IDfACL.DF_PERMIT_READ);
     addAllowPermitToAcl(id, "Group2", IDfACL.DF_PERMIT_WRITE);
     addDenyPermitToAcl(id, "Group3", IDfACL.DF_PERMIT_READ);
-    addRequiredGroupSetToAcl(id, "GroupSet1");
-    addRequiredGroupSetToAcl(id, "GroupSet2");
+    addRequiredGroupSetToAcl(id, "Group51");
+    addRequiredGroupSetToAcl(id, "Group52");
 
     Map<DocId, Acl> namedResources = getAllAcls();
     assertEquals(2, namedResources.size());
 
     Acl acl1 = namedResources.get(new DocId(id + "_reqGroupSet"));
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("GroupSet1", "NS_Local"),
-        new GroupPrincipal("GroupSet2", "NS_Local")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group51", "NS_Local"),
+        new GroupPrincipal("Group52", "NS_Local")),
         acl1.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl1.getDenyGroups());
 
@@ -3595,8 +3625,8 @@ public class DocumentumAdaptorTest {
     insertGroup("Group4", "User2", "User3");
     insertGroup("Group5", "User4", "User5");
     insertGroup("Group6", "User6", "User7");
-    insertGroup("GroupSet1", "Group1", "Group2");
-    insertGroup("GroupSet2", "Group5", "Group6");
+    insertGroup("Group51", "Group1", "Group2");
+    insertGroup("Group52", "Group5", "Group6");
 
     String id = ACL.pad("Ac10");
     createAcl(id);
@@ -3606,8 +3636,8 @@ public class DocumentumAdaptorTest {
     addRequiredGroupToAcl(id, "Group4");
     addRequiredGroupToAcl(id, "Group5");
     addRequiredGroupToAcl(id, "Group6");
-    addRequiredGroupSetToAcl(id, "GroupSet1");
-    addRequiredGroupSetToAcl(id, "GroupSet2");
+    addRequiredGroupSetToAcl(id, "Group51");
+    addRequiredGroupSetToAcl(id, "Group52");
 
     Map<DocId, Acl> namedResources = getAllAcls();
     assertEquals(5, namedResources.size());
@@ -3635,8 +3665,8 @@ public class DocumentumAdaptorTest {
     Acl acl4 = namedResources.get(new DocId(id + "_reqGroupSet"));
     assertEquals(new DocId(id + "_Group6"), acl4.getInheritFrom());
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl4.getInheritanceType());
-    assertEquals(ImmutableSet.of(new GroupPrincipal("GroupSet1", "NS_Local"),
-        new GroupPrincipal("GroupSet2", "NS_Local")),
+    assertEquals(ImmutableSet.of(new GroupPrincipal("Group51", "NS_Local"),
+        new GroupPrincipal("Group52", "NS_Local")),
         acl4.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl4.getDenyGroups());
 
@@ -4727,8 +4757,7 @@ public class DocumentumAdaptorTest {
   @Test
   public void testGetGroupsDifferentMemberLoginName() throws Exception {
     insertUsers("User1", "User2");
-    executeUpdate("insert into dm_user(user_name, user_login_name) "
-        + "values('User3', 'UserTres')");
+    insertUser("User3", "UserTres");
     insertGroup("Group1", "User1", "User2", "User3");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
@@ -4743,12 +4772,8 @@ public class DocumentumAdaptorTest {
   @Test
   public void testGetGroupsDifferentGroupLoginName() throws Exception {
     insertUsers("User1", "User2");
-    executeUpdate(
-        "insert into dm_user(user_name, user_login_name, r_is_group) "
-        + "values('Group1', 'GroupUno', TRUE)");
-    executeUpdate("insert into dm_group(r_object_id, group_name, users_names) "
-        + "values ('12Group1', 'Group1', 'User1'),"
-        + " ('12Group1', 'Group1', 'User2')");
+    insertGroupEx(getNowPlusMinutes(0), "Group1", "GroupUno", "",
+        "User1", "User2");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
         expected = ImmutableMap.of(new GroupPrincipal("GroupUno", "NS_Local"),
@@ -4761,9 +4786,7 @@ public class DocumentumAdaptorTest {
   @Test
   public void testGetGroupsMemberLdapDn() throws Exception {
     insertUsers("User1", "User2");
-    executeUpdate("insert into dm_user(user_name, user_login_name, "
-        + "user_source, user_ldap_dn, r_is_group) values('User3', 'User3', "
-        + "'LDAP', 'cn=User3,dc=test,dc=com', TRUE)");
+    insertUser("User3", "User3", "cn=User3,dc=test,dc=com", false);
     insertGroup("Group1", "User1", "User2", "User3");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
@@ -4778,12 +4801,8 @@ public class DocumentumAdaptorTest {
   @Test
   public void testGetGroupsGroupLdapDn() throws Exception {
     insertUsers("User1", "User2");
-    executeUpdate("insert into dm_user(user_name, user_login_name, "
-        + "user_source, user_ldap_dn) values('Group1', 'Group1', 'LDAP', "
-        + "'cn=Group1,dc=test,dc=com')");
-    executeUpdate("insert into dm_group(r_object_id, group_name, group_source,"
-        + " users_names) values ('12Group1', 'Group1', 'LDAP', 'User1'),"
-        + " ('12Group1', 'Group1', 'LDAP', 'User2')");
+    insertGroupEx(getNowPlusMinutes(0), "Group1", "Group1",
+        "cn=Group1,dc=test,dc=com", "User1", "User2");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
         expected =
@@ -4870,7 +4889,7 @@ public class DocumentumAdaptorTest {
 
   private void insertModifiedGroup(String lastModified, String groupName,
       String... members) throws SQLException {
-    insertGroupEx(lastModified, "", groupName, members);
+    insertGroupEx(lastModified, groupName, groupName, "", members);
   }
 
   private void checkModifiedGroupsPushed(LocalGroupsOnly localGroupsOnly,
@@ -4932,7 +4951,7 @@ public class DocumentumAdaptorTest {
 
     checkModifiedGroupsPushed(LocalGroupsOnly.FALSE,
         new Checkpoint(JAN_1970, "0"), expected,
-        new Checkpoint(MAR_1970, "12Group1"));
+        new Checkpoint(MAR_1970, GROUP.pad("Group1")));
   }
 
   @Test
@@ -4949,8 +4968,8 @@ public class DocumentumAdaptorTest {
             ImmutableSet.of(new UserPrincipal("User2", "NS")));
 
     checkModifiedGroupsPushed(LocalGroupsOnly.FALSE,
-        new Checkpoint(JAN_1970, "12Group0"), expected,
-        new Checkpoint(MAR_1970, "12Group1"));
+        new Checkpoint(JAN_1970, GROUP.pad("Group0")), expected,
+        new Checkpoint(MAR_1970, GROUP.pad("Group1")));
   }
 
   @Test
@@ -4962,7 +4981,7 @@ public class DocumentumAdaptorTest {
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
       expected = ImmutableMap.<GroupPrincipal, Collection<Principal>>of();
 
-    Checkpoint checkpoint = new Checkpoint(MAR_1970, "12Group1");
+    Checkpoint checkpoint = new Checkpoint(MAR_1970, GROUP.pad("Group1"));
     checkModifiedGroupsPushed(LocalGroupsOnly.FALSE, checkpoint, expected,
          checkpoint);
   }
@@ -4972,7 +4991,7 @@ public class DocumentumAdaptorTest {
     insertUsers("User1", "User2");
     insertModifiedGroup(JAN_1970, "Group1", "User1");
     insertModifiedGroup(FEB_1970, "Group2", "User2");
-    insertGroupEx(MAR_1970, "LDAP", "GroupLDAP", "User2");
+    insertGroupEx(MAR_1970, "Group3", "GroupLDAP", "CN=GroupTres", "User2");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
         expected = ImmutableMap.of(new GroupPrincipal("Group2", "NS_Local"),
@@ -4981,8 +5000,8 @@ public class DocumentumAdaptorTest {
             ImmutableSet.of(new UserPrincipal("User2", "NS")));
 
     checkModifiedGroupsPushed(LocalGroupsOnly.FALSE,
-        new Checkpoint(JAN_1970, "12Group1"), expected,
-        new Checkpoint(MAR_1970, "12GroupLDAP"));
+        new Checkpoint(JAN_1970, GROUP.pad("Group1")), expected,
+        new Checkpoint(MAR_1970, GROUP.pad("Group3")));
   }
 
   @Test
@@ -4990,15 +5009,15 @@ public class DocumentumAdaptorTest {
     insertUsers("User1", "User2");
     insertModifiedGroup(JAN_1970, "Group1", "User1");
     insertModifiedGroup(FEB_1970, "Group2", "User2");
-    insertGroupEx(MAR_1970, "LDAP", "GroupLDAP", "User2");
+    insertGroupEx(MAR_1970, "Group3", "GroupLDAP", "CN=GroupTres", "User2");
 
     ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
         expected = ImmutableMap.of(new GroupPrincipal("Group2", "NS_Local"),
             ImmutableSet.of(new UserPrincipal("User2", "NS")));
 
     checkModifiedGroupsPushed(LocalGroupsOnly.TRUE,
-        new Checkpoint(JAN_1970, "12Group1"), expected,
-        new Checkpoint(FEB_1970, "12Group2"));
+        new Checkpoint(JAN_1970, GROUP.pad("Group1")), expected,
+        new Checkpoint(FEB_1970, GROUP.pad("Group2")));
   }
 
   private void testGetGroupUpdatesExceptions(Iterator<Integer> failIterations,
@@ -5046,7 +5065,7 @@ public class DocumentumAdaptorTest {
             ImmutableSet.of(new UserPrincipal("User1", "NS")),
             new GroupPrincipal("Group2", "NS_Local"),
             ImmutableSet.of(new UserPrincipal("User2", "NS"))),
-        new Checkpoint(dateStr, "12Group2"));
+        new Checkpoint(dateStr, GROUP.pad("Group2")));
   }
 
   @Test
@@ -5066,7 +5085,7 @@ public class DocumentumAdaptorTest {
                 new UserPrincipal("User2", "NS")),
             new GroupPrincipal("Group2", "NS_Local"),
             ImmutableSet.of(new UserPrincipal("User2", "NS"))),
-        new Checkpoint(dateStr, "12Group2"));
+        new Checkpoint(dateStr, GROUP.pad("Group2")));
   }
 
   @Test
@@ -5082,7 +5101,7 @@ public class DocumentumAdaptorTest {
         new DfException("Expected Partial Rows Exception"),
         ImmutableMap.of(new GroupPrincipal("Group0", "NS_Local"),
             ImmutableSet.of(new UserPrincipal("User0", "NS"))),
-        new Checkpoint(dateStr, "12Group0"));
+        new Checkpoint(dateStr, GROUP.pad("Group0")));
   }
 
   /**
