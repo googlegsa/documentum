@@ -141,7 +141,7 @@ public class DocumentumAdaptorTest {
   private static final String FEB_1970 = "1970-02-01 02:03:04";
   private static final String MAR_1970 = "1970-03-01 02:03:04";
 
-  private static final String START_PATH = "/Folder1/FFF0";
+  private static final String START_PATH = "/Cab0/FFF0";
 
   private static final String DEFAULT_ACL = "45DefaultACL";
 
@@ -216,7 +216,9 @@ public class DocumentumAdaptorTest {
 
     public String pad(String name) {
       Preconditions.checkArgument(name.length() <= 14,
-          "Name needs to be less than or equal to 14 chars");
+          "Name needs to be less than or equal to 14 chars: %s", name);
+      Preconditions.checkArgument(name.matches("\\p{XDigit}+"),
+          "Name needs to consist entirely of hex digits: %s", name);
       return tag + padStart(name, 14, '0');
     }
   }
@@ -357,7 +359,7 @@ public class DocumentumAdaptorTest {
 
     Map<String, String> folderPathIdsMap = new HashMap<String, String>() {
       {
-        put("/Folder1/FFF0", FOLDER.pad("FFF0"));
+        put(START_PATH, FOLDER.pad("FFF0"));
         put("/Folder1/path1", "0b01081f80078d2a");
         put("/Folder2/path2", "0b01081f80078d29");
         put("/Folder3/path3", "0b01081f80078d28");
@@ -2157,7 +2159,7 @@ public class DocumentumAdaptorTest {
     AdaptorContext context = ProxyAdaptorContext.getInstance();
     DocumentumAdaptor adaptor = getObjectUnderTest(context);
     MockResponse response = new MockResponse();
-    adaptor.getDocContent(new MockRequest(docIdFromPath("/Folder1/FFF1", name,
+    adaptor.getDocContent(new MockRequest(docIdFromPath("/Cab0/FFF1", name,
         DOCUMENT.pad(name))), response);
 
     assertTrue(response.notFound);
@@ -2191,14 +2193,14 @@ public class DocumentumAdaptorTest {
   @Test
   public void testDisplayUrlWithPath() throws Exception {
     String path = START_PATH + "/aaa";
-    assertEquals("http://webtopurl/drl//Folder1/FFF0/aaa",
+    assertEquals("http://webtopurl/drl//Cab0/FFF0/aaa",
         getDisplayUrl("http://webtopurl/drl/{1}", path));
   }
 
   @Test
   public void testDisplayUrlWithIdAndPath() throws Exception {
     String path = START_PATH + "/aaa";
-    assertEquals("/Folder1/FFF0/aaa-http://webtopurl/0900000000000aaa/drl/",
+    assertEquals("/Cab0/FFF0/aaa-http://webtopurl/0900000000000aaa/drl/",
         getDisplayUrl("{1}-http://webtopurl/{0}/drl/", path));
   }
 
@@ -2352,7 +2354,7 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testNoIndex_rootFolder() throws Exception {
-    insertCabinets("System", "Cabinet1", "Cabinet2");
+    insertCabinets("System", "Cab1", "Cab2");
     MockResponse response =
         getDocContent(ImmutableMap.of("documentum.src", "/"),
             new MockRequest(docIdFromPath("/")));
@@ -2605,7 +2607,7 @@ public class DocumentumAdaptorTest {
   @Test
   public void testStartPathDocContent() throws Exception {
     // Insert a "folder" for the root cabinet in the start path. Bit of a hack.
-    insertFolder(EPOCH_1970, FOLDER.pad("Folder1"), "/Folder1");
+    insertFolder(EPOCH_1970, FOLDER.pad("Cab0"), "/Cab0");
 
     String startFolder = START_PATH.substring(START_PATH.lastIndexOf("/") + 1);
     StringBuilder expected = new StringBuilder();
@@ -2626,20 +2628,22 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testSlashInNameDocContent() throws Exception {
+    // Insert two documents with a "path" of START_PATH + "/aaa/bbb".
     // If the slash in the name is interpreted as a path separator,
     // we will try to crawl this document.
-    String folder = START_PATH + "/Slash";
-    insertFolder(getNowPlusMinutes(0), FOLDER.pad("FFF1"), folder);
+    String folder = START_PATH + "/aaa";
+    insertFolder(getNowPlusMinutes(0), FOLDER.pad("aaa"), folder);
     String mimeType = "text/plain";
-    String wrongName = "InName";
-    insertDocument(new Date(), DOCUMENT.pad("DDD0"), DOCUMENT.pad("DDD0"),
+    String wrongName = "bbb";
+    String wrongId = DOCUMENT.pad(wrongName);
+    insertDocument(new Date(), wrongId, wrongId,
         folder + "/" + wrongName, wrongName, mimeType, "Wrong Document");
 
     // The correct document, with an embedded slash in the file name.
-    String name = "Slash/InName";
+    String name = "aaa/bbb";
     String path = START_PATH + "/" + name;
     String content = "Right Document";
-    String id = DOCUMENT.pad("DDD1");
+    String id = DOCUMENT.pad("ccc");
     insertDocument(new Date(), id, id, path, name, mimeType, content);
 
     // First try a DocId with an unencoded slash in the path.
@@ -2698,19 +2702,19 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testFolderDocContent_CustomType() throws Exception {
-    String name = "FFF1";
+    String name = "FFF2";
     String folderId = FOLDER.pad(name);
-    String path = START_PATH + "/path1";
+    String path = START_PATH + "/FFF1";
     String folder = path + "/" + name;
-    insertFolder(EPOCH_1970, FOLDER.pad("path1"), path);
+    insertFolder(EPOCH_1970, FOLDER.pad("FFF1"), path);
     insertFolder(JAN_1970, folderId, folder);
     insertDocument(JAN_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
     StringBuilder expected =
         new StringBuilder()
             .append("<!DOCTYPE html>\n")
-            .append("<html><head><title>Folder FFF1</title></head><body>")
-            .append("<h1>Folder FFF1</h1>")
-            .append("<li><a href=\"FFF1/aaa:0900000000000aaa\">aaa</a></li>")
+            .append("<html><head><title>Folder FFF2</title></head><body>")
+            .append("<h1>Folder FFF2</h1>")
+            .append("<li><a href=\"FFF2/aaa:0900000000000aaa\">aaa</a></li>")
             .append("</body></html>");
 
     MockResponse response =
@@ -2747,15 +2751,15 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testGetDocContentNotFound() throws Exception {
-    String path = START_PATH + "/doesNotExist";
+    String path = START_PATH + "/aaa404";
     assertTrue(getDocContent(DOCUMENT, path).notFound);
   }
 
   @Test
   public void testGetDocContentNotUnderStartPath() throws Exception {
     String now = getNowPlusMinutes(0);
-    String path = "/Folder2/path2";
-    insertFolder(now, "0b01081f80078d30", path);
+    String path = "/Cab2/FFF2";
+    insertFolder(now, FOLDER.pad("FFF2"), path);
 
     assertFalse(path.startsWith(START_PATH));
     assertTrue(getDocContent(FOLDER, path).notFound);
@@ -2843,7 +2847,7 @@ public class DocumentumAdaptorTest {
         "INSERT INTO dm_server_config (r_install_owner) VALUES('Installer')");
     insertCabinets("Integration", "Resources", "System", "Temp");
     insertCabinets("Templates", "Owner", "Installer", "dm_bof_registry");
-    insertCabinets("Cabinet1", "Cabinet2", "Cabinet3");
+    insertCabinets("Cab1", "Cab2", "Cab3");
 
     Config config = ProxyAdaptorContext.getInstance().getConfig();
     new DocumentumAdaptor(null).initConfig(config);
@@ -2853,13 +2857,13 @@ public class DocumentumAdaptorTest {
             "documentum.src", "/",
             "documentum.cabinetWhereCondition",
                 config.getValue("documentum.cabinetWhereCondition")),
-        expectedRecordsFor(CABINET, "/Cabinet1", "/Cabinet2", "/Cabinet3"));
+        expectedRecordsFor(CABINET, "/Cab1", "/Cab2", "/Cab3"));
   }
 
   /** @see #testGetRootContentInvalidWhereClause() */
   @Test
   public void testGetDocIdsRootStartPathInvalidWhereClause() throws Exception {
-    insertCabinets("Cabinet1", "Cabinet2");
+    insertCabinets("Cab1", "Cab2");
     try {
       testGetDocIds(
           ImmutableMap.of(
@@ -4150,20 +4154,20 @@ public class DocumentumAdaptorTest {
     String min5back = getNowPlusMinutes(-5);
     insertFolder(min5back, FOLDER.pad("FFF1"), START_PATH + "/FFF1");
     insertFolder(min5back, FOLDER.pad("FFF2"), START_PATH + "/FFF2");
-    insertFolder(min5back, FOLDER.pad("FFF3"), START_PATH + "/folder/FFF3");
+    insertFolder(min5back, FOLDER.pad("FFF4"), START_PATH + "/FFF3/FFF4");
     insertSysObject(min5back, DOCUMENT.pad("aaa"), "aaa",
         START_PATH + "/FFF1/aaa," + START_PATH + "/FFF2/aaa," + START_PATH
-            + "/folder/FFF3/aaa", "dm_document",
-        FOLDER.pad("FFF1"), FOLDER.pad("FFF2"), FOLDER.pad("FFF3"));
+            + "/FFF3/FFF4/aaa", "dm_document",
+        FOLDER.pad("FFF1"), FOLDER.pad("FFF2"), FOLDER.pad("FFF4"));
 
     String dateStr = getNowPlusMinutes(5);
     insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"));
 
     testUpdatedPermissions(
-        new Checkpoint(min5back, FOLDER.pad("FFF3")),
+        new Checkpoint(min5back, FOLDER.pad("FFF4")),
         Checkpoint.incremental(),
         makeExpectedDocIds(START_PATH, "FFF1/aaa", "FFF2/aaa",
-            "folder/FFF3/aaa"), new Checkpoint(dateStr, "5f123"));
+            "FFF3/FFF4/aaa"), new Checkpoint(dateStr, "5f123"));
   }
 
   @Test
