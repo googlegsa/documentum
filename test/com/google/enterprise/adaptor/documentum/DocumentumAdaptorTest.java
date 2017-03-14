@@ -125,6 +125,8 @@ import java.util.Vector;
  * Document names: aaa, bbb, ccc, ddd
  * Folder names: FFF0, FFF1 ... FFFn
  * Cabinet names: Cab1, Cab2, Cab3 ... Cabn
+ * ACL names: Ac10
+ * Audit trail entries: 123, 124, ..., 129
  */
 
 /** Unit tests for DocumentAdaptor class. */
@@ -207,6 +209,12 @@ public class DocumentumAdaptorTest {
 
   private static final DfException NO_EXCEPTION = null;
 
+  private void assertValidIds(String... ids) {
+    for (String id : ids) {
+      assertTrue(id, id.matches("\\p{XDigit}{16}"));
+    }
+  }
+
   private static class ObjectIdFactory {
     protected final String tag;
 
@@ -247,6 +255,12 @@ public class DocumentumAdaptorTest {
       }
     }
   };
+  private static final ObjectIdFactory ACL = new ObjectIdFactory("45");
+  private static final ObjectIdFactory AUDITTRAIL = new ObjectIdFactory("5f");
+
+  // TODO(jlacey): Move ObjectIdFactory and instances to the top of the file,
+  // and move this next to START_PATH.
+  private static final String START_PATH_ID = FOLDER.pad("FFF0");
 
   @Before
   public void setUp() throws Exception {
@@ -256,7 +270,7 @@ public class DocumentumAdaptorTest {
         CREATE_TABLE_GROUP, CREATE_TABLE_SYSOBJECT, CREATE_TABLE_USER);
 
     // Force the default test start path to exist, so we pass init().
-    insertFolder(EPOCH_1970, FOLDER.pad("FFF0"), START_PATH);
+    insertFolder(EPOCH_1970, START_PATH_ID, START_PATH);
   }
 
   @After
@@ -359,7 +373,7 @@ public class DocumentumAdaptorTest {
 
     Map<String, String> folderPathIdsMap = new HashMap<String, String>() {
       {
-        put(START_PATH, FOLDER.pad("FFF0"));
+        put(START_PATH, START_PATH_ID);
         put("/Folder1/path1", "0b01081f80078d2a");
         put("/Folder2/path2", "0b01081f80078d29");
         put("/Folder3/path3", "0b01081f80078d28");
@@ -1882,6 +1896,7 @@ public class DocumentumAdaptorTest {
 
   private void insertFolderSubtype(String lastModified, String id, String type,
       String... paths) throws SQLException {
+    assertValidIds(id);
     executeUpdate(String.format(
         "insert into dm_folder(r_object_id, i_chronicle_id, r_folder_path) "
         + "values('%s', '%s','%s')",
@@ -1917,6 +1932,8 @@ public class DocumentumAdaptorTest {
   private void insertSysObject(String id, String chronicleId, String name,
       String type, String lastModified, String path, String[] folderIds,
       boolean isVdoc, String mimeType, String content) throws SQLException {
+    assertValidIds(id, chronicleId);
+    assertValidIds(folderIds);
     executeUpdate(String.format("insert into dm_sysobject("
         + "r_object_id, i_chronicle_id, object_name, r_object_type, "
         + "r_modify_date, mock_object_path, i_folder_id, mock_acl_id, "
@@ -2424,6 +2441,7 @@ public class DocumentumAdaptorTest {
     ddl.append(")");
     executeUpdate(ddl.toString());
 
+    assertValidIds(objectId);
     for (String attr : attrs.keySet()) {
       for (String value : attrs.get(attr)) {
         executeUpdate(String.format(
@@ -3018,6 +3036,7 @@ public class DocumentumAdaptorTest {
   }
 
   private void insertUsers(String... names) throws SQLException {
+    // TODO(jlacey): Create an ObjectIdFactory for dm_user.
     for (String name : names) {
       executeUpdate(String.format("insert into dm_user "
           + "(r_object_id, user_name, user_login_name) "
@@ -3060,6 +3079,7 @@ public class DocumentumAdaptorTest {
       }
     }
     // Emulate ROW_BASED retrieval by storing the values that way.
+    // TODO(jlacey): Create an ObjectIdFactory for dm_group.
     int numRows = Math.max(1, Math.max(users.size(), groups.size()));
     for (int i = 0; i < numRows; i++) {
       executeUpdate(String.format("INSERT INTO dm_group"
@@ -3073,6 +3093,7 @@ public class DocumentumAdaptorTest {
   }
 
   private void createAcl(String id) throws SQLException {
+    assertValidIds(id);
     executeUpdate(String.format(
         "insert into dm_acl(r_object_id) values('%s')", id));
   }
@@ -3090,6 +3111,7 @@ public class DocumentumAdaptorTest {
   }
 
   private void grantPermit(String id, IDfPermit permit) throws SQLException {
+    assertValidIds(id);
     executeUpdate(String.format(
         "insert into dm_acl(r_object_id, r_accessor_name, "
         + "r_accessor_permit, r_permit_type, r_is_group) values("
@@ -3482,8 +3504,8 @@ public class DocumentumAdaptorTest {
     insertGroup("Group3", "User6", "User7");
     insertGroup("GroupSet1", "Group1", "Group2");
     insertGroup("GroupSet2", "Group2", "Group3");
-   
-    String id = "45Acl0";
+
+    String id = ACL.pad("Ac10");
     createAcl(id);
     addAllowPermitToAcl(id, "Group1", IDfACL.DF_PERMIT_READ);
     addAllowPermitToAcl(id, "Group2", IDfACL.DF_PERMIT_WRITE);
@@ -3494,7 +3516,7 @@ public class DocumentumAdaptorTest {
     Map<DocId, Acl> namedResources = getAllAcls();
     assertEquals(2, namedResources.size());
 
-    Acl acl1 = namedResources.get(new DocId("45Acl0_reqGroupSet"));
+    Acl acl1 = namedResources.get(new DocId(id + "_reqGroupSet"));
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("GroupSet1", "NS_Local"),
         new GroupPrincipal("GroupSet2", "NS_Local")),
@@ -3502,7 +3524,7 @@ public class DocumentumAdaptorTest {
     assertEquals(ImmutableSet.of(), acl1.getDenyGroups());
 
     Acl acl2 = namedResources.get(new DocId(id));
-    assertEquals(new DocId("45Acl0_reqGroupSet"),
+    assertEquals(new DocId(id + "_reqGroupSet"),
         acl2.getInheritFrom());
     assertEquals(InheritanceType.PARENT_OVERRIDES, acl2.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "NS_Local"),
@@ -3522,7 +3544,7 @@ public class DocumentumAdaptorTest {
     insertGroup("Group5", "User4", "User5");
     insertGroup("Group6", "User6", "User7");
 
-    String id = "45Acl0";
+    String id = ACL.pad("Ac10");
     createAcl(id);
     addAllowPermitToAcl(id, "Group1", IDfACL.DF_PERMIT_READ);
     addAllowPermitToAcl(id, "Group2", IDfACL.DF_PERMIT_WRITE);
@@ -3534,28 +3556,28 @@ public class DocumentumAdaptorTest {
     Map<DocId, Acl> namedResources = getAllAcls();
     assertEquals(4, namedResources.size());
 
-    Acl acl1 = namedResources.get(new DocId("45Acl0_Group6"));
-    assertEquals(new DocId("45Acl0_Group5"), acl1.getInheritFrom());
+    Acl acl1 = namedResources.get(new DocId(id + "_Group6"));
+    assertEquals(new DocId(id + "_Group5"), acl1.getInheritFrom());
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group6", "NS_Local")),
         acl1.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl1.getDenyGroups());
 
-    Acl acl2 = namedResources.get(new DocId("45Acl0_Group5"));
-    assertEquals(new DocId("45Acl0_Group4"), acl2.getInheritFrom());
+    Acl acl2 = namedResources.get(new DocId(id + "_Group5"));
+    assertEquals(new DocId(id + "_Group4"), acl2.getInheritFrom());
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl2.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group5", "NS_Local")),
         acl2.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl2.getDenyGroups());
 
-    Acl acl3 = namedResources.get(new DocId("45Acl0_Group4"));
+    Acl acl3 = namedResources.get(new DocId(id + "_Group4"));
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl3.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group4", "NS_Local")),
         acl3.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl3.getDenyGroups());
 
     Acl acl4 = namedResources.get(new DocId(id));
-    assertEquals(new DocId("45Acl0_Group6"), acl4.getInheritFrom());
+    assertEquals(new DocId(id + "_Group6"), acl4.getInheritFrom());
     assertEquals(InheritanceType.PARENT_OVERRIDES, acl4.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "NS_Local"),
         new GroupPrincipal("Group2", "NS_Local")),
@@ -3576,7 +3598,7 @@ public class DocumentumAdaptorTest {
     insertGroup("GroupSet1", "Group1", "Group2");
     insertGroup("GroupSet2", "Group5", "Group6");
 
-    String id = "45Acl0";
+    String id = ACL.pad("Ac10");
     createAcl(id);
     addAllowPermitToAcl(id, "Group1", IDfACL.DF_PERMIT_READ);
     addAllowPermitToAcl(id, "Group2", IDfACL.DF_PERMIT_WRITE);
@@ -3590,28 +3612,28 @@ public class DocumentumAdaptorTest {
     Map<DocId, Acl> namedResources = getAllAcls();
     assertEquals(5, namedResources.size());
 
-    Acl acl1 = namedResources.get(new DocId("45Acl0_Group6"));
-    assertEquals(new DocId("45Acl0_Group5"), acl1.getInheritFrom());
+    Acl acl1 = namedResources.get(new DocId(id + "_Group6"));
+    assertEquals(new DocId(id + "_Group5"), acl1.getInheritFrom());
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group6", "NS_Local")),
         acl1.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl1.getDenyGroups());
 
-    Acl acl2 = namedResources.get(new DocId("45Acl0_Group5"));
-    assertEquals(new DocId("45Acl0_Group4"), acl2.getInheritFrom());
+    Acl acl2 = namedResources.get(new DocId(id + "_Group5"));
+    assertEquals(new DocId(id + "_Group4"), acl2.getInheritFrom());
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl2.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group5", "NS_Local")),
         acl2.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl2.getDenyGroups());
 
-    Acl acl3 = namedResources.get(new DocId("45Acl0_Group4"));
+    Acl acl3 = namedResources.get(new DocId(id + "_Group4"));
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl3.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group4", "NS_Local")),
         acl3.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl3.getDenyGroups());
 
-    Acl acl4 = namedResources.get(new DocId("45Acl0_reqGroupSet"));
-    assertEquals(new DocId("45Acl0_Group6"), acl4.getInheritFrom());
+    Acl acl4 = namedResources.get(new DocId(id + "_reqGroupSet"));
+    assertEquals(new DocId(id + "_Group6"), acl4.getInheritFrom());
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl4.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("GroupSet1", "NS_Local"),
         new GroupPrincipal("GroupSet2", "NS_Local")),
@@ -3619,7 +3641,7 @@ public class DocumentumAdaptorTest {
     assertEquals(ImmutableSet.of(), acl4.getDenyGroups());
 
     Acl acl5 = namedResources.get(new DocId(id));
-    assertEquals(new DocId("45Acl0_reqGroupSet"),
+    assertEquals(new DocId(id + "_reqGroupSet"),
         acl5.getInheritFrom());
     assertEquals(InheritanceType.PARENT_OVERRIDES, acl5.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "NS_Local"),
@@ -3636,7 +3658,7 @@ public class DocumentumAdaptorTest {
     insertUsers("User1", "User2", "User3");
     insertGroup("Group1", "User2", "User3");
 
-    String id = "45Acl0";
+    String id = ACL.pad("Ac10");
     createAcl(id);
     addAllowPermitToAcl(id, "Group1", IDfACL.DF_PERMIT_READ);
     addRequiredGroupToAcl(id, "GroupNotExists");
@@ -3644,14 +3666,14 @@ public class DocumentumAdaptorTest {
     Map<DocId, Acl> namedResources = getAllAcls();
     assertEquals(2, namedResources.size());
 
-    Acl acl1 = namedResources.get(new DocId("45Acl0_GroupNotExists"));
+    Acl acl1 = namedResources.get(new DocId(id + "_GroupNotExists"));
     assertEquals(InheritanceType.AND_BOTH_PERMIT, acl1.getInheritanceType());
     assertEquals(ImmutableSet.of(), acl1.getPermitGroups());
     assertEquals(ImmutableSet.of(), acl1.getDenyGroups());
 
     // Verify GroupNotExists group is not in permit or deny groups.
     Acl acl2 = namedResources.get(new DocId(id));
-    assertEquals(new DocId("45Acl0_GroupNotExists"),
+    assertEquals(new DocId(id + "_GroupNotExists"),
         acl2.getInheritFrom());
     assertEquals(InheritanceType.PARENT_OVERRIDES, acl2.getInheritanceType());
     assertEquals(ImmutableSet.of(new GroupPrincipal("Group1", "NS_Local")),
@@ -3734,7 +3756,7 @@ public class DocumentumAdaptorTest {
         "insert into dm_audittrail_acl(r_object_id, audited_obj_id, "
             + "event_name, time_stamp_utc) "
             + "values('%s', '%s', '%s', {ts '%s'})",
-            id, auditObjId, eventName, date));
+            AUDITTRAIL.pad(id), auditObjId, eventName, date));
   }
 
   /**
@@ -3801,7 +3823,7 @@ public class DocumentumAdaptorTest {
             new DocId("4501081f80000100"),
             new DocId("4501081f80000101"),
             new DocId("4501081f80000102")),
-        new Checkpoint(dateStr, "125"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("125")));
   }
 
   @Test
@@ -3829,7 +3851,7 @@ public class DocumentumAdaptorTest {
     Map<DocId, Acl> aclMap = testUpdateAcls(Checkpoint.incremental(),
         ImmutableSet.of(
             new DocId(aclId1), new DocId(aclId2), new DocId(aclId3)),
-        new Checkpoint(dateStr, "125"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("125")));
 
     Acl acl1 = aclMap.get(new DocId(aclId1));
     assertUsers(acl1.getPermitUsers(), "User1", "User2");
@@ -3853,7 +3875,7 @@ public class DocumentumAdaptorTest {
 
     testUpdateAcls(Checkpoint.incremental(),
         ImmutableSet.of(new DocId("4501081f80000100")),
-        new Checkpoint(dateStr, "125"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("125")));
   }
 
   @Test
@@ -3880,7 +3902,7 @@ public class DocumentumAdaptorTest {
     insertAclAudit("124", "4501081f80000101", "dm_saveasnew", dateStr);
     insertAclAudit("125", "4501081f80000102", "dm_saveasnew", dateStr);
 
-    Checkpoint firstCheckpoint = new Checkpoint(dateStr, "125");
+    Checkpoint firstCheckpoint = new Checkpoint(dateStr, AUDITTRAIL.pad("125"));
     testUpdateAcls(Checkpoint.incremental(),
         ImmutableSet.of(
             new DocId("4501081f80000100"),
@@ -3896,7 +3918,7 @@ public class DocumentumAdaptorTest {
         ImmutableSet.of(
             new DocId("4501081f80000103"),
             new DocId("4501081f80000104")),
-        new Checkpoint(dateStr, "127"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("127")));
   }
 
   @Test
@@ -3907,7 +3929,7 @@ public class DocumentumAdaptorTest {
 
     Map<DocId, Acl> aclMap = testUpdateAcls(Checkpoint.incremental(),
         ImmutableSet.of(new DocId("4501081f80000100")),
-        new Checkpoint(dateStr, "125"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("125")));
     assertEquals(ImmutableMap.of(new DocId("4501081f80000100"), Acl.EMPTY),
         aclMap);
   }
@@ -3919,7 +3941,7 @@ public class DocumentumAdaptorTest {
 
     Map<DocId, Acl> aclMap = testUpdateAcls(Checkpoint.incremental(),
         ImmutableSet.of(new DocId("4501081f80000100")),
-        new Checkpoint(dateStr, "124"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("124")));
     assertEquals(ImmutableMap.of(new DocId("4501081f80000100"), Acl.EMPTY),
         aclMap);
 
@@ -3928,7 +3950,7 @@ public class DocumentumAdaptorTest {
 
     aclMap = testUpdateAcls(Checkpoint.incremental(),
         ImmutableSet.of(new DocId("4501081f80000100")),
-        new Checkpoint(dateStr, "125"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("125")));
     assertEquals(ImmutableMap.of(new DocId("4501081f80000100"), Acl.EMPTY),
         aclMap);
   }
@@ -3941,7 +3963,8 @@ public class DocumentumAdaptorTest {
     insertAclAudit("128", "4501081f80000106", "dm_saveasnew", dateStr);
     insertAclAudit("129", "4501081f80000107", "dm_saveasnew", dateStr);
 
-    Checkpoint expectedCheckpoint = new Checkpoint(dateStr, "129");
+    Checkpoint expectedCheckpoint =
+        new Checkpoint(dateStr, AUDITTRAIL.pad("129"));
     testUpdateAcls(Checkpoint.incremental(),
         ImmutableSet.of(
             new DocId("4501081f80000106"),
@@ -3997,7 +4020,7 @@ public class DocumentumAdaptorTest {
             new DocId("4501081f80000100"),
             new DocId("4501081f80000101"),
             new DocId("4501081f80000102")),
-        new Checkpoint(dateStr, "125"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("125")));
   }
 
   @Test
@@ -4014,17 +4037,18 @@ public class DocumentumAdaptorTest {
         ImmutableSet.of(
             new DocId("4501081f80000100"),
             new DocId("4501081f80000101")),
-        new Checkpoint(dateStr, "124"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("124")));
   }
 
   private void insertAuditTrailEvent(String date, String id, String eventName,
       String attributeList, String auditObjId, String chronicleId)
       throws SQLException {
+    assertValidIds(auditObjId, chronicleId);
     executeUpdate(String.format(
         "insert into dm_audittrail(time_stamp_utc, r_object_id, event_name, "
             + "attribute_list, audited_obj_id, chronicle_id) "
-            + "values({ts '%s'},'%s', '%s', '%s', '%s',  '%s')", date, id,
-        eventName, attributeList, auditObjId, chronicleId));
+            + "values({ts '%s'},'%s', '%s', '%s', '%s',  '%s')", date,
+        AUDITTRAIL.pad(id), eventName, attributeList, auditObjId, chronicleId));
   }
 
   private void insertAuditTrailAclEvent(String date, String id,
@@ -4056,12 +4080,11 @@ public class DocumentumAdaptorTest {
   }
 
   private Checkpoint insertTestDocuments() throws SQLException {
-    String folderId = "0bd29";
+    String folderId = START_PATH_ID;
     String folder = START_PATH;
 
     // To skip doc updates, set time for document creation 5 min earlier.
     String dateStr = getNowPlusMinutes(-5);
-    insertFolder(dateStr, folderId, folder);
     insertDocument(dateStr, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
     insertDocument(dateStr, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
     insertDocument(dateStr, DOCUMENT.pad("ccc"), folder + "/ccc", folderId);
@@ -4074,13 +4097,13 @@ public class DocumentumAdaptorTest {
     Checkpoint docCheckpoint = insertTestDocuments();
 
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"));
-    insertAuditTrailAclEvent(dateStr, "5f124", DOCUMENT.pad("bbb"));
-    insertAuditTrailAclEvent(dateStr, "5f125", DOCUMENT.pad("ccc"));
+    insertAuditTrailAclEvent(dateStr, "123", DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(dateStr, "124", DOCUMENT.pad("bbb"));
+    insertAuditTrailAclEvent(dateStr, "125", DOCUMENT.pad("ccc"));
 
     testUpdatedPermissions(docCheckpoint, Checkpoint.incremental(),
         makeExpectedDocIds(START_PATH, "aaa", "bbb", "ccc"),
-        new Checkpoint(dateStr, "5f125"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("125")));
   }
 
   @Test
@@ -4088,13 +4111,14 @@ public class DocumentumAdaptorTest {
     Checkpoint docCheckpoint = insertTestDocuments();
 
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"));
-    insertAuditTrailAclEvent(dateStr, "5f124", DOCUMENT.pad("bbb"));
-    insertAuditTrailAclEvent(dateStr, "5f125", DOCUMENT.pad("ccc"));
+    insertAuditTrailAclEvent(dateStr, "123", DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(dateStr, "124", DOCUMENT.pad("bbb"));
+    insertAuditTrailAclEvent(dateStr, "125", DOCUMENT.pad("ccc"));
 
-    testUpdatedPermissions(docCheckpoint, new Checkpoint(dateStr, "5f123"),
+    testUpdatedPermissions(docCheckpoint,
+        new Checkpoint(dateStr, AUDITTRAIL.pad("123")),
         makeExpectedDocIds(START_PATH, "bbb", "ccc"),
-        new Checkpoint(dateStr, "5f125"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("125")));
   }
 
   @Test
@@ -4102,18 +4126,14 @@ public class DocumentumAdaptorTest {
     Checkpoint docCheckpoint = insertTestDocuments();
 
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(getNowPlusMinutes(3), "5f123",
-        DOCUMENT.pad("aaa"));
-    insertAuditTrailAclEvent(getNowPlusMinutes(4), "5f124",
-        DOCUMENT.pad("aaa"));
-    insertAuditTrailAclEvent(getNowPlusMinutes(5), "5f125",
-        DOCUMENT.pad("aaa"));
-    insertAuditTrailAclEvent(getNowPlusMinutes(5), "5f126",
-        DOCUMENT.pad("bbb"));
+    insertAuditTrailAclEvent(getNowPlusMinutes(3), "123", DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(getNowPlusMinutes(4), "124", DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(getNowPlusMinutes(5), "125", DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(getNowPlusMinutes(5), "126", DOCUMENT.pad("bbb"));
 
     testUpdatedPermissions(docCheckpoint, Checkpoint.incremental(),
         makeExpectedDocIds(START_PATH, "aaa", "bbb"),
-        new Checkpoint(dateStr, "5f126"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("126")));
   }
 
   @Test
@@ -4122,16 +4142,13 @@ public class DocumentumAdaptorTest {
     String chronicleId = DOCUMENT.pad("aaa");
 
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"),
-        chronicleId);
-    insertAuditTrailAclEvent(dateStr, "5f124", DOCUMENT.pad("bbb"),
-        chronicleId);
-    insertAuditTrailAclEvent(dateStr, "5f125", DOCUMENT.pad("ccc"),
-        chronicleId);
+    insertAuditTrailAclEvent(dateStr, "123", DOCUMENT.pad("aaa"), chronicleId);
+    insertAuditTrailAclEvent(dateStr, "124", DOCUMENT.pad("bbb"), chronicleId);
+    insertAuditTrailAclEvent(dateStr, "125", DOCUMENT.pad("ccc"), chronicleId);
 
     testUpdatedPermissions(docCheckpoint, Checkpoint.incremental(),
         makeExpectedDocIds(START_PATH, "aaa"),
-        new Checkpoint(dateStr, "5f125"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("125")));
   }
 
   @Test
@@ -4139,13 +4156,14 @@ public class DocumentumAdaptorTest {
     Checkpoint docCheckpoint = insertTestDocuments();
 
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", "09514");
-    insertAuditTrailAclEvent(dateStr, "5f124", "09515");
-    insertAuditTrailAclEvent(dateStr, "5f125", "09516");
+    insertAuditTrailAclEvent(dateStr, "123", DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(dateStr, "124", DOCUMENT.pad("bbb"));
+    insertAuditTrailAclEvent(dateStr, "125", DOCUMENT.pad("ccc"));
 
-    testUpdatedPermissions(docCheckpoint, new Checkpoint(dateStr, "5f125"),
+    testUpdatedPermissions(docCheckpoint,
+        new Checkpoint(dateStr, AUDITTRAIL.pad("125")),
         makeExpectedDocIds(START_PATH),
-        new Checkpoint(dateStr, "5f125"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("125")));
   }
 
   @Test
@@ -4161,13 +4179,13 @@ public class DocumentumAdaptorTest {
         FOLDER.pad("FFF1"), FOLDER.pad("FFF2"), FOLDER.pad("FFF4"));
 
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(dateStr, "123", DOCUMENT.pad("aaa"));
 
     testUpdatedPermissions(
         new Checkpoint(min5back, FOLDER.pad("FFF4")),
         Checkpoint.incremental(),
         makeExpectedDocIds(START_PATH, "FFF1/aaa", "FFF2/aaa",
-            "FFF3/FFF4/aaa"), new Checkpoint(dateStr, "5f123"));
+            "FFF3/FFF4/aaa"), new Checkpoint(dateStr, AUDITTRAIL.pad("123")));
   }
 
   @Test
@@ -4183,29 +4201,27 @@ public class DocumentumAdaptorTest {
         FOLDER.pad("FFF1"), FOLDER.pad("FFF2"), FOLDER.pad("FFF3"));
 
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(dateStr, "123", DOCUMENT.pad("aaa"));
 
     testUpdatedPermissions(
         new Checkpoint(min5back, FOLDER.pad("FFF3")),
         Checkpoint.incremental(),
         makeExpectedDocIds(START_PATH, "FFF1/aaa", "FFF2/aaa"),
-        new Checkpoint(dateStr, "5f123"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("123")));
   }
 
   @Test
   public void testUpdatedPermissions_DocAndPermissions() throws Exception {
-    Checkpoint docCheckpoint = new Checkpoint(getNowPlusMinutes(-5), "5f125");
+    Checkpoint docCheckpoint =
+        new Checkpoint(getNowPlusMinutes(-5), AUDITTRAIL.pad("125"));
     String dateStr = getNowPlusMinutes(5);
-    String folderId = "0bd29";
-    String folder = START_PATH;
-    insertFolder(getNowPlusMinutes(-5), folderId, folder);
     insertSysObject(dateStr, DOCUMENT.pad("aaa"), "aaa",
-        START_PATH + "/aaa", "dm_document", "0bd29");
-    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"));
+        START_PATH + "/aaa", "dm_document", START_PATH_ID);
+    insertAuditTrailAclEvent(dateStr, "123", DOCUMENT.pad("aaa"));
 
     testUpdatedPermissions(docCheckpoint, Checkpoint.incremental(),
         makeExpectedDocIds(START_PATH, "aaa", "aaa"),
-        new Checkpoint(dateStr, "5f123"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("123")));
   }
 
   @Test
@@ -4213,19 +4229,19 @@ public class DocumentumAdaptorTest {
     Checkpoint docCheckpoint = insertTestDocuments();
     String dateStr = getNowPlusMinutes(5);
 
-    insertAuditTrailEvent(dateStr, "5f123", "dm_save", "acl_name=",
+    insertAuditTrailEvent(dateStr, "123", "dm_save", "acl_name=",
         DOCUMENT.pad("aaa"), DOCUMENT.pad("aaa"));
-    insertAuditTrailEvent(dateStr, "5f124", "dm_link", "acl_name=",
+    insertAuditTrailEvent(dateStr, "124", "dm_link", "acl_name=",
         DOCUMENT.pad("bbb"), DOCUMENT.pad("bbb"));
-    insertAuditTrailEvent(dateStr, "5f125", "dm_save", "object_name=",
+    insertAuditTrailEvent(dateStr, "125", "dm_save", "object_name=",
         DOCUMENT.pad("ccc"), DOCUMENT.pad("ccc"));
-    insertAuditTrailEvent(dateStr, "5f126", "dm_link", "object_name=",
+    insertAuditTrailEvent(dateStr, "126", "dm_link", "object_name=",
         DOCUMENT.pad("ddd"), DOCUMENT.pad("ddd"));
 
     Checkpoint checkPoint = Checkpoint.incremental();
     testUpdatedPermissions(docCheckpoint, checkPoint,
         makeExpectedDocIds(START_PATH, "aaa"),
-        new Checkpoint(dateStr, "5f123"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("123")));
   }
 
   private void testUpdatePermissionsExceptions(
@@ -4250,9 +4266,9 @@ public class DocumentumAdaptorTest {
   public void testUpdatePermissionsFirstRowException()
       throws Exception {
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", "09514");
-    insertAuditTrailAclEvent(dateStr, "5f124", "09515");
-    insertAuditTrailAclEvent(dateStr, "5f125", "09516");
+    insertAuditTrailAclEvent(dateStr, "123", DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(dateStr, "124", DOCUMENT.pad("bbb"));
+    insertAuditTrailAclEvent(dateStr, "125", DOCUMENT.pad("ccc"));
 
     testUpdatePermissionsExceptions(Iterators.singletonIterator(0),
         new DfException("Expected failure in first row"),
@@ -4263,28 +4279,28 @@ public class DocumentumAdaptorTest {
   public void testUpdatePermissionsOtherRowsException()
       throws Exception {
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"));
-    insertAuditTrailAclEvent(dateStr, "5f124", DOCUMENT.pad("bbb"));
-    insertAuditTrailAclEvent(dateStr, "5f125", DOCUMENT.pad("ccc"));
+    insertAuditTrailAclEvent(dateStr, "123", DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(dateStr, "124", DOCUMENT.pad("bbb"));
+    insertAuditTrailAclEvent(dateStr, "125", DOCUMENT.pad("ccc"));
 
     testUpdatePermissionsExceptions(Iterators.cycle(1),
         NO_EXCEPTION,
         makeExpectedDocIds(START_PATH, "aaa", "bbb", "ccc"),
-        new Checkpoint(dateStr, "5f125"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("125")));
   }
 
   @Test
   public void testUpdatePermissionsPartialRowsException()
       throws Exception {
     String dateStr = getNowPlusMinutes(5);
-    insertAuditTrailAclEvent(dateStr, "5f123", DOCUMENT.pad("aaa"));
-    insertAuditTrailAclEvent(dateStr, "5f124", DOCUMENT.pad("bbb"));
-    insertAuditTrailAclEvent(dateStr, "5f125", DOCUMENT.pad("ccc"));
+    insertAuditTrailAclEvent(dateStr, "123", DOCUMENT.pad("aaa"));
+    insertAuditTrailAclEvent(dateStr, "124", DOCUMENT.pad("bbb"));
+    insertAuditTrailAclEvent(dateStr, "125", DOCUMENT.pad("ccc"));
 
     testUpdatePermissionsExceptions(Iterators.forArray(2, 0),
         new DfException("Expected Partial Rows Exception"),
         makeExpectedDocIds(START_PATH, "aaa", "bbb"),
-        new Checkpoint(dateStr, "5f124"));
+        new Checkpoint(dateStr, AUDITTRAIL.pad("124")));
   }
 
   @Test
