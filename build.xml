@@ -1,5 +1,5 @@
 <project name="plexi.documentum" default="build" basedir=".">
-  <description>Documentum Adaptor</description>
+  <description>Connector for Documentum</description>
   <tstamp/>
   <property name="src.dir" location="src"/>
   <property name="test.dir" location="test"/>
@@ -195,7 +195,7 @@ lib/plexi submodule or add the the command line argument
         <attribute name="Class-Path" value="${tmp.adaptor.classpath}"/>
         <section name="com/google/enterprise/adaptor/documentum/">
           <attribute name="Implementation-Title"
-            value="Google Documentum Adaptor"/>
+            value="Google Search Appliance Connector for Documentum"/>
           <attribute name="Implementation-Vendor" value="Google Inc."/>
           <attribute name="Implementation-Version"
             value="${adaptor.version}"/>

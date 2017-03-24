@@ -1,4 +1,4 @@
-# Sample Config file for Documentum Adaptor
+# Sample Config file for the Connector for Documentum
 # GSA hostname.
 gsa.hostname =
 
