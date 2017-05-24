@@ -506,7 +506,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
             + "and/or the object path as substitution parameter {1}");
       }
       try {
-        new URI(MessageFormat.format(pattern, "0", "/test"));
+        new ValidatedUri(MessageFormat.format(pattern, "0", "/test"))
+            .logUnreachableHost();
       } catch (URISyntaxException e) {
         throw new InvalidConfigurationException(
             "documentum.displayUrlPattern does not produce valid URLs", e);
