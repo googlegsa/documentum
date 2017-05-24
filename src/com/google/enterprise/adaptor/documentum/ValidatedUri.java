@@ -99,6 +99,4 @@ class ValidatedUri {
     }
     return this;
   }
-
-  // TODO (bmj): Port testHttpHead code from v3 UrlValidator.
 }
