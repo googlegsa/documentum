@@ -844,6 +844,17 @@ public class DocumentumAdaptorTest {
     testValidateDisplayUrlPattern("http://webtop/");
   }
 
+  @Test(expected = InvalidConfigurationException.class)
+  public void testValidateDisplayUrlPatternTooManySubstitutions()
+      throws DfException {
+    testValidateDisplayUrlPattern("http://webtop/{0}/{1}/{2}");
+  }
+
+  @Test(expected = InvalidConfigurationException.class)
+  public void testValidateDisplayUrlPatternRelativeUrl() throws DfException {
+    testValidateDisplayUrlPattern("webtop/{1}");
+  }
+
   private void testDateToString(String version, String expected)
       throws DfException {
     InitTestProxies initProxies = new InitTestProxies();
@@ -2235,8 +2246,8 @@ public class DocumentumAdaptorTest {
   @Test
   public void testDisplayUrlWithIdAndPath() throws Exception {
     String path = START_PATH + "/aaa";
-    assertEquals("/Cab0/FFF0/aaa-http://webtopurl/0900000000000aaa/drl/",
-        getDisplayUrl("{1}-http://webtopurl/{0}/drl/", path));
+    assertEquals("http://webtopurl" + path + "/0900000000000aaa/drl/",
+        getDisplayUrl("http://webtopurl{1}/{0}/drl/", path));
   }
 
   private Acl getACL(ObjectIdFactory type, String path,
