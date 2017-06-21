@@ -1138,7 +1138,7 @@ public class DocumentumAdaptorTest {
                 if (id.startsWith("09")) {
                   return Proxies.newProxyInstance(IDfSysObject.class,
                       new SysObjectMock(rs));
-                } else if (id.startsWith("0b")) {
+                } else if (id.startsWith("0b") || id.startsWith("0c")) {
                   return getFolderBySpecification(id);
                 }
               }
@@ -1415,6 +1415,7 @@ public class DocumentumAdaptorTest {
           .put("dm_document", "dm_sysobject")
           .put("dm_sysobject_subtype", "dm_sysobject")
           .put("dm_folder_subtype", "dm_folder")
+          .put("dm_cabinet", "dm_folder")
           .put("dm_folder", "dm_sysobject")
           .build();
 
@@ -1759,6 +1760,7 @@ public class DocumentumAdaptorTest {
           + "VALUES('%1$s','%1$s',null,'%3$s','%4$s'),"
           + "('%1$s','%1$s','%2$s','%3$s','%4$s')",
           CABINET.pad(cabinet), "/" + cabinet, cabinet, cabinet));
+      insertFolder(EPOCH_1970, CABINET.pad(cabinet), "/" + cabinet);
     }
   }
 
@@ -1946,7 +1948,11 @@ public class DocumentumAdaptorTest {
       if (!folderPath.isEmpty()) {
         String folderName =
             folderPath.substring(folderPath.lastIndexOf("/") + 1);
-        folderIds.add(FOLDER.pad(folderName));
+        if (folderPath.equals("/" + folderName)) {
+          folderIds.add(CABINET.pad(folderName));
+        } else {
+          folderIds.add(FOLDER.pad(folderName));
+        }
       }
     }
     return folderIds.toArray(new String[0]);
@@ -2810,6 +2816,31 @@ public class DocumentumAdaptorTest {
 
     assertFalse(path.startsWith(START_PATH));
     assertTrue(getDocContent(FOLDER, path).notFound);
+  }
+
+  @Test
+  public void testGetDocContentCabinetStartPath() throws Exception {
+    String now = getNowPlusMinutes(0);
+    String cabinet = "Cab1";
+    String cabinetId = CABINET.pad(cabinet);
+    String startPath = "/" + cabinet;
+
+    insertCabinets(cabinet);
+    insertFolder(now, FOLDER.pad("FFF2"), startPath + "/FFF2");
+
+    StringBuilder expected =
+        new StringBuilder().append("<!DOCTYPE html>\n")
+            .append("<html><head><title>Folder Cab1</title></head><body>")
+            .append("<h1>Folder Cab1</h1>")
+            .append("<li><a href=\"Cab1/FFF2:0b0000000000FFF2\">FFF2</a></li>")
+            .append("</body></html>");
+
+    MockResponse response =
+        getDocContent(
+            ImmutableMap.<String, String>of("documentum.src", startPath),
+            new MockRequest(docIdFromPath(startPath, cabinetId)));
+
+    assertEquals(expected.toString(), response.content.toString(UTF_8.name()));
   }
 
   /**

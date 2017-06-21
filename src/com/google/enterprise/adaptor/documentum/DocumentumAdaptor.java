@@ -1570,9 +1570,14 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     if (index == -1) {
       return false;
     }
+    String path = docIdPath.substring(0, index);
+    if (path.isEmpty()
+        && sysObject.getObjectId().toString()
+        .regionMatches(true, 0, String.format("%02x", DfId.DM_CABINET), 0, 2)) {
+      return true;
+    }
     IDfEnumeration enumPaths =
         dmSession.getObjectPaths(sysObject.getObjectId());
-    String path = docIdPath.substring(0, index);
     while (enumPaths.hasMoreElements()) {
       IDfObjectPath objectPath = (IDfObjectPath) enumPaths.nextElement();
       if (path.equals(objectPath.getFullPath())) {
