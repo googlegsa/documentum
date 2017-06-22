@@ -1414,8 +1414,8 @@ public class DocumentumAdaptorTest {
           .put("dm_document_virtual", "dm_sysobject")
           .put("dm_document", "dm_sysobject")
           .put("dm_sysobject_subtype", "dm_sysobject")
-          .put("dm_folder_subtype", "dm_folder")
           .put("dm_cabinet", "dm_folder")
+          .put("dm_folder_subtype", "dm_folder")
           .put("dm_folder", "dm_sysobject")
           .build();
 
