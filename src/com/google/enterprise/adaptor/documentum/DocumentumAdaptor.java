@@ -107,6 +107,8 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   private static final String YESTERDAY = dateFormat.format(
       new Date(System.currentTimeMillis() - ONE_DAY_MILLIS));
 
+  private static final String DM_CABINET_TAG = "0c";
+
   private AdaptorContext context;
   private final IDfClientX dmClientX;
   private List<String> startPaths;
@@ -1570,9 +1572,15 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     if (index == -1) {
       return false;
     }
+    String path = docIdPath.substring(0, index);
+    if (path.isEmpty()
+        && sysObject.getObjectId().toString()
+            .regionMatches(true, 0, DM_CABINET_TAG, 0, 2)) {
+      return true;
+    }
+
     IDfEnumeration enumPaths =
         dmSession.getObjectPaths(sysObject.getObjectId());
-    String path = docIdPath.substring(0, index);
     while (enumPaths.hasMoreElements()) {
       IDfObjectPath objectPath = (IDfObjectPath) enumPaths.nextElement();
       if (path.equals(objectPath.getFullPath())) {

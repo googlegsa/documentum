@@ -1138,7 +1138,7 @@ public class DocumentumAdaptorTest {
                 if (id.startsWith("09")) {
                   return Proxies.newProxyInstance(IDfSysObject.class,
                       new SysObjectMock(rs));
-                } else if (id.startsWith("0b")) {
+                } else if (id.startsWith("0b") || id.startsWith("0c")) {
                   return getFolderBySpecification(id);
                 }
               }
@@ -1414,6 +1414,7 @@ public class DocumentumAdaptorTest {
           .put("dm_document_virtual", "dm_sysobject")
           .put("dm_document", "dm_sysobject")
           .put("dm_sysobject_subtype", "dm_sysobject")
+          .put("dm_cabinet", "dm_folder")
           .put("dm_folder_subtype", "dm_folder")
           .put("dm_folder", "dm_sysobject")
           .build();
@@ -1759,6 +1760,7 @@ public class DocumentumAdaptorTest {
           + "VALUES('%1$s','%1$s',null,'%3$s','%4$s'),"
           + "('%1$s','%1$s','%2$s','%3$s','%4$s')",
           CABINET.pad(cabinet), "/" + cabinet, cabinet, cabinet));
+      insertFolder(EPOCH_1970, CABINET.pad(cabinet), "/" + cabinet);
     }
   }
 
@@ -1946,7 +1948,11 @@ public class DocumentumAdaptorTest {
       if (!folderPath.isEmpty()) {
         String folderName =
             folderPath.substring(folderPath.lastIndexOf("/") + 1);
-        folderIds.add(FOLDER.pad(folderName));
+        if (folderPath.equals("/" + folderName)) {
+          folderIds.add(CABINET.pad(folderName));
+        } else {
+          folderIds.add(FOLDER.pad(folderName));
+        }
       }
     }
     return folderIds.toArray(new String[0]);
@@ -2653,8 +2659,7 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testStartPathDocContent() throws Exception {
-    // Insert a "folder" for the root cabinet in the start path. Bit of a hack.
-    insertFolder(EPOCH_1970, FOLDER.pad("Cab0"), "/Cab0");
+    insertCabinets("Cab0");
 
     String startFolder = START_PATH.substring(START_PATH.lastIndexOf("/") + 1);
     StringBuilder expected = new StringBuilder();
@@ -2810,6 +2815,31 @@ public class DocumentumAdaptorTest {
 
     assertFalse(path.startsWith(START_PATH));
     assertTrue(getDocContent(FOLDER, path).notFound);
+  }
+
+  @Test
+  public void testGetDocContentCabinetStartPath() throws Exception {
+    String now = getNowPlusMinutes(0);
+    String cabinet = "Cab1";
+    String cabinetId = CABINET.pad(cabinet);
+    String startPath = "/" + cabinet;
+
+    insertCabinets(cabinet);
+    insertFolder(now, FOLDER.pad("FFF2"), startPath + "/FFF2");
+
+    StringBuilder expected =
+        new StringBuilder().append("<!DOCTYPE html>\n")
+            .append("<html><head><title>Folder Cab1</title></head><body>")
+            .append("<h1>Folder Cab1</h1>")
+            .append("<li><a href=\"Cab1/FFF2:0b0000000000FFF2\">FFF2</a></li>")
+            .append("</body></html>");
+
+    MockResponse response =
+        getDocContent(
+            ImmutableMap.<String, String>of("documentum.src", startPath),
+            new MockRequest(docIdFromPath(startPath, cabinetId)));
+
+    assertEquals(expected.toString(), response.content.toString(UTF_8.name()));
   }
 
   /**
@@ -5217,11 +5247,9 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testModifiedDocumentsNoCheckpointObjId() throws Exception {
-    String parentId = FOLDER.pad("FFF1");
-    String parentFolder = "/FFF1";
-    insertFolder(EPOCH_1970, parentId, parentFolder);
+    insertCabinets("Cab0");
     String folderId = FOLDER.pad("FFF2");
-    String folder = "/FFF1/FFF2";
+    String folder = "/Cab0/FFF2";
     insertFolder(JAN_1970, folderId, folder);
     insertDocument(FEB_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
     insertDocument(FEB_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
@@ -5264,11 +5292,9 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testModifiedFolder() throws Exception {
-    String parentId = FOLDER.pad("FFF1");
-    String parentFolder = "/FFF1";
-    insertFolder(EPOCH_1970, parentId, parentFolder);
+    insertCabinets("Cab0");
     String folderId = FOLDER.pad("FFF2");
-    String folder = "/FFF1/FFF2";
+    String folder = "/Cab0/FFF2";
     insertFolder(FEB_1970, folderId, folder);
 
     checkModifiedDocIdsPushed(startPaths(folder),
@@ -5279,11 +5305,9 @@ public class DocumentumAdaptorTest {
 
   private void testModifiedDocumentsQuery(String query, List<Record> expected)
       throws Exception {
-    String parentId = FOLDER.pad("FFF1");
-    String parentFolder = "/FFF1";
-    insertFolder(EPOCH_1970, parentId, parentFolder);
+    insertCabinets("Cab0");
     String folderId = FOLDER.pad("FFF2");
-    String folder = "/FFF1/FFF2";
+    String folder = "/Cab0/FFF2";
     insertFolder(FEB_1970, folderId, folder);
     insertDocument(FEB_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
     insertDocument(MAR_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
@@ -5298,13 +5322,13 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testModifiedDocumentsQuery() throws Exception {
-    String folder = "/FFF1/FFF2";
+    String folder = "/Cab0/FFF2";
     String query = "SELECT i_chronicle_id, r_object_id, object_name, "
         + "r_modify_date, "
         + "DATETOSTRING_LOCAL(r_modify_date, ''yyyy-mm-dd hh:mi:ss'') "
         + "AS r_modify_date_str "
         + "FROM dm_sysobject "
-        + "WHERE FOLDER(''/FFF1'',descend) "
+        + "WHERE FOLDER(''/Cab0'',descend) "
         + "AND ((r_modify_date = DATE(''{0}'',''yyyy-mm-dd hh:mi:ss'') "
         + "AND r_object_id > ''{1}'') "
         + "OR (r_modify_date > DATE(''{0}'',''yyyy-mm-dd hh:mi:ss''))) "
@@ -5322,13 +5346,13 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testModifiedDocumentsQuery_Default() throws Exception {
-    String folder = "/FFF1/FFF2";
+    String folder = "/Cab0/FFF2";
     testModifiedDocumentsQuery("", makeExpectedDocIds(folder, folder, "bbb"));
   }
 
   @Test
   public void testModifiedDocumentsQuery_DQLError() throws Exception {
-    String folder = "/FFF1/FFF2";
+    String folder = "/Cab0/FFF2";
     // this query results in dql error. As a result default query will be used.
     String query = "SELECT FROM dm_sysobject WHERE r_object_id > ''0'' ";
 
@@ -5339,7 +5363,7 @@ public class DocumentumAdaptorTest {
   @Test
   public void testModifiedDocumentsQuery_SelectListMissingAttribute()
       throws Exception {
-    String folder = "/FFF1/FFF2";
+    String folder = "/Cab0/FFF2";
     // select is missing required object_name attribute resulting in exception.
     String query = "SELECT i_chronicle_id, r_object_id, r_modify_date, "
         + "DATETOSTRING_LOCAL(r_modify_date, ''yyyy-mm-dd hh:mi:ss'') "
@@ -5352,7 +5376,7 @@ public class DocumentumAdaptorTest {
   @Test
   public void testModifiedDocumentsQuery_IllegalArgumentException()
       throws Exception {
-    String folder = "/FFF1/FFF2";
+    String folder = "/Cab0/FFF2";
     // query fails with IllegalArgumentException on message formatting
     // at {0, time}.
     String query = "SELECT r_object_id FROM dm_sysobject "
@@ -5364,11 +5388,9 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testModifiedFolderNewerThanChildren() throws Exception {
-    String parentId = FOLDER.pad("FFF1");
-    String parentFolder = "/FFF1";
-    insertFolder(EPOCH_1970, parentId, parentFolder);
+    insertCabinets("Cab0");
     String folderId = FOLDER.pad("FFF2");
-    String folder = "/FFF1/FFF2";
+    String folder = "/Cab0/FFF2";
     insertFolder(MAR_1970, folderId, folder);
     insertDocument(JAN_1970, DOCUMENT.pad("aaa"), folder + "/foo", folderId);
     insertDocument(FEB_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
@@ -5499,11 +5521,9 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testModifiedDocumentsWithFolderSubtype() throws Exception {
-    String parentId = FOLDER.pad("FFF1");
-    String parentFolder = "/FFF1";
-    insertFolder(EPOCH_1970, parentId, parentFolder);
+    insertCabinets("Cab0");
     String folderId = FOLDER.pad("FFF2");
-    String folder = "/FFF1/FFF2";
+    String folder = "/Cab0/FFF2";
     insertFolderSubtype(FEB_1970, folderId, "dm_folder_subtype", folder);
     insertDocument(FEB_1970, DOCUMENT.pad("aaa"), folder + "/aaa", folderId);
     insertDocument(MAR_1970, DOCUMENT.pad("bbb"), folder + "/bbb", folderId);
