@@ -2659,7 +2659,6 @@ public class DocumentumAdaptorTest {
 
   @Test
   public void testStartPathDocContent() throws Exception {
-    // Insert a "folder" for the root cabinet in the start path. Bit of a hack.
     insertCabinets("Cab0");
 
     String startFolder = START_PATH.substring(START_PATH.lastIndexOf("/") + 1);
