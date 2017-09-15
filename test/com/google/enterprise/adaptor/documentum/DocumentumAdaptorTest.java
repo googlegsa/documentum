@@ -56,8 +56,9 @@ import com.google.enterprise.adaptor.Request;
 import com.google.enterprise.adaptor.UserPrincipal;
 import com.google.enterprise.adaptor.documentum.DocumentumAdaptor.CaseSensitivityType;
 import com.google.enterprise.adaptor.documentum.DocumentumAdaptor.Checkpoint;
-import com.google.enterprise.adaptor.documentum.RecordingResponse.State;
-
+import com.google.enterprise.adaptor.testing.RecordingDocIdPusher;
+import com.google.enterprise.adaptor.testing.RecordingResponse;
+import com.google.enterprise.adaptor.testing.RecordingResponse.State;
 import com.documentum.com.IDfClientX;
 import com.documentum.fc.client.DfIdNotFoundException;
 import com.documentum.fc.client.DfPermit;
@@ -93,6 +94,7 @@ import org.junit.Test;
 import org.junit.rules.ExpectedException;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -1768,6 +1770,15 @@ public class DocumentumAdaptorTest {
     }
   }
 
+  private URI getAnchor(RecordingResponse response, String name) {
+    for (Map.Entry<String, URI> entry : response.getAnchors()) {
+      if (entry.getKey().equals(name)) {
+        return entry.getValue();
+      }
+    }
+    return null;
+  }
+
   private void checkGetRootContent(String whereClause, int maxHtmlLinks,
       String... expectedCabinets) throws Exception {
     List<String> queries = new ArrayList<>();
@@ -1775,7 +1786,9 @@ public class DocumentumAdaptorTest {
         "Get All Cabinets Query", queries);
 
     String startPath = "/";
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
     RecordingResponse response = getDocContent(
+        boas,
         ImmutableMap.of(
             "documentum.src", startPath,
             "documentum.maxHtmlSize", maxHtmlLinks,
@@ -1791,7 +1804,7 @@ public class DocumentumAdaptorTest {
     }
 
     assertEquals("text/html; charset=UTF-8", response.getContentType());
-    String content = response.getOutputStream().toString();
+    String content = boas.toString(UTF_8.name());
 
     assertEquals(content, maxHtmlLinks == 0 || expectedCabinets.length == 0,
                  content.indexOf("href") < 0);
@@ -1809,9 +1822,10 @@ public class DocumentumAdaptorTest {
           "<a href=\"" + "./" + cabinetWithId + "\">/" + cabinet + "</a>";
       if (content.indexOf(link) < 0) {
         URI uri = docidEncoder.encodeDocId(new DocId(cabinetWithId));
-        URI anchor = response.getAnchor("/" + cabinet);
+        URI anchor = getAnchor(response, "/" + cabinet);
         assertNotNull("Cabinet " + cabinet + " with URI " + uri + " is missing"
-            + " from response:/n" + content + "/n" + response.getAnchors(), anchor);
+            + " from response:/n" + content + "/n" + response.getAnchors(),
+            anchor);
         assertEquals(uri, anchor);
       }
     }
@@ -1999,11 +2013,14 @@ public class DocumentumAdaptorTest {
     String content = "<html><body>Hello</body></html>";
     insertDocument(lastModified, path, mimeType, content);
 
-    RecordingResponse response = getDocContent(ImmutableMap.<String, String>of(),
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
+    RecordingResponse response = getDocContent(
+        boas,
+        ImmutableMap.<String, String>of(),
         new MockRequest(docIdFromPath(path, DOCUMENT.pad("aaa")),
             lastCrawled));
 
-    assertDocContent(response, lastModified, mimeType, content,
+    assertDocContent(boas, response, lastModified, mimeType, content,
         expectNoContent);
   }
 
@@ -2011,7 +2028,8 @@ public class DocumentumAdaptorTest {
   @Rule
   public final ExpectedException exception = ExpectedException.none();
 
-  private void assertDocContent(RecordingResponse response, Date lastModified,
+  private void assertDocContent(ByteArrayOutputStream boas,
+      RecordingResponse response, Date lastModified,
       String mimeType, String content, boolean expectNoContent)
       throws IOException {
     // Our mocks, like Documentum, only store seconds, not milliseconds.
@@ -2021,35 +2039,35 @@ public class DocumentumAdaptorTest {
     assertFalse(response.getMetadata().isEmpty());
     assertNotNull(response.getAcl());
     if (expectNoContent) {
-      assertTrue(response.getState() == State.NO_CONTENT);
+      assertEquals(State.NO_CONTENT, response.getState());
       assertEquals(null, response.getContentType());
-      exception.expect(IllegalStateException.class);
-      assertEquals(null, response.getOutputStream());
+      assertEquals("", boas.toString(UTF_8.name()));
     } else {
-      assertFalse(response.getState() == State.NO_CONTENT);
+      assertEquals(State.SEND_BODY, response.getState());
       assertEquals(mimeType, response.getContentType());
-      assertEquals(content, response.getOutputStream().toString());
+      assertEquals(content, boas.toString(UTF_8.name()));
     }
   }
 
-  private RecordingResponse getDocContent(ObjectIdFactory type, String path)
-      throws DfException, IOException {
+  private RecordingResponse getDocContent(ByteArrayOutputStream boas,
+      ObjectIdFactory type, String path) throws DfException, IOException {
     String name = path.substring(path.lastIndexOf("/") + 1);
     Request request = new MockRequest(docIdFromPath(path, type.pad(name)));
-    return getDocContent(ImmutableMap.<String, String>of(), request);
+    return getDocContent(boas, ImmutableMap.<String, String>of(), request);
   }
 
   private RecordingResponse getDocContent(Map<String, ?> configOverrides,
       String path) throws DfException, IOException {
     String name = path.substring(path.lastIndexOf("/") + 1);
     Request request = new MockRequest(docIdFromPath(path, DOCUMENT.pad(name)));
-    return getDocContent(configOverrides, request);
+    return getDocContent(new ByteArrayOutputStream(), configOverrides, request);
   }
 
-  private RecordingResponse getDocContent(Map<String, ?> configOverrides,
-      Request request) throws DfException, IOException {
+  private RecordingResponse getDocContent(ByteArrayOutputStream boas,
+      Map<String, ?> configOverrides, Request request)
+          throws DfException, IOException {
     DocumentumAdaptor adaptor = getObjectUnderTest(configOverrides);
-    RecordingResponse response = new RecordingResponse();
+    RecordingResponse response = new RecordingResponse(boas);
     adaptor.getDocContent(request, response);
     return response;
   }
@@ -2101,8 +2119,8 @@ public class DocumentumAdaptorTest {
     testDocContent(lastCrawled, lastModified, true);
   }
 
-  private RecordingResponse getNoContent(String content, long... size)
-      throws Exception {
+  private RecordingResponse getNoContent(ByteArrayOutputStream boas,
+      String content, long... size) throws Exception {
     String path = START_PATH + "/aaa";
     insertDocument(new Date(), path, "text/plain", content);
 
@@ -2113,37 +2131,41 @@ public class DocumentumAdaptorTest {
       setDocumentSize(DOCUMENT.pad("aaa"), size[0]);
     }
 
-    return getDocContent(DOCUMENT, path);
+    return getDocContent(boas, DOCUMENT, path);
   }
 
   @Test
   public void testGetDocContent_noFile() throws Exception {
-    RecordingResponse response = getNoContent(null);
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
+    RecordingResponse response = getNoContent(boas, null);
     assertEquals(null, response.getContentType());
-    assertEquals("", response.getOutputStream().toString());
+    assertEquals("", boas.toString(UTF_8.name()));
   }
 
   @Test
   public void testGetDocContent_emptyFile() throws Exception {
-    RecordingResponse response = getNoContent("");
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
+    RecordingResponse response = getNoContent(boas, "");
     assertEquals(null, response.getContentType());
-    assertEquals("", response.getOutputStream().toString());
+    assertEquals("", boas.toString(UTF_8.name()));
   }
 
   @Test
   public void testGetDocContent_largeFile() throws Exception {
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
     RecordingResponse response =
-        getNoContent("hello, world", Integer.MAX_VALUE + 1L);
+        getNoContent(boas, "hello, world", Integer.MAX_VALUE + 1L);
     assertEquals("text/plain", response.getContentType());
-    assertEquals("hello, world", response.getOutputStream().toString());
+    assertEquals("hello, world", boas.toString(UTF_8.name()));
   }
 
   @Test
   public void testGetDocContent_hugeFile() throws Exception {
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
     RecordingResponse response =
-        getNoContent("Call me Ishmael....", Integer.MAX_VALUE + 2L);
+        getNoContent(boas, "Call me Ishmael....", Integer.MAX_VALUE + 2L);
     assertEquals(null, response.getContentType());
-    assertEquals("", response.getOutputStream().toString());
+    assertEquals("", boas.toString(UTF_8.name()));
   }
 
   @Test
@@ -2156,21 +2178,23 @@ public class DocumentumAdaptorTest {
     String mimeType = "text/html";
     String content = "<html><body>Hello</body></html>";
     insertDocument(lastModified, id, id, path, "aaa", mimeType, content);
-    RecordingResponse response = getDocContent(ImmutableMap.<String, String>of(),
-        new MockRequest(docIdFromPath(path, DOCUMENT.pad("aaa")),
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
+    RecordingResponse response = getDocContent(boas, ImmutableMap.<String,
+        String>of(), new MockRequest(docIdFromPath(path, DOCUMENT.pad("aaa")),
             lastCrawled));
-    assertDocContent(response, lastModified, mimeType, content, false);
+    assertDocContent(boas, response, lastModified, mimeType, content, false);
 
     // insert next version of modified document, with same chronicle ID.
+    ByteArrayOutputStream boas2 = new ByteArrayOutputStream();
     id = DOCUMENT.pad("aa1");
     content = "<html><body>Hello Google</body></html>";
     lastModified = new Date(lastCrawled.getTime() + (125 * 1000L));
     insertDocument(lastModified, id, chronicleId, path, "aaa", mimeType,
         content);
-    response = getDocContent(ImmutableMap.<String, String>of(),
+    response = getDocContent(boas2, ImmutableMap.<String, String>of(),
         new MockRequest(docIdFromPath(path, DOCUMENT.pad("aaa")),
             lastCrawled));
-    assertDocContent(response, lastModified, mimeType, content, false);
+    assertDocContent(boas2, response, lastModified, mimeType, content, false);
   }
 
   @Test
@@ -2271,7 +2295,9 @@ public class DocumentumAdaptorTest {
     assertTrue(path, path.startsWith(START_PATH));
 
     String name = path.substring(path.lastIndexOf("/") + 1);
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
     RecordingResponse response = getDocContent(
+        boas,
         ImmutableMap.of("adaptor.markAllDocsAsPublic", markAllDocsPublic),
         new MockRequest(docIdFromPath(path, type.pad(name))));
 
@@ -2338,7 +2364,10 @@ public class DocumentumAdaptorTest {
     insertFolder(now, folderId, folder);
     setSysObjectACL(folder, folderACL);
 
-    RecordingResponse response = getDocContent(ImmutableMap.of(
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
+    RecordingResponse response = getDocContent(
+            boas,
+            ImmutableMap.of(
             "adaptor.markAllDocsAsPublic", allDocsPubilc,
             "documentum.indexFolders", indexFolder),
             new MockRequest(docIdFromPath(folder, FOLDER.pad(name))));
@@ -2380,8 +2409,9 @@ public class DocumentumAdaptorTest {
     insertFolder(now, folderId, folder);
     writeAttributes(folderId, attrs);
 
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
     Request request = new MockRequest(docIdFromPath(folder, folderId));
-    RecordingResponse response = getDocContent(configOverrides, request);
+    RecordingResponse response = getDocContent(boas, configOverrides, request);
 
     assertEquals(expected, response.getMetadata());
   }
@@ -2415,8 +2445,9 @@ public class DocumentumAdaptorTest {
   @Test
   public void testNoIndex_rootFolder() throws Exception {
     insertCabinets("System", "Cab1", "Cab2");
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
     RecordingResponse response =
-        getDocContent(ImmutableMap.of("documentum.src", "/"),
+        getDocContent(boas, ImmutableMap.of("documentum.src", "/"),
             new MockRequest(docIdFromPath("/")));
 
     assertTrue(response.isNoIndex());
@@ -2432,8 +2463,9 @@ public class DocumentumAdaptorTest {
     insertFolder(now, folderId, folder);
     setSysObjectACL(folder, folderACL);
 
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
     RecordingResponse response =
-        getDocContent(configOverrides,
+        getDocContent(boas, configOverrides,
             new MockRequest(docIdFromPath(folder, folderId)));
 
     assertEquals(expected, response.isNoIndex());
@@ -2540,14 +2572,15 @@ public class DocumentumAdaptorTest {
         ? ImmutableMap.<String, String>of()
         : ImmutableMap.of("documentum.excludedAttributes", excludedAttrs);
 
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
     Request request = new MockRequest(docIdFromPath(path, objectId));
-    RecordingResponse response = getDocContent(configOverrides, request);
+    RecordingResponse response = getDocContent(boas, configOverrides, request);
 
     assertEquals(expected, response.getMetadata());
   }
 
-  private void testMetadata(Metadata attrs,
-      Metadata expected) throws Exception {
+  private void testMetadata(Metadata attrs, Metadata expected)
+      throws Exception {
     testExcludeMetadata(attrs, null, expected);
   }
 
@@ -2634,10 +2667,11 @@ public class DocumentumAdaptorTest {
     String objectContent = "<html><body>Hello</body></html>";
     insertVirtualDocument(path, objectMimeType, objectContent);
 
-    RecordingResponse response = getDocContent(DOCUMENT, path);
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
+    RecordingResponse response = getDocContent(boas, DOCUMENT, path);
 
     assertEquals(objectMimeType, response.getContentType());
-    assertEquals(objectContent, response.getOutputStream().toString());
+    assertEquals(objectContent, boas.toString(UTF_8.name()));
     assertTrue(response.getAnchors().isEmpty());
   }
 
@@ -2649,15 +2683,16 @@ public class DocumentumAdaptorTest {
     insertVirtualDocument(path, objectMimeType, objectContent,
         "aaa", "bbb", "ccc");
 
-    RecordingResponse response = getDocContent(DOCUMENT, path);
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
+    RecordingResponse response = getDocContent(boas, DOCUMENT, path);
 
     assertEquals(objectMimeType, response.getContentType());
-    assertEquals(objectContent, response.getOutputStream().toString());
+    assertEquals(objectContent, boas.toString(UTF_8.name()));
 
     // Verify child links.
     assertEquals(3, response.getAnchors().size());
     for (String name : ImmutableList.of("aaa", "bbb", "ccc")) {
-      URI uri = response.getAnchor(name);
+      URI uri = getAnchor(response, name);
       assertNotNull(uri);
       assertTrue(uri.toString(), uri.toString().endsWith(path + "/" + name + ":"
           + DOCUMENT.pad(name)));
@@ -2676,13 +2711,15 @@ public class DocumentumAdaptorTest {
     expected.append("Folder ").append(startFolder);
     expected.append("</h1></body></html>");
 
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
     RecordingResponse response = getDocContent(
+        boas,
         ImmutableMap.of("documentum.src", START_PATH),
         new MockRequest(docIdFromPath(START_PATH, FOLDER.pad(startFolder))));
 
     assertFalse(response.getState() == State.NOT_FOUND);
     assertEquals("text/html; charset=UTF-8", response.getContentType());
-    assertEquals(expected.toString(), response.getOutputStream().toString());
+    assertEquals(expected.toString(), boas.toString(UTF_8.name()));
   }
 
   @Test
@@ -2706,16 +2743,19 @@ public class DocumentumAdaptorTest {
     insertDocument(new Date(), id, id, path, name, mimeType, content);
 
     // First try a DocId with an unencoded slash in the path.
-    RecordingResponse response = getDocContent(ImmutableMap.<String, String>of(),
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
+    RecordingResponse response = getDocContent(
+        boas,
+        ImmutableMap.<String, String>of(),
         new MockRequest(docIdFromPath(path, id)));
     assertTrue(response.getState() == State.NOT_FOUND);
 
     // Now try a DocId with encoded slash in the name.
-    response = getDocContent(ImmutableMap.<String, String>of(),
+    response = getDocContent(boas, ImmutableMap.<String, String>of(),
         new MockRequest(docIdFromPath(START_PATH, name, id)));
     assertFalse(response.getState() == State.NOT_FOUND);
     assertEquals(mimeType, response.getContentType());
-    assertEquals(content, response.getOutputStream().toString());
+    assertEquals(content, boas.toString(UTF_8.name()));
   }
 
   @Test
@@ -2752,11 +2792,12 @@ public class DocumentumAdaptorTest {
         .append("TPS Report 1/23/2017</a></li>")
         .append("</body></html>");
 
-    RecordingResponse response = getDocContent(FOLDER, folder);
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
+    RecordingResponse response = getDocContent(boas, FOLDER, folder);
 
     assertFalse(response.getState() == State.NOT_FOUND);
     assertEquals("text/html; charset=UTF-8", response.getContentType());
-    assertEquals(expected.toString(), response.getOutputStream().toString());
+    assertEquals(expected.toString(), boas.toString(UTF_8.name()));
   }
 
   @Test
@@ -2776,12 +2817,13 @@ public class DocumentumAdaptorTest {
             .append("<li><a href=\"FFF2/aaa:0900000000000aaa\">aaa</a></li>")
             .append("</body></html>");
 
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
     RecordingResponse response =
-        getDocContent(ImmutableMap.<String, String>of(
+        getDocContent(boas, ImmutableMap.<String, String>of(
             "documentum.documentTypes", "dm_sysobject"),
             new MockRequest(docIdFromPath(folder, folderId)));
 
-    assertEquals(expected.toString(), response.getOutputStream().toString());
+    assertEquals(expected.toString(), boas.toString(UTF_8.name()));
   }
 
   @Test
@@ -2790,7 +2832,8 @@ public class DocumentumAdaptorTest {
     String folderId = FOLDER.pad("FFF1");
     String folder = START_PATH + "/FFF1";
     insertFolder(now, folderId, folder);
-    RecordingResponse response = getDocContent(FOLDER, folder);
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
+    RecordingResponse response = getDocContent(boas, FOLDER, folder);
 
     assertEquals(dateFormat.parse(now), response.getLastModified());
   }
@@ -2801,7 +2844,8 @@ public class DocumentumAdaptorTest {
     String folderId = FOLDER.pad("FFF1");
     String folder = START_PATH + "/FFF1";
     insertFolder(now, folderId, folder);
-    RecordingResponse response = getDocContent(FOLDER, folder);
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
+    RecordingResponse response = getDocContent(boas, FOLDER, folder);
 
     assertNotNull(response.getDisplayUrl());
     assertEquals("http://webtop/drl/" + folderId,
@@ -2811,7 +2855,9 @@ public class DocumentumAdaptorTest {
   @Test
   public void testGetDocContentNotFound() throws Exception {
     String path = START_PATH + "/aaa404";
-    assertTrue(getDocContent(DOCUMENT, path).getState() == State.NOT_FOUND);
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
+    assertEquals(State.NOT_FOUND,
+        getDocContent(boas, DOCUMENT, path).getState());
   }
 
   @Test
@@ -2820,8 +2866,9 @@ public class DocumentumAdaptorTest {
     String path = "/Cab2/FFF2";
     insertFolder(now, FOLDER.pad("FFF2"), path);
 
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
     assertFalse(path.startsWith(START_PATH));
-    assertTrue(getDocContent(FOLDER, path).getState() == State.NOT_FOUND);
+    assertEquals(State.NOT_FOUND, getDocContent(boas, FOLDER, path).getState());
   }
 
   @Test
@@ -2841,12 +2888,14 @@ public class DocumentumAdaptorTest {
             .append("<li><a href=\"Cab1/FFF2:0b0000000000FFF2\">FFF2</a></li>")
             .append("</body></html>");
 
+    ByteArrayOutputStream boas = new ByteArrayOutputStream();
     RecordingResponse response =
         getDocContent(
+            boas,
             ImmutableMap.<String, String>of("documentum.src", startPath),
             new MockRequest(docIdFromPath(startPath, cabinetId)));
 
-    assertEquals(expected.toString(), response.getOutputStream().toString());
+    assertEquals(expected.toString(), boas.toString(UTF_8.name()));
   }
 
   /**
