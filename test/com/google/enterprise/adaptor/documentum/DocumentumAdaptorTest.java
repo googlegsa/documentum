@@ -89,10 +89,7 @@ import com.documentum.fc.common.IDfTime;
 
 import org.junit.After;
 import org.junit.Before;
-import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.ExpectedException;
-
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -2024,10 +2021,6 @@ public class DocumentumAdaptorTest {
         expectNoContent);
   }
 
-
-  @Rule
-  public final ExpectedException exception = ExpectedException.none();
-
   private void assertDocContent(ByteArrayOutputStream boas,
       RecordingResponse response, Date lastModified,
       String mimeType, String content, boolean expectNoContent)
@@ -2643,7 +2636,6 @@ public class DocumentumAdaptorTest {
     attributes.add("attr2", "value2");
     Metadata expected = new Metadata(attributes);
     expected.add("r_object_id", DOCUMENT.pad("aaa"));
-    expected.add("r_object_type", "dm_document");
     expected.add("r_object_type", "dm_sysobject");
     testMetadata(attributes, expected);
   }
