@@ -28,6 +28,7 @@ import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
 import com.google.enterprise.adaptor.DocIdEncoder;
 import com.google.enterprise.adaptor.DocIdPusher;
+import com.google.enterprise.adaptor.DocIdPusher.FeedType;
 import com.google.enterprise.adaptor.DocIdPusher.Record;
 import com.google.enterprise.adaptor.GroupPrincipal;
 import com.google.enterprise.adaptor.IOHelper;
@@ -880,12 +881,21 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         groups;
     protected Checkpoint groupsCheckpoint;
 
+    private FeedType feedType;
+    private boolean prevGroups;
+    private boolean prevError;
+    protected boolean caughtException;
+
     protected GroupTraverser() {
-      this(Checkpoint.full());
+      this(Checkpoint.full(), FeedType.FULL);
+      prevGroups = false;
+      prevError = false;
+      caughtException = false;
     }
 
-    protected GroupTraverser(Checkpoint checkpoint) {
+    protected GroupTraverser(Checkpoint checkpoint, FeedType feedType) {
       super(checkpoint);
+      this.feedType = feedType;
     }
 
     @Override
@@ -903,8 +913,21 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     @Override
     protected Checkpoint pushCollection(DocIdPusher pusher)
         throws InterruptedException {
+      FeedType feedType;
+      if (queryBatchSize > 0) {
+        feedType = prevGroups ? FeedType.INCREMENTAL : this.feedType;
+      } else {
+        feedType = this.feedType;
+      }
+      if (feedType == FeedType.FULL && prevError) {
+        feedType = FeedType.INCREMENTAL;
+      }
+
       pusher.pushGroupDefinitions(groups.build(),
-          caseSensitivityType == CaseSensitivityType.EVERYTHING_CASE_SENSITIVE);
+          caseSensitivityType == CaseSensitivityType.EVERYTHING_CASE_SENSITIVE,
+          feedType, null, null);
+      prevGroups = !groups.build().isEmpty();
+      prevError = caughtException;
       return groupsCheckpoint;
     }
 
@@ -967,23 +990,29 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         ImmutableSet.Builder<Principal> members = null;
         String groupName = null;
         String objectId = groupsCheckpoint.getObjectId();
-        while (result.next()) {
-          if (!Objects.equals(objectId, result.getString("r_object_id"))) {
-            // We have transitioned to a new group.
-            addGroup(groupName, groups, members, principals);
-            groupsCheckpoint = new Checkpoint(objectId);
-            members = ImmutableSet.builder();
-            groupName = result.getString("group_name");
-            objectId = result.getString("r_object_id");
-            logger.log(Level.FINE, "Found Group: {0}", groupName);
+        try {
+          caughtException = false;
+          while (result.next()) {
+            if (!Objects.equals(objectId, result.getString("r_object_id"))) {
+              // We have transitioned to a new group.
+              addGroup(groupName, groups, members, principals);
+              groupsCheckpoint = new Checkpoint(objectId);
+              members = ImmutableSet.builder();
+              groupName = result.getString("group_name");
+              objectId = result.getString("r_object_id");
+              logger.log(Level.FINE, "Found Group: {0}", groupName);
+            }
+            addMemberPrincipal(members, principals,
+                result.getString("users_names"), false);
+            addMemberPrincipal(members, principals,
+                result.getString("groups_names"), true);
           }
-          addMemberPrincipal(members, principals,
-              result.getString("users_names"), false);
-          addMemberPrincipal(members, principals,
-              result.getString("groups_names"), true);
+          addGroup(groupName, groups, members, principals);
+          groupsCheckpoint = new Checkpoint(stopObjectId);
+        } catch (DfException e) {
+          caughtException = true;
+          throw e;
         }
-        addGroup(groupName, groups, members, principals);
-        groupsCheckpoint = new Checkpoint(stopObjectId);
       } finally {
         result.close();
       }
@@ -1397,7 +1426,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   @VisibleForTesting
   class ModifiedGroupTraverser extends GroupTraverser {
     private ModifiedGroupTraverser() {
-      super(Checkpoint.incremental());
+      super(Checkpoint.incremental(), FeedType.INCREMENTAL);
     }
 
     @Override
@@ -1413,24 +1442,30 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         String groupName = null;
         String lastModified = groupsCheckpoint.getLastModified();
         String objectId = groupsCheckpoint.getObjectId();
-        while (result.next()) {
-          if (!Objects.equals(objectId, result.getString("r_object_id"))) {
-            // We have transitioned to a new group.
-            addGroup(groupName, groups, members, principals);
-            groupsCheckpoint = new Checkpoint(lastModified, objectId);
-            members = ImmutableSet.builder();
-            groupName = result.getString("group_name");
-            lastModified = result.getString("r_modify_date_str");
-            objectId = result.getString("r_object_id");
-            logger.log(Level.FINE, "Found Group: {0}", groupName);
+        try {
+          caughtException = false;
+          while (result.next()) {
+            if (!Objects.equals(objectId, result.getString("r_object_id"))) {
+              // We have transitioned to a new group.
+              addGroup(groupName, groups, members, principals);
+              groupsCheckpoint = new Checkpoint(lastModified, objectId);
+              members = ImmutableSet.builder();
+              groupName = result.getString("group_name");
+              lastModified = result.getString("r_modify_date_str");
+              objectId = result.getString("r_object_id");
+              logger.log(Level.FINE, "Found Group: {0}", groupName);
+            }
+            addMemberPrincipal(members, principals,
+                result.getString("users_names"), false);
+            addMemberPrincipal(members, principals,
+                result.getString("groups_names"), true);
           }
-          addMemberPrincipal(members, principals,
-              result.getString("users_names"), false);
-          addMemberPrincipal(members, principals,
-              result.getString("groups_names"), true);
+          addGroup(groupName, groups, members, principals);
+          groupsCheckpoint = new Checkpoint(lastModified, objectId);
+        } catch (DfException e) {
+          caughtException = true;
+          throw e;
         }
-        addGroup(groupName, groups, members, principals);
-        groupsCheckpoint = new Checkpoint(lastModified, objectId);
       } finally {
         result.close();
       }

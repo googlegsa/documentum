@@ -4597,6 +4597,94 @@ public class DocumentumAdaptorTest {
   }
 
   @Test
+  public void testGetGroups_FullFeeds() throws Exception {
+    insertUsers("User1", "User2", "User3", "User4", "User5");
+    insertGroup("Group1", "User1", "User2", "User3");
+    insertGroup("Group2", "User3", "User4", "User5");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<Principal>>
+        expected = ImmutableMap.of(
+            new GroupPrincipal("Group1", "NS_Local"),
+            ImmutableSet.<Principal>of(new UserPrincipal("User1", "NS"),
+                new UserPrincipal("User2", "NS"),
+                new UserPrincipal("User3", "NS")),
+            new GroupPrincipal("Group2", "NS_Local"),
+            ImmutableSet.<Principal>of(new UserPrincipal("User3", "NS"),
+                new UserPrincipal("User4", "NS"),
+                new UserPrincipal("User5", "NS")),
+            new GroupPrincipal("dm_world", "NS_Local"),
+            ImmutableSet.<Principal>of(new UserPrincipal("User1", "NS"),
+                new UserPrincipal("User2", "NS"),
+                new UserPrincipal("User3", "NS"),
+                new UserPrincipal("User4", "NS"),
+                new UserPrincipal("User5", "NS")));
+
+    assertEquals(expected, getGroups());
+  }
+
+  @Test
+  public void testGetGroupsUserMembersOnly_FullAndIncrementalFeeds()
+      throws Exception {
+    insertUsers("User1", "User2", "User3", "User4");
+    insertGroup("Group1", "User1", "User2");
+    insertGroup("Group2", "User3", "User4");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<Principal>>
+      expected = ImmutableMap.of(
+          new GroupPrincipal("Group1", "NS_Local"),
+          ImmutableSet.of(new UserPrincipal("User1", "NS"),
+              new UserPrincipal("User2", "NS")),
+          new GroupPrincipal("Group2", "NS_Local"),
+          ImmutableSet.of(new UserPrincipal("User3", "NS"),
+              new UserPrincipal("User4", "NS")));
+
+    DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
+        new H2BackedTestProxies(), ImmutableMap.<String, String>of());
+    DfException expectedCause = null;
+    RecordingDocIdPusher pusher = new RecordingDocIdPusher();
+    try {
+      adaptor.getDocIds(pusher);
+      assertNull("Expected an exception: " + expectedCause, expectedCause);
+    } catch (IOException e) {
+      if (expectedCause == NO_EXCEPTION || expectedCause != e.getCause()) {
+        throw e;
+      }
+    }
+    assertEquals(expected, filterDmWorld(pusher.getGroupDefinitions()));
+
+    // push incremental feeds
+    insertUsers("User5", "User6");
+    String now = getNowPlusMinutes(0);
+    String dateStr = getNowPlusMinutes(5);
+    insertModifiedGroup(dateStr, "Group3", "User5");
+    insertModifiedGroup(dateStr, "Group4", "User6");
+
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+      expected2 = ImmutableMap.of(
+          new GroupPrincipal("Group1", "NS_Local"),
+          ImmutableSet.of(new UserPrincipal("User1", "NS"),
+              new UserPrincipal("User2", "NS")),
+          new GroupPrincipal("Group2", "NS_Local"),
+          ImmutableSet.of(new UserPrincipal("User3", "NS"),
+              new UserPrincipal("User4", "NS")),
+          new GroupPrincipal("Group3", "NS_Local"),
+          ImmutableSet.of(new UserPrincipal("User5", "NS")),
+          new GroupPrincipal("Group4", "NS_Local"),
+          ImmutableSet.of(new UserPrincipal("User6", "NS")));
+
+    adaptor.modifiedGroupTraverser.setCheckpoint(new Checkpoint(now, "0"));
+    try {
+      adaptor.getModifiedDocIds(pusher);
+      assertNull("Expected an exception: " + expectedCause, expectedCause);
+    } catch (IOException e) {
+      if (expectedCause == NO_EXCEPTION || expectedCause != e.getCause()) {
+        throw e;
+      }
+    }
+    assertEquals(expected2, filterDmWorld(pusher.getGroupDefinitions()));
+  }
+
+  @Test
   public void testGetGroupsInvalidMembers() throws Exception {
     insertUsers("User1", "User3", "User5");
     insertGroup("Group1", "User1", "User2", "User3");
