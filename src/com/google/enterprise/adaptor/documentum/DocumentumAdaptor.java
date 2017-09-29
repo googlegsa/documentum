@@ -882,13 +882,11 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     protected Checkpoint groupsCheckpoint;
 
     private FeedType feedType;
-    private boolean prevGroups;
     private boolean prevError;
     protected boolean caughtException;
 
     protected GroupTraverser() {
       this(Checkpoint.full(), FeedType.FULL);
-      prevGroups = false;
       prevError = false;
       caughtException = false;
     }
@@ -920,12 +918,10 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         feedType = this.feedType;
       }
 
-      Map<GroupPrincipal, ? extends Collection<Principal>> groupDefs =
-          groups.build();
+      Map<GroupPrincipal, Collection<Principal>> groupDefs = groups.build();
       pusher.pushGroupDefinitions(groupDefs,
           caseSensitivityType == CaseSensitivityType.EVERYTHING_CASE_SENSITIVE,
           feedType, null, null);
-      prevGroups = !groupDefs.isEmpty();
       prevError = caughtException;
       return groupsCheckpoint;
     }

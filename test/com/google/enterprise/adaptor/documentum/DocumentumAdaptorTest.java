@@ -4611,23 +4611,25 @@ public class DocumentumAdaptorTest {
     insertGroup("Group1", "User1", "User2", "User3");
     insertGroup("Group2", "User3", "User4", "User5");
 
-    ImmutableMap<GroupPrincipal, ? extends Collection<Principal>>
-        expected = ImmutableMap.of(
+    ImmutableMap<GroupPrincipal, Collection<Principal>> expected =
+        ImmutableMap.of(
             new GroupPrincipal("Group1", "NS_Local"),
-            ImmutableSet.<Principal>of(new UserPrincipal("User1", "NS"),
+            ImmutableSet.<Principal>of(
+                new UserPrincipal("User1", "NS"),
                 new UserPrincipal("User2", "NS"),
                 new UserPrincipal("User3", "NS")),
             new GroupPrincipal("Group2", "NS_Local"),
-            ImmutableSet.<Principal>of(new UserPrincipal("User3", "NS"),
+            ImmutableSet.<Principal>of(
+                new UserPrincipal("User3", "NS"),
                 new UserPrincipal("User4", "NS"),
                 new UserPrincipal("User5", "NS")),
             new GroupPrincipal("dm_world", "NS_Local"),
-            ImmutableSet.<Principal>of(new UserPrincipal("User1", "NS"),
+            ImmutableSet.<Principal>of(
+                new UserPrincipal("User1", "NS"),
                 new UserPrincipal("User2", "NS"),
                 new UserPrincipal("User3", "NS"),
                 new UserPrincipal("User4", "NS"),
                 new UserPrincipal("User5", "NS")));
-
     assertEquals(expected, getGroups());
 
     insertUsers("User6", "User7");
@@ -4635,23 +4637,26 @@ public class DocumentumAdaptorTest {
     // delete group, group members not deleted.
     deleteGroup("Group2");
 
-    ImmutableMap<GroupPrincipal, ? extends Collection<Principal>>
-    expected2 = ImmutableMap.of(
-        new GroupPrincipal("Group1", "NS_Local"),
-        ImmutableSet.<Principal>of(new UserPrincipal("User1", "NS"),
-            new UserPrincipal("User2", "NS"),
-            new UserPrincipal("User3", "NS")),
-        new GroupPrincipal("Group3", "NS_Local"),
-        ImmutableSet.<Principal>of(new UserPrincipal("User6", "NS"),
-            new UserPrincipal("User7", "NS")),
-        new GroupPrincipal("dm_world", "NS_Local"),
-        ImmutableSet.<Principal>of(new UserPrincipal("User1", "NS"),
-            new UserPrincipal("User2", "NS"),
-            new UserPrincipal("User3", "NS"),
-            new UserPrincipal("User4", "NS"),
-            new UserPrincipal("User5", "NS"),
-            new UserPrincipal("User6", "NS"),
-            new UserPrincipal("User7", "NS")));
+    ImmutableMap<GroupPrincipal, Collection<Principal>> expected2 =
+        ImmutableMap.of(
+            new GroupPrincipal("Group1", "NS_Local"),
+            ImmutableSet.<Principal>of(
+                new UserPrincipal("User1", "NS"),
+                new UserPrincipal("User2", "NS"),
+                new UserPrincipal("User3", "NS")),
+            new GroupPrincipal("Group3", "NS_Local"),
+            ImmutableSet.<Principal>of(
+                new UserPrincipal("User6", "NS"),
+                new UserPrincipal("User7", "NS")),
+            new GroupPrincipal("dm_world", "NS_Local"),
+            ImmutableSet.<Principal>of(
+                new UserPrincipal("User1", "NS"),
+                new UserPrincipal("User2", "NS"),
+                new UserPrincipal("User3", "NS"),
+                new UserPrincipal("User4", "NS"),
+                new UserPrincipal("User5", "NS"),
+                new UserPrincipal("User6", "NS"),
+                new UserPrincipal("User7", "NS")));
     assertEquals(expected2, getGroups());
   }
 
@@ -4662,19 +4667,18 @@ public class DocumentumAdaptorTest {
     insertGroup("Group1", "User1", "User2");
     insertGroup("Group2", "User3", "User4");
 
-    ImmutableMap<GroupPrincipal, ? extends Collection<Principal>>
-      expected = ImmutableMap.of(
-          new GroupPrincipal("Group1", "NS_Local"),
-          ImmutableSet.of(new UserPrincipal("User1", "NS"),
-              new UserPrincipal("User2", "NS")),
-          new GroupPrincipal("Group2", "NS_Local"),
-          ImmutableSet.of(new UserPrincipal("User3", "NS"),
-              new UserPrincipal("User4", "NS")));
+    ImmutableMap<GroupPrincipal, Collection<Principal>> expected =
+        ImmutableMap.of(
+            new GroupPrincipal("Group1", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User1", "NS"),
+                new UserPrincipal("User2", "NS")),
+            new GroupPrincipal("Group2", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User3", "NS"),
+                new UserPrincipal("User4", "NS")));
 
     DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
         new H2BackedTestProxies(), ImmutableMap.<String, String>of());
     RecordingDocIdPusher pusher = new RecordingDocIdPusher();
-
     adaptor.getDocIds(pusher);
     assertEquals(expected, filterDmWorld(pusher.getGroupDefinitions()));
 
@@ -4685,18 +4689,21 @@ public class DocumentumAdaptorTest {
     insertModifiedGroup(dateStr, "Group3", "User5");
     insertModifiedGroup(dateStr, "Group4", "User6");
 
-    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
-      expected2 = ImmutableMap.of(
-          new GroupPrincipal("Group1", "NS_Local"),
-          ImmutableSet.of(new UserPrincipal("User1", "NS"),
-              new UserPrincipal("User2", "NS")),
-          new GroupPrincipal("Group2", "NS_Local"),
-          ImmutableSet.of(new UserPrincipal("User3", "NS"),
-              new UserPrincipal("User4", "NS")),
-          new GroupPrincipal("Group3", "NS_Local"),
-          ImmutableSet.of(new UserPrincipal("User5", "NS")),
-          new GroupPrincipal("Group4", "NS_Local"),
-          ImmutableSet.of(new UserPrincipal("User6", "NS")));
+    ImmutableMap<GroupPrincipal, Collection<? extends Principal>> expected2 =
+        ImmutableMap.of(
+            new GroupPrincipal("Group1", "NS_Local"),
+            ImmutableSet.of(
+                new UserPrincipal("User1", "NS"),
+                new UserPrincipal("User2", "NS")),
+            new GroupPrincipal("Group2", "NS_Local"),
+            ImmutableSet.of(
+                new UserPrincipal("User3", "NS"),
+                new UserPrincipal("User4", "NS")),
+            new GroupPrincipal("Group3", "NS_Local"),
+            ImmutableSet.of(
+                new UserPrincipal("User5", "NS")),
+            new GroupPrincipal("Group4", "NS_Local"),
+            ImmutableSet.of(new UserPrincipal("User6", "NS")));
 
     adaptor.modifiedGroupTraverser.setCheckpoint(new Checkpoint(now, "0"));
     adaptor.getModifiedDocIds(pusher);
