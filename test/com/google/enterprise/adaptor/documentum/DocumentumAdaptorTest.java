@@ -3214,11 +3214,9 @@ public class DocumentumAdaptorTest {
 
   private void deleteGroup(String groupName) throws SQLException {
     executeUpdate(String.format(
-        "delete from dm_group where group_name = '%s' and r_object_id = '%s'",
-        groupName, GROUP.pad(groupName)));
-    executeUpdate(String.format(
-        "delete from dm_user where user_name = '%s' and r_object_id = '%s'",
-        groupName, GROUP.pad(groupName)));
+        "delete from dm_group where r_object_id = '%s'", GROUP.pad(groupName)));
+    executeUpdate(String.format("delete from dm_user where r_object_id = '%s'",
+        GROUP.pad(groupName)));
   }
 
   private void createAcl(String id) throws SQLException {
@@ -4689,7 +4687,7 @@ public class DocumentumAdaptorTest {
     insertModifiedGroup(dateStr, "Group3", "User5");
     insertModifiedGroup(dateStr, "Group4", "User6");
 
-    ImmutableMap<GroupPrincipal, Collection<? extends Principal>> expected2 =
+    ImmutableMap<GroupPrincipal, Collection<Principal>> expected2 =
         ImmutableMap.of(
             new GroupPrincipal("Group1", "NS_Local"),
             ImmutableSet.of(

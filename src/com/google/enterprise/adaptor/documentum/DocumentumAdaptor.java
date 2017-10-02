@@ -881,19 +881,19 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         groups;
     protected Checkpoint groupsCheckpoint;
 
-    private FeedType feedType;
+    private final FeedType feedType;
     private boolean prevError;
     protected boolean caughtException;
 
     protected GroupTraverser() {
       this(Checkpoint.full(), FeedType.FULL);
-      prevError = false;
-      caughtException = false;
     }
 
     protected GroupTraverser(Checkpoint checkpoint, FeedType feedType) {
       super(checkpoint);
       this.feedType = feedType;
+      prevError = false;
+      caughtException = false;
     }
 
     @Override
