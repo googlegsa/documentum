@@ -4609,7 +4609,8 @@ public class DocumentumAdaptorTest {
     insertGroup("Group1", "User1", "User2", "User3");
     insertGroup("Group2", "User3", "User4", "User5");
 
-    ImmutableMap<GroupPrincipal, Collection<Principal>> expected =
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+      expected =
         ImmutableMap.of(
             new GroupPrincipal("Group1", "NS_Local"),
             ImmutableSet.<Principal>of(
@@ -4635,7 +4636,8 @@ public class DocumentumAdaptorTest {
     // delete group, group members not deleted.
     deleteGroup("Group2");
 
-    ImmutableMap<GroupPrincipal, Collection<Principal>> expected2 =
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+      expected2 =
         ImmutableMap.of(
             new GroupPrincipal("Group1", "NS_Local"),
             ImmutableSet.<Principal>of(
@@ -4665,13 +4667,16 @@ public class DocumentumAdaptorTest {
     insertGroup("Group1", "User1", "User2");
     insertGroup("Group2", "User3", "User4");
 
-    ImmutableMap<GroupPrincipal, Collection<Principal>> expected =
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+      expected =
         ImmutableMap.of(
             new GroupPrincipal("Group1", "NS_Local"),
-            ImmutableSet.of(new UserPrincipal("User1", "NS"),
+            ImmutableSet.of(
+                new UserPrincipal("User1", "NS"),
                 new UserPrincipal("User2", "NS")),
             new GroupPrincipal("Group2", "NS_Local"),
-            ImmutableSet.of(new UserPrincipal("User3", "NS"),
+            ImmutableSet.of(
+                new UserPrincipal("User3", "NS"),
                 new UserPrincipal("User4", "NS")));
 
     DocumentumAdaptor adaptor = getObjectUnderTestNamespaces(
@@ -4687,7 +4692,8 @@ public class DocumentumAdaptorTest {
     insertModifiedGroup(dateStr, "Group3", "User5");
     insertModifiedGroup(dateStr, "Group4", "User6");
 
-    ImmutableMap<GroupPrincipal, Collection<Principal>> expected2 =
+    ImmutableMap<GroupPrincipal, ? extends Collection<? extends Principal>>
+      expected2 =
         ImmutableMap.of(
             new GroupPrincipal("Group1", "NS_Local"),
             ImmutableSet.of(

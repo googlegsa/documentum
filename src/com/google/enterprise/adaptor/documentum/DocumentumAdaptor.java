@@ -922,6 +922,9 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
       pusher.pushGroupDefinitions(groupDefs,
           caseSensitivityType == CaseSensitivityType.EVERYTHING_CASE_SENSITIVE,
           feedType, null, null);
+      // If we caught an exception, then the next push will also be incomplete,
+      // else (modulo batching) we finished sending all the groups, and the
+      // next push can be full again.
       prevError = caughtException;
       return groupsCheckpoint;
     }
