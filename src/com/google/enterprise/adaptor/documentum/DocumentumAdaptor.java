@@ -883,7 +883,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
 
     private final FeedType feedType;
     private boolean prevError;
-    protected boolean caughtException;
+    private boolean caughtException;
 
     protected GroupTraverser() {
       this(Checkpoint.full(), FeedType.FULL);
@@ -905,7 +905,13 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     protected boolean fillCollection(IDfSession dmSession,
         Principals principals, Checkpoint checkpoint) throws DfException {
       groupsCheckpoint = checkpoint;
-      return getGroups(dmSession, principals);
+      caughtException = false;
+      try {
+        return getGroups(dmSession, principals);
+      } catch (DfException e) {
+        caughtException = true;
+        throw e;
+      }
     }
 
     @Override
@@ -988,7 +994,6 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         ImmutableSet.Builder<Principal> members = null;
         String groupName = null;
         String objectId = groupsCheckpoint.getObjectId();
-        caughtException = false;
         while (result.next()) {
           if (!Objects.equals(objectId, result.getString("r_object_id"))) {
             // We have transitioned to a new group.
@@ -1006,9 +1011,6 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         }
         addGroup(groupName, groups, members, principals);
         groupsCheckpoint = new Checkpoint(stopObjectId);
-      } catch (DfException e) {
-        caughtException = true;
-        throw e;
       } finally {
         result.close();
       }
@@ -1438,7 +1440,6 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         String groupName = null;
         String lastModified = groupsCheckpoint.getLastModified();
         String objectId = groupsCheckpoint.getObjectId();
-        caughtException = false;
         while (result.next()) {
           if (!Objects.equals(objectId, result.getString("r_object_id"))) {
             // We have transitioned to a new group.
@@ -1457,9 +1458,6 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         }
         addGroup(groupName, groups, members, principals);
         groupsCheckpoint = new Checkpoint(lastModified, objectId);
-      } catch (DfException e) {
-        caughtException = true;
-        throw e;
       } finally {
         result.close();
       }
