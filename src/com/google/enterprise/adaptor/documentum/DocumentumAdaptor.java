@@ -28,6 +28,7 @@ import com.google.enterprise.adaptor.Config;
 import com.google.enterprise.adaptor.DocId;
 import com.google.enterprise.adaptor.DocIdEncoder;
 import com.google.enterprise.adaptor.DocIdPusher;
+import com.google.enterprise.adaptor.DocIdPusher.FeedType;
 import com.google.enterprise.adaptor.DocIdPusher.Record;
 import com.google.enterprise.adaptor.GroupPrincipal;
 import com.google.enterprise.adaptor.IOHelper;
@@ -880,12 +881,19 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
         groups;
     protected Checkpoint groupsCheckpoint;
 
+    private final FeedType feedType;
+    private boolean prevError;
+    private boolean caughtException;
+
     protected GroupTraverser() {
-      this(Checkpoint.full());
+      this(Checkpoint.full(), FeedType.FULL);
     }
 
-    protected GroupTraverser(Checkpoint checkpoint) {
+    protected GroupTraverser(Checkpoint checkpoint, FeedType feedType) {
       super(checkpoint);
+      this.feedType = feedType;
+      prevError = false;
+      caughtException = false;
     }
 
     @Override
@@ -897,14 +905,33 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     protected boolean fillCollection(IDfSession dmSession,
         Principals principals, Checkpoint checkpoint) throws DfException {
       groupsCheckpoint = checkpoint;
-      return getGroups(dmSession, principals);
+      caughtException = false;
+      try {
+        return getGroups(dmSession, principals);
+      } catch (DfException e) {
+        caughtException = true;
+        throw e;
+      }
     }
 
     @Override
     protected Checkpoint pushCollection(DocIdPusher pusher)
         throws InterruptedException {
-      pusher.pushGroupDefinitions(groups.build(),
-          caseSensitivityType == CaseSensitivityType.EVERYTHING_CASE_SENSITIVE);
+      FeedType feedType;
+      if ((queryBatchSize > 0) || caughtException || prevError) {
+        feedType = FeedType.INCREMENTAL;
+      } else {
+        feedType = this.feedType;
+      }
+
+      Map<GroupPrincipal, Collection<Principal>> groupDefs = groups.build();
+      pusher.pushGroupDefinitions(groupDefs,
+          caseSensitivityType == CaseSensitivityType.EVERYTHING_CASE_SENSITIVE,
+          feedType, null, null);
+      // If we caught an exception, then the next push will also be incomplete,
+      // else (modulo batching) we finished sending all the groups, and the
+      // next push can be full again.
+      prevError = caughtException;
       return groupsCheckpoint;
     }
 
@@ -1397,7 +1424,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
   @VisibleForTesting
   class ModifiedGroupTraverser extends GroupTraverser {
     private ModifiedGroupTraverser() {
-      super(Checkpoint.incremental());
+      super(Checkpoint.incremental(), FeedType.INCREMENTAL);
     }
 
     @Override
