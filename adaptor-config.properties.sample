@@ -83,11 +83,11 @@ documentum.src =
 #     r_modifier, r_order_no, r_page_cnt, r_policy_id, r_resume_state, \
 #     r_version_label, resolution_label, world_permit
 
-# Custom query to send modified documents. Incremental updates uses this query
+# Custom query to send modified documents. Incremental updates use this query
 # to find the modified documents and send to GSA. {0} will be replaced by the
 # modified date and {1} will be replaced by the object ID. The select list
 # needs to include r_modify_date_str, r_object_id, i_chronicle_id
-# and object_name. It also need to order by modify time and object ID.
+# and object_name. It also needs to order by modify time and object ID.
 # “dm_document” in this example is documentum.documentTypes property value
 # and “/Repository” is documentum.src property value.
 # documentum.modifiedDocumentsQuery = SELECT r_modify_date, r_object_id, \
