@@ -48,6 +48,12 @@
   <property name="compile.java.newerClassname"
     value="java.lang.FunctionalInterface"/>
 
+  <!-- Use add-modules with Java 9 and higher. -->
+  <condition property="java.modules"
+      value="" else="--add-modules java.xml.bind">
+    <matches string="${ant.java.version}" pattern="^1\.[678]$"/>
+  </condition>
+
   <path id="adaptor.build.classpath">
     <pathelement location="${adaptor.jar}"/>
     <pathelement path="${build.dfc.classpath}"/>
@@ -139,7 +145,7 @@ lib/plexi submodule or add the the command line argument
            includeantruntime="false" encoding="utf-8"
            source="${compile.java.version}" target="${compile.java.version}">
       <bootclasspath path="${compile.java.bootclasspath}"/>
-      <compilerarg line="-Xlint -Xlint:-serial"/>
+      <compilerarg line="-Xlint -Xlint:-path -Xlint:-serial"/>
       <classpath refid="adaptor.build.classpath"/>
     </javac>
 
@@ -159,7 +165,7 @@ lib/plexi submodule or add the the command line argument
            includeantruntime="false" encoding="utf-8"
            source="${compile.java.version}" target="${compile.java.version}">
       <bootclasspath path="${compile.java.bootclasspath}"/>
-      <compilerarg line="-Xlint -Xlint:-serial"/>
+      <compilerarg line="-Xlint -Xlint:-path -Xlint:-serial"/>
       <classpath refid="adaptor.build.classpath"/>
       <classpath location="${build-src.dir}"/>
       <classpath refid="junit.classpath"/>
@@ -268,6 +274,7 @@ lib/plexi submodule or add the the command line argument
 
   <target name="run" depends="build" description="Run adaptor">
     <java classpath="${build-src.dir}" fork="true" classname="${adaptor.class}">
+      <jvmarg line="${java.modules}"/>
       <classpath refid="adaptor.run.classpath"/>
       <sysproperty key="java.util.logging.config.file"
         value="logging.properties"/>
