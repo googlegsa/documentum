@@ -886,7 +886,7 @@ public class DocumentumAdaptor extends AbstractAdaptor implements
     private boolean caughtException;
 
     protected GroupTraverser() {
-      this(Checkpoint.full(), FeedType.FULL);
+      this(Checkpoint.full(), FeedType.REPLACE);
     }
 
     protected GroupTraverser(Checkpoint checkpoint, FeedType feedType) {
