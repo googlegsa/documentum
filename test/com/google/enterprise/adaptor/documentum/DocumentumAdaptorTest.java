@@ -1768,15 +1768,6 @@ public class DocumentumAdaptorTest {
     }
   }
 
-  private URI getAnchor(RecordingResponse response, String name) {
-    for (Map.Entry<String, URI> entry : response.getAnchors()) {
-      if (entry.getKey().equals(name)) {
-        return entry.getValue();
-      }
-    }
-    return null;
-  }
-
   private void checkGetRootContent(String whereClause, int maxHtmlLinks,
       String... expectedCabinets) throws Exception {
     List<String> queries = new ArrayList<>();
@@ -1820,11 +1811,11 @@ public class DocumentumAdaptorTest {
           "<a href=\"" + "./" + cabinetWithId + "\">/" + cabinet + "</a>";
       if (content.indexOf(link) < 0) {
         URI uri = docidEncoder.encodeDocId(new DocId(cabinetWithId));
-        URI anchor = getAnchor(response, "/" + cabinet);
-        assertNotNull("Cabinet " + cabinet + " with URI " + uri + " is missing"
+        List<URI> actual = response.getAnchors().get("/" + cabinet);
+        assertFalse("Cabinet " + cabinet + " with URI " + uri + " is missing"
             + " from response:/n" + content + "/n" + response.getAnchors(),
-            anchor);
-        assertEquals(uri, anchor);
+            actual.isEmpty());
+        assertEquals(ImmutableList.of(uri), actual);
       }
     }
   }
@@ -2683,12 +2674,13 @@ public class DocumentumAdaptorTest {
     assertEquals(objectContent, boas.toString(UTF_8.name()));
 
     // Verify child links.
+    DocIdEncoder docidEncoder =
+        ProxyAdaptorContext.getInstance().getDocIdEncoder();
     assertEquals(3, response.getAnchors().size());
     for (String name : ImmutableList.of("aaa", "bbb", "ccc")) {
-      URI uri = getAnchor(response, name);
-      assertNotNull(uri);
-      assertTrue(uri.toString(), uri.toString().endsWith(path + "/" + name + ":"
-          + DOCUMENT.pad(name)));
+      URI expected = docidEncoder.encodeDocId(
+          docIdFromPath(path, name, DOCUMENT.pad(name)));
+      assertEquals(ImmutableList.of(expected), response.getAnchors().get(name));
     }
   }
 
